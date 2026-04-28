@@ -2,6 +2,33 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.2] — 2026-02-28
+
+### Fixed
+
+- **Discovery returned `null` for non-empty results** — root cause of the
+  "0 / 0 / 1 / 1" failure on first visit to the Targets tab. The
+  `JEDB_Discovery::memo_set()` helper was missing its `return $value;`
+  statement, so every `get_all_*()` method that ended with
+  `return $this->maybe_cache(...)` propagated `null` even when the
+  underlying call succeeded. The reason it appeared to "fix itself" on
+  the second visit is that `memo_set` had the *side effect* of populating
+  the transient — subsequent requests hit the transient cache and got
+  the real array. One missing return now restored.
+- **Defensive guards in `JEDB_Target_Registry::bootstrap_defaults()`** —
+  `get_all_ccts()` / `get_all_public_post_types()` non-array returns are
+  now coerced to `[]` with a warning log, instead of fataling on
+  `count()`. Belt-and-suspenders so this class of bug can never blank
+  the page again.
+- **Diagnostic now reports the actual type** when discovery returns a
+  non-array: e.g. `NOT-ARRAY (NULL)` instead of just `NOT-ARRAY`. The
+  next regression of this kind will be obvious in one glance.
+
+### Changed
+
+- Plugin version bumped to **0.2.2** (no schema changes — DB version
+  stays at 1.1.0).
+
 ## [0.2.1] — 2026-02-28
 
 ### Added — Debug tab + Phase 1 hardening

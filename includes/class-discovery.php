@@ -73,6 +73,8 @@ class JEDB_Discovery {
 		}
 		$transient[ $key ] = $value;
 		set_transient( self::TRANSIENT_KEY, $transient, self::TRANSIENT_TTL );
+
+		return $value;
 	}
 
 	/* -----------------------------------------------------------------------

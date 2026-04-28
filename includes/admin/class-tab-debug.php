@@ -187,9 +187,9 @@ class JEDB_Tab_Debug {
 			$cpts_via_discovery       = $discovery->get_all_public_post_types();
 			$relations_via_discovery  = $discovery->get_all_relations();
 
-			$summary['discovery_ccts']      = is_array( $ccts_via_discovery )      ? count( $ccts_via_discovery )      : 'NOT-ARRAY';
-			$summary['discovery_cpts']      = is_array( $cpts_via_discovery )      ? count( $cpts_via_discovery )      : 'NOT-ARRAY';
-			$summary['discovery_relations'] = is_array( $relations_via_discovery ) ? count( $relations_via_discovery ) : 'NOT-ARRAY';
+			$summary['discovery_ccts']      = is_array( $ccts_via_discovery )      ? count( $ccts_via_discovery )      : 'NOT-ARRAY (' . gettype( $ccts_via_discovery )      . ')';
+			$summary['discovery_cpts']      = is_array( $cpts_via_discovery )      ? count( $cpts_via_discovery )      : 'NOT-ARRAY (' . gettype( $cpts_via_discovery )      . ')';
+			$summary['discovery_relations'] = is_array( $relations_via_discovery ) ? count( $relations_via_discovery ) : 'NOT-ARRAY (' . gettype( $relations_via_discovery ) . ')';
 			$summary['public_post_types_returned'] = $summary['discovery_cpts'];
 		} catch ( \Throwable $t ) {
 			$summary['errors'][] = 'JEDB_Discovery threw: ' . $t->getMessage() . ' at ' . $t->getFile() . ':' . $t->getLine();

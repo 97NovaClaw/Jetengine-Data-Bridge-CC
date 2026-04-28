@@ -120,10 +120,19 @@ class JEDB_Target_Registry {
 			$discovery = JEDB_Discovery::instance();
 
 			$ccts = $discovery->get_all_ccts();
+			if ( ! is_array( $ccts ) ) {
+				if ( function_exists( 'jedb_log' ) ) {
+					jedb_log( 'Registry bootstrap: get_all_ccts returned non-array — coercing to []', 'warning', array( 'type' => gettype( $ccts ) ) );
+				}
+				$ccts = array();
+			}
 			if ( function_exists( 'jedb_log' ) ) {
 				jedb_log( 'Registry bootstrap: discovered CCTs', 'debug', array( 'count' => count( $ccts ) ) );
 			}
 			foreach ( $ccts as $cct ) {
+				if ( empty( $cct['slug'] ) ) {
+					continue;
+				}
 				try {
 					$this->register( new JEDB_Target_CCT( $cct['slug'] ) );
 				} catch ( \Throwable $t ) {
@@ -134,6 +143,12 @@ class JEDB_Target_Registry {
 			}
 
 			$post_types = $discovery->get_all_public_post_types();
+			if ( ! is_array( $post_types ) ) {
+				if ( function_exists( 'jedb_log' ) ) {
+					jedb_log( 'Registry bootstrap: get_all_public_post_types returned non-array — coercing to []', 'warning', array( 'type' => gettype( $post_types ) ) );
+				}
+				$post_types = array();
+			}
 			if ( function_exists( 'jedb_log' ) ) {
 				jedb_log( 'Registry bootstrap: discovered post types', 'debug', array(
 					'count' => count( $post_types ),
@@ -141,6 +156,9 @@ class JEDB_Target_Registry {
 				) );
 			}
 			foreach ( $post_types as $pt ) {
+				if ( empty( $pt['slug'] ) ) {
+					continue;
+				}
 				try {
 					$this->register( new JEDB_Target_CPT( $pt['slug'] ) );
 				} catch ( \Throwable $t ) {
