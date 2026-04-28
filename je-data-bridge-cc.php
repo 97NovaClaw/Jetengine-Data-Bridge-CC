@@ -135,6 +135,8 @@ add_action( 'plugins_loaded', 'jedb_boot', 20 );
 
 function jedb_boot() {
 
+	require_once JEDB_PLUGIN_DIR . 'includes/helpers/dependencies.php';
+
 	if ( ! jedb_dependencies_ok() ) {
 		add_action( 'admin_notices', 'jedb_render_dependency_notice' );
 		return;
@@ -149,17 +151,24 @@ function jedb_boot() {
 /**
  * Soft dependency check — JE is required, WC is recommended.
  *
- * Returns false only when JE is missing or below the minimum version. WC missing
- * triggers an admin notice but does NOT block boot, since some sites may use
- * the plugin for CCT↔CCT only.
+ * Returns false only when JE is missing OR detected at a version below the
+ * required minimum. If JE is present but the version cannot be read (some
+ * builds expose it through neither a constant nor an instance method), we
+ * proceed and surface the unknown-version state in the Status tab — JE itself
+ * is still active and usable.
+ *
+ * WC missing triggers an admin notice but does NOT block boot, since some
+ * sites may use the plugin for CCT↔CCT only.
  */
 function jedb_dependencies_ok() {
 
-	if ( ! function_exists( 'jet_engine' ) ) {
+	if ( ! jedb_is_jet_engine_active() ) {
 		return false;
 	}
 
-	if ( defined( 'JET_ENGINE_VERSION' ) && version_compare( JET_ENGINE_VERSION, JEDB_MIN_JE_VERSION, '<' ) ) {
+	$je_version = jedb_get_jet_engine_version();
+
+	if ( $je_version && version_compare( $je_version, JEDB_MIN_JE_VERSION, '<' ) ) {
 		return false;
 	}
 

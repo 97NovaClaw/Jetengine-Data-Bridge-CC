@@ -20,17 +20,18 @@ if ( ! class_exists( 'JEDB_Config_DB' ) ) {
 if ( ! class_exists( 'JEDB_Snippet_Installer' ) ) {
 	require_once JEDB_PLUGIN_DIR . 'includes/snippets/class-snippet-installer.php';
 }
-
-$tables_status   = JEDB_Config_DB::tables_exist();
-$snippet_dir     = JEDB_Snippet_Installer::get_dir();
-$snippet_dir_ok  = $snippet_dir && JEDB_Snippet_Installer::verify( $snippet_dir );
-$jet_engine_ver  = defined( 'JET_ENGINE_VERSION' ) ? JET_ENGINE_VERSION : null;
-$wc_active       = class_exists( 'WooCommerce' );
-$wc_version      = $wc_active && defined( 'WC_VERSION' ) ? WC_VERSION : null;
-$hpos_enabled    = false;
-if ( $wc_active && class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' ) ) {
-	$hpos_enabled = \Automattic\WooCommerce\Utilities\OrderUtil::custom_orders_table_usage_is_enabled();
+if ( ! function_exists( 'jedb_is_jet_engine_active' ) ) {
+	require_once JEDB_PLUGIN_DIR . 'includes/helpers/dependencies.php';
 }
+
+$tables_status  = JEDB_Config_DB::tables_exist();
+$snippet_dir    = JEDB_Snippet_Installer::get_dir();
+$snippet_dir_ok = $snippet_dir && JEDB_Snippet_Installer::verify( $snippet_dir );
+$je_active      = jedb_is_jet_engine_active();
+$je_version     = jedb_get_jet_engine_version();
+$wc_active      = class_exists( 'WooCommerce' );
+$wc_version     = jedb_get_woocommerce_version();
+$hpos_enabled   = $wc_active && jedb_is_hpos_enabled();
 ?>
 
 <h2><?php esc_html_e( 'Phase 0 — Plugin Status', 'je-data-bridge-cc' ); ?></h2>
@@ -89,9 +90,9 @@ if ( $wc_active && class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' )
 		<tr>
 			<th><?php esc_html_e( 'JetEngine', 'je-data-bridge-cc' ); ?></th>
 			<td>
-				<?php if ( $jet_engine_ver ) : ?>
-					<span class="jedb-pill jedb-pill-ok"><?php echo esc_html( 'v' . $jet_engine_ver ); ?></span>
-					<?php if ( version_compare( $jet_engine_ver, JEDB_MIN_JE_VERSION, '<' ) ) : ?>
+				<?php if ( $je_active && $je_version ) : ?>
+					<span class="jedb-pill jedb-pill-ok"><?php echo esc_html( 'v' . $je_version ); ?></span>
+					<?php if ( version_compare( $je_version, JEDB_MIN_JE_VERSION, '<' ) ) : ?>
 						<span class="jedb-pill jedb-pill-warn">
 							<?php
 							printf(
@@ -102,6 +103,9 @@ if ( $wc_active && class_exists( '\Automattic\WooCommerce\Utilities\OrderUtil' )
 							?>
 						</span>
 					<?php endif; ?>
+				<?php elseif ( $je_active ) : ?>
+					<span class="jedb-pill jedb-pill-ok"><?php esc_html_e( 'ACTIVE', 'je-data-bridge-cc' ); ?></span>
+					<span class="jedb-pill jedb-pill-warn"><?php esc_html_e( 'Version unreadable — proceeding anyway', 'je-data-bridge-cc' ); ?></span>
 				<?php else : ?>
 					<span class="jedb-pill jedb-pill-bad"><?php esc_html_e( 'NOT DETECTED', 'je-data-bridge-cc' ); ?></span>
 				<?php endif; ?>
