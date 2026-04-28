@@ -80,3 +80,69 @@
 	color: #b32d2e;
 	border: 1px solid #f0b3b3;
 }
+
+/* Targets tab */
+
+.jedb-targets-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: flex-end;
+	gap: 16px;
+	margin-bottom: 16px;
+	flex-wrap: wrap;
+}
+
+.jedb-targets-header h2 {
+	margin: 0 0 4px 0;
+}
+
+.jedb-targets-header .description {
+	margin: 0;
+	max-width: 720px;
+}
+
+.jedb-targets-refresh {
+	margin: 0;
+	flex-shrink: 0;
+}
+
+.jedb-targets-summary {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+	gap: 12px;
+	margin: 16px 0 28px 0;
+}
+
+.jedb-summary-card {
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 6px;
+	padding: 16px 18px;
+	text-align: center;
+}
+
+.jedb-summary-num {
+	font-size: 28px;
+	font-weight: 700;
+	color: #1d2327;
+	line-height: 1.1;
+}
+
+.jedb-summary-label {
+	font-size: 12px;
+	color: #646970;
+	margin-top: 6px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.jedb-tab-body h3 {
+	margin-top: 28px;
+	margin-bottom: 12px;
+	font-size: 14px;
+	text-transform: uppercase;
+	letter-spacing: 0.05em;
+	color: #50575e;
+	border-bottom: 1px solid #dcdcde;
+	padding-bottom: 6px;
+}

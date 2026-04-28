@@ -51,14 +51,46 @@ class JEDB_Plugin {
 		$this->booted = true;
 
 		$this->maybe_run_db_upgrade();
+		$this->load_core();
 
-		add_action( 'init',          array( $this, 'load_textdomain' ) );
+		add_action( 'init', array( $this, 'load_textdomain' ) );
 
 		if ( is_admin() ) {
 			$this->load_admin();
 		}
 
 		do_action( 'jedb/booted', $this );
+	}
+
+	/**
+	 * Load the always-on subsystems (Discovery + Target Registry + adapters).
+	 * Registry bootstrap is lazy — instantiating it doesn't trigger discovery
+	 * until something calls ->all() / ->get() / ->has().
+	 */
+	private function load_core() {
+
+		require_once JEDB_PLUGIN_DIR . 'includes/class-discovery.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/targets/interface-data-target.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/targets/abstract-target.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-cct.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-cpt.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-woo-product.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-woo-variation.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-registry.php';
+	}
+
+	/**
+	 * @return JEDB_Target_Registry
+	 */
+	public function targets() {
+		return JEDB_Target_Registry::instance();
+	}
+
+	/**
+	 * @return JEDB_Discovery
+	 */
+	public function discovery() {
+		return JEDB_Discovery::instance();
 	}
 
 	public function load_textdomain() {

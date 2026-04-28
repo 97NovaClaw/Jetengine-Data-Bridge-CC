@@ -35,6 +35,12 @@ class JEDB_Admin_Shell {
 	private function hooks() {
 		add_action( 'admin_menu',           array( $this, 'register_menu' ) );
 		add_action( 'admin_enqueue_scripts',array( $this, 'enqueue_assets' ) );
+		$this->load_tabs();
+	}
+
+	private function load_tabs() {
+		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-targets.php';
+		JEDB_Tab_Targets::instance();
 	}
 
 	public function register_menu() {
