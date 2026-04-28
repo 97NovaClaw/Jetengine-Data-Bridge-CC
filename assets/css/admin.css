@@ -1,0 +1,82 @@
+/* JetEngine Data Bridge CC — admin styles */
+
+.jedb-wrap .jedb-page-title {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.jedb-wrap .jedb-page-title .dashicons {
+	font-size: 28px;
+	width: 28px;
+	height: 28px;
+	color: #2271b1;
+}
+
+.jedb-wrap .jedb-version {
+	font-size: 12px;
+	font-weight: 400;
+	color: #646970;
+	background: #f0f0f1;
+	padding: 2px 8px;
+	border-radius: 10px;
+	margin-left: 6px;
+}
+
+.jedb-tabs {
+	margin-top: 16px;
+}
+
+.jedb-tab-body {
+	margin-top: 16px;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-top: none;
+	padding: 20px 24px;
+}
+
+.jedb-status-table {
+	max-width: 760px;
+	margin-bottom: 24px;
+}
+
+.jedb-status-table th {
+	width: 220px;
+	font-weight: 600;
+}
+
+.jedb-status-table code {
+	background: #f6f7f7;
+	padding: 2px 6px;
+	border-radius: 3px;
+	font-size: 12px;
+}
+
+.jedb-pill {
+	display: inline-block;
+	font-size: 11px;
+	font-weight: 600;
+	padding: 3px 10px;
+	border-radius: 11px;
+	letter-spacing: 0.02em;
+	text-transform: uppercase;
+	margin-right: 4px;
+}
+
+.jedb-pill-ok {
+	background: #e8f5e9;
+	color: #1e6b2c;
+	border: 1px solid #b8e0c1;
+}
+
+.jedb-pill-warn {
+	background: #fff8e1;
+	color: #8a6d00;
+	border: 1px solid #f0d77a;
+}
+
+.jedb-pill-bad {
+	background: #fdecea;
+	color: #b32d2e;
+	border: 1px solid #f0b3b3;
+}

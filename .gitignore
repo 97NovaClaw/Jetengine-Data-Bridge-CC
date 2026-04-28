@@ -1,0 +1,34 @@
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build / dependency dirs
+node_modules/
+vendor/
+build/
+dist/
+*.zip
+
+# Logs
+*.log
+debug/
+
+# Local secrets
+.env
+.env.*
+!.env.example
+
+# WP runtime artifacts that should never be committed
+wp-content/
+uploads/
+
+# Plan documents are kept; legacy reference plugins from the workspace are not
+# (this plugin lives in its own repo; the parent workspace folder is unrelated).

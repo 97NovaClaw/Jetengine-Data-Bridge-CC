@@ -1,0 +1,654 @@
+# Jetengine Data Bridge CC — Consolidation Build Plan
+
+> **Purpose of this document**
+> A complete, file-level merger plan for collapsing three existing custom plugins into one portable, multi-site WordPress plugin: **Jetengine Data Bridge CC** (working slug: `je-data-bridge-cc`).
+>
+> Source plugins:
+> 1. **Jet Engine Relation Injector (RI)** — relation pre-attachment + transaction-based item creation
+> 2. **PAC Vehicle Data Manager (PAC VDM)** — CCT discovery, data flattening (PULL/PUSH), field locking, year expansion, bulk sync, programmatic CCT builder
+> 3. **JFB WC Quotes Advanced (JFB-WC)** — Settings-API-driven admin UI, JSON config files, site-specific field whitelisting, file-based debug log
+>
+> Target use case (immediate): Brick Builder HQ — manage `available_sets_data` & `mosaics_data` CCTs that are bridged to WooCommerce `product` posts so editors can work in one canonical place and the other side stays in sync. Future use cases: any JetEngine + Woo site that needs the same bridge.
+
+---
+
+## 1. Vision & Design Tenets
+
+### 1.1 The "one plugin, one house" thesis
+Each of the three source plugins solves a slice of the same underlying problem: **JetEngine data does not natively talk to WooCommerce, and CCTs cannot hold relations until they are saved**. Each one was built site-first and now needs to be generalized.
+
+We collapse them into a single plugin under one stable namespace because:
+- Editors only need **one settings menu** to configure data flow.
+- Cross-feature concerns (e.g., field-locking a flattened field that came from a relation) become trivial when everything lives in one option store and one class graph.
+- We can ship the plugin to other sites unchanged and configure it entirely through the admin UI (no per-site code).
+- WooCommerce HPOS / new product tables only need to be handled in **one** adapter.
+
+### 1.2 Non-goals
+- Not a generic ETL tool. Scope is JetEngine ↔ JetEngine ↔ WooCommerce only.
+- Not a replacement for JetEngine Relations. We *use* Relations; we just make them usable from CCTs and from the WC product editor.
+- Not a frontend plugin. Output is via Elementor / JetEngine listings as today.
+
+### 1.3 Design tenets
+1. **Discover, don't configure.** Whenever possible, scan the live site (RI's and PAC VDM's `class-discovery.php` pattern) and present checkboxes/dropdowns rather than asking the editor to type slugs.
+2. **Adapter pattern for "where does data live?"** — CCT items, post-meta on a CPT, post-meta on a Woo product, Woo product variations, the WC HPOS order table, etc. all sit behind a `Data_Target` interface so the rest of the codebase never branches on storage type.
+3. **Site-specific, not site-coupled.** All site-specific knowledge lives in `wp_options` (JSON) or in upload-able JSON files (the JFB-WC pattern). Nothing in PHP files.
+4. **Loop-safe by default.** Every sync direction (CCT→Woo, Woo→CCT) MUST go through a central `Sync_Guard` so that updating one side never recursively re-fires the other.
+5. **Read-only by visual contract.** Field locker stays — when a value is sourced from another record, the editor sees it greyed out with a "source" tooltip.
+6. **Extensible without forking.** Built-in transformers cover 80% of cases; the remaining 20% is handled by a sandboxed **Custom Code Snippets** system in admin (see §4.8). Sites can also register custom transformers / targets in their own code via documented `jedb/...` hooks.
+
+---
+
+## 2. What the Three Source Plugins Actually Do
+
+A side-by-side audit of the existing capabilities. Knowing this is what makes a clean merger possible.
+
+### 2.1 Jet Engine Relation Injector (RI)
+
+| Capability | Where it lives today | Why we need it |
+|---|---|---|
+| Per-CCT config storage in custom DB table `wp_jet_injector_configs` | `class-config-db.php`, `class-config-manager.php` | Lets editors save mapping rules without bloating `wp_options`. Preserves config across plugin updates. |
+| Discovery of CCTs, CPTs, Relations, parent/child sides | `class-discovery.php` | Powers every dropdown in the admin UI. |
+| Render relation selectors on the CCT edit screen *before* the item exists | `class-runtime-loader.php` + `assets/js/injector.js` | This is the entire reason RI exists. Solves the "save first, relate later" problem. |
+| Atomic create-CCT-item + attach-relations + create-related-record(s) in one POST | `class-transaction-processor.php` | Ensures that if any step fails, none of them persist. This is the bridge mechanic we extend to Woo. |
+| Utilities tab (clear caches, reset configs, export/import) | `class-utilities.php`, `templates/admin/utilities-tab.php` | Operations love this. Ship it. |
+| Admin tabs UI (Configurations / Utilities / Debug) | `class-admin-page.php` + templates | Becomes our primary admin shell. |
+
+### 2.2 PAC Vehicle Data Manager (PAC VDM)
+
+| Capability | Where it lives today | Why we need it |
+|---|---|---|
+| **Data Flattener — PULL** | `class-data-flattener.php` | When a CCT item is saved, copy fields *from* its related parent record(s) onto itself. (E.g., when a "trim" item is saved, pull `make` and `model` from the related vehicle.) |
+| **Data Flattener — PUSH** | `class-data-flattener.php` | When the parent changes, push the new value down onto every related child. Bidirectional intent without bidirectional pain. |
+| **Field Locker** (UI) | `class-field-locker.php` + `assets/js/field-locker.js` + `assets/css/field-locker.css` | Greys out fields whose values are sourced from a related record so editors don't accidentally edit derived data. |
+| **Year Expander** | `class-year-expander.php` | Domain-specific helper that expands "2018-2022" → 2018,2019,2020,2021,2022. Generalize this concept into a "field transformer" pipeline. |
+| **Bulk Sync** | `class-bulk-sync.php` | Re-runs PULL across every existing item in a CCT. Critical for migrations and recovery. |
+| **CCT Builder (programmatic)** | `class-cct-builder.php` | Creates CCTs and Relations from code. Powers the "first-run setup" admin tab. |
+| **Config Name Generator** | `class-config-name-generator.php` | Auto-generates a human-readable name for each new flatten config. Pure utility. |
+| **Settings + Debug + Setup tabs** | `class-admin-page.php` + `templates/admin/*.php` | Same admin shell pattern as RI but with more tabs; we merge both shells into one. |
+
+### 2.3 JFB WC Quotes Advanced (JFB-WC)
+
+JFB-WC is the most loosely-coupled of the three, but it contributes **patterns**, not modules:
+
+| Pattern | Where to find it | How it informs the new plugin |
+|---|---|---|
+| WP Settings API with sections/fields callbacks | `jfbwqa_settings_init()` (line ~1026) | Use the same pattern for the global settings page (debug toggle, default behaviors, WC consumer keys if needed). |
+| JSON config files in plugin dir + UI to upload/regenerate | `jfbwqa_read_mapping()` / `jfbwqa_write_mapping()` (lines ~82-125) | Allow operators to **export/import** an entire site config as JSON. Crucial for staging→prod and for shipping the plugin pre-configured. |
+| Site-specific meta-key whitelist via textarea | `jetengine_keys` setting (line ~1040) | When configuring a flatten, the dropdown of available meta keys is populated from the whitelist — keeps the UI clean. |
+| File-based debug log with toggle | `debug/debug.log` + `enable_debug` checkbox + `jfbwqa_write_log()` (line ~127) | Replaces our scattered `error_log()` calls. One toggle, one file, viewable from the Debug tab. |
+| Custom WC order action buttons + modal | `jfbwqa_add_order_action()` (line ~507) | Same hook pattern lets us add "Sync to CCT" / "Resync from CCT" buttons on the Woo product edit screen. |
+| Dynamic placeholder replacement | `jfbwqa_replace_email_placeholders()` (line ~808) | The transformer pipeline (year expander, name builder, etc.) gets a generic templating layer. |
+
+---
+
+## 3. Target Architecture
+
+### 3.1 Naming & namespacing
+- **Plugin slug**: `je-data-bridge-cc`
+- **Plugin display name**: `JetEngine Data Bridge CC`
+- **Author / License**: Legwork Media · GPL v2 or later (matches existing JFB-WC convention).
+- **PHP namespace** (light — class-prefix style to match WP conventions): `JEDB_*`
+- **Constants prefix**: `JEDB_*` (e.g., `JEDB_VERSION`, `JEDB_PLUGIN_DIR`)
+- **Option keys**:
+  - `jedb_settings` — global settings (debug toggle, defaults, WC consumer keys, "Enable Custom PHP Snippets" toggle).
+  - `jedb_meta_whitelist` — per-target meta-key allowlist (JFB-WC pattern).
+  - `jedb_bridge_types` — JSON array of bridge-type definitions (e.g., `[{slug: 'available_set', label: 'Available Set', cct: 'available_sets_data'}, …]`). **Source of truth for the Bridge Type select on the product editor.** Editable from the Settings tab; export/importable; survives plugin updates.
+- **Custom DB tables** (carried over and renamed):
+  - `wp_jedb_relation_configs` (was `wp_jet_injector_configs`)
+  - `wp_jedb_flatten_configs` (new — PAC VDM stored these in `wp_options`; promote to its own table for parity)
+  - `wp_jedb_sync_log` (new — append-only audit trail for every PUSH/PULL operation, including snippet-transform failures)
+  - `wp_jedb_snippets` (new — registry of custom transformer snippets; row stores slug, label, description, scope, file hash; the actual PHP code lives on disk under `wp-content/uploads/jedb-snippets/`)
+- **Snippet storage on disk**: `wp-content/uploads/jedb-snippets/` — protected by an auto-written `.htaccess` (`deny from all`) plus an `index.php` to block directory listing. One file per snippet: `{slug}.php`. Lives outside the plugin dir so snippets survive plugin updates and can be backed up alongside `uploads/`.
+- **Capability**: `manage_jedb` (mapped to `manage_options` by default; allows future role separation). Snippet editing further gated by a separate `jedb_can_edit_snippets` filter so super-admins can lock snippet authoring down even further.
+- **Hooks** (public extension points): all prefixed `jedb/...` (e.g., `jedb/before_push`, `jedb/data_target/register`, `jedb/transformer/register`, `jedb/snippet/before_run`).
+
+### 3.2 Top-level directory layout
+
+```
+je-data-bridge-cc/
+├── je-data-bridge-cc.php              ← bootstrap (constants, dependency check, autoload)
+├── uninstall.php                      ← clean drop of tables + options
+├── readme.txt                         ← WP.org-style readme
+├── BUILD-PLAN.md                      ← this document
+├── CHANGELOG.md
+├── includes/
+│   ├── class-plugin.php               ← singleton, wires every subsystem
+│   ├── class-config-db.php            ← table installer + low-level CRUD (RI's)
+│   ├── class-config-manager.php       ← high-level façade over Config_DB
+│   ├── class-discovery.php            ← merged RI + PAC VDM discoverers
+│   ├── class-sync-guard.php           ← NEW: loop prevention (static flags + transient locks)
+│   ├── class-debug.php                ← merged debug helpers (file log + admin viewer)
+│   ├── class-utilities.php            ← cache flush, export/import config, reset
+│   │
+│   ├── targets/                       ← NEW: Data_Target adapter family
+│   │   ├── interface-data-target.php
+│   │   ├── class-target-cct.php       ← reads/writes CCT items via JE API
+│   │   ├── class-target-cpt.php       ← reads/writes CPT post + post_meta
+│   │   ├── class-target-woo-product.php       ← reads/writes via WC_Product API (HPOS-safe)
+│   │   ├── class-target-woo-variation.php     ← NEW: variations are bridgeable too (see §4.7)
+│   │   └── class-target-registry.php  ← register + look up targets by slug
+│   │
+│   ├── relations/                     ← from RI
+│   │   ├── class-runtime-loader.php
+│   │   ├── class-transaction-processor.php
+│   │   └── class-relation-attacher.php  ← extracted helper from transaction processor
+│   │
+│   ├── flatten/                       ← from PAC VDM
+│   │   ├── class-flattener.php        ← merged engine (was class-data-flattener.php)
+│   │   ├── class-field-locker.php
+│   │   ├── class-bulk-sync.php
+│   │   └── transformers/              ← pluggable value transformers
+│   │       ├── interface-transformer.php
+│   │       ├── class-transformer-registry.php   ← built-ins + snippet-backed ones registered together
+│   │       ├── class-year-expander.php
+│   │       ├── class-name-builder.php           ← generalized from PAC VDM's name generator
+│   │       ├── class-regex-replace.php          ← built-in: pattern + replacement
+│   │       ├── class-format-number.php          ← built-in: currency / decimals / thousands
+│   │       ├── class-lookup-table.php           ← built-in: JSON map (e.g., size code → label)
+│   │       ├── class-passthrough.php
+│   │       └── class-snippet-transformer.php    ← NEW: thin wrapper that runs a user-defined snippet (see §4.8)
+│   │
+│   ├── snippets/                      ← NEW: Custom Code Snippets subsystem (see §4.8)
+│   │   ├── class-snippet-manager.php  ← CRUD, file write, syntax check, capability gate
+│   │   ├── class-snippet-loader.php   ← lazy require_once of snippet files when invoked
+│   │   ├── class-snippet-runner.php   ← invokes snippet inside try/catch, captures errors → debug log
+│   │   └── class-snippet-installer.php  ← creates uploads/jedb-snippets/ + .htaccess + index.php on activation
+│   │
+│   ├── builders/
+│   │   └── class-cct-builder.php      ← from PAC VDM, generalized
+│   │
+│   ├── admin/
+│   │   ├── class-admin-shell.php      ← top-level menu + tab router
+│   │   ├── class-tab-relations.php    ← RI's CCT config cards live here
+│   │   ├── class-tab-flatten.php      ← PAC VDM's flatten cards live here
+│   │   ├── class-tab-bridges.php      ← NEW: list/edit Bridge Types (the Q5 settings JSON UI)
+│   │   ├── class-tab-targets.php      ← list discovered targets, register custom ones
+│   │   ├── class-tab-snippets.php     ← NEW: code-editor UI for Custom Code Snippets
+│   │   ├── class-tab-utilities.php    ← export/import/reset
+│   │   ├── class-tab-setup.php        ← one-click programmatic CCT/relation creation
+│   │   ├── class-tab-debug.php        ← log viewer + toggle
+│   │   ├── class-settings.php         ← Settings API registration (JFB-WC pattern)
+│   │   └── class-woo-product-meta-box.php   ← NEW: "Bridge to CCT" panel on product edit
+│   │
+│   └── helpers/
+│       ├── debug.php                  ← jedb_log(), jedb_dump()
+│       ├── hpos.php                   ← HPOS detection + safe order/product access
+│       ├── filesystem.php             ← writes/reads uploads/jedb-snippets safely
+│       └── arrays.php
+│
+├── templates/
+│   └── admin/
+│       ├── shell.php                  ← outer wrapper + tabs nav
+│       ├── tab-relations.php
+│       ├── tab-flatten.php
+│       ├── tab-bridges.php
+│       ├── tab-targets.php
+│       ├── tab-snippets.php
+│       ├── tab-utilities.php
+│       ├── tab-setup.php
+│       ├── tab-debug.php
+│       ├── tab-settings.php
+│       ├── relation-config-card.php    ← from RI
+│       ├── flatten-config-card.php     ← from PAC VDM
+│       ├── snippet-editor.php          ← CodeMirror-backed PHP editor + Test panel
+│       └── woo-product-meta-box.php
+│
+├── assets/
+│   ├── js/
+│   │   ├── admin.js                    ← shared
+│   │   ├── relation-injector.js        ← from RI (renamed from injector.js)
+│   │   ├── field-locker.js             ← from PAC VDM
+│   │   ├── snippet-editor.js           ← NEW: wires WP's bundled CodeMirror, Test button, syntax-error display
+│   │   └── woo-product-bridge.js       ← NEW: handles "type" select + dynamic field reveal on product edit (incl. variations)
+│   └── css/
+│       ├── admin.css
+│       └── field-locker.css            ← from PAC VDM
+│
+└── languages/
+    └── je-data-bridge-cc.pot
+```
+
+### 3.3 Class-graph (high-level)
+
+```
+JEDB_Plugin (singleton, 'plugins_loaded')
+ ├── boots → JEDB_Config_DB::install() + JEDB_Snippet_Installer::install() on activation
+ ├── registers → JEDB_Target_Registry (CCT / CPT / Woo_Product / Woo_Variation targets)
+ ├── registers → JEDB_Transformer_Registry (built-ins + every enabled snippet)
+ ├── instantiates → JEDB_Discovery (read-only, cached)
+ ├── instantiates → JEDB_Sync_Guard (singleton)
+ ├── instantiates → JEDB_Debug (singleton)
+ ├── instantiates → JEDB_Snippet_Manager (singleton, admin-only fully)
+ │
+ ├── ADMIN context:
+ │   └── JEDB_Admin_Shell → JEDB_Tab_*  (renders tabs, owns Settings API)
+ │       ├── JEDB_Woo_Product_Meta_Box (registers on 'add_meta_boxes')
+ │       └── JEDB_Tab_Snippets (CodeMirror editor + Test runner)
+ │
+ └── RUNTIME context:
+     ├── JEDB_Relation_Runtime_Loader  → injects JS on CCT edit
+     ├── JEDB_Transaction_Processor    → on CCT save with $_POST['jedb_relations']
+     ├── JEDB_Flattener                → on CCT save (PULL) + on parent update (PUSH)
+     │     └── pipes through JEDB_Transformer chain
+     │           └── JEDB_Snippet_Transformer → JEDB_Snippet_Runner (try/catch + log)
+     └── JEDB_Field_Locker             → injects locker JS/CSS on CCT/CPT/Woo edit
+```
+
+---
+
+## 4. The Big New Piece: WooCommerce Target Adapter
+
+This is the only genuinely new code, and it deserves its own section because it has the highest risk surface.
+
+### 4.1 Why a dedicated Target adapter
+RI's transaction processor and PAC VDM's flattener both currently assume the destination is either a CCT row or a CPT post. WooCommerce products are technically CPTs (`product`), but writing to them naively via `update_post_meta()` will:
+- Break HPOS-aware product reads (the `wc_product_meta_lookup` table won't update).
+- Skip Woo's variation handling, type changes, stock sync, and price formatting.
+- Bypass `WC_Product` filters that other Woo plugins rely on.
+
+Solution: every read/write to a Woo product goes through `WC_Product` / `WC_Product_Factory` / `wc_get_product()` / `$product->save()`.
+
+### 4.2 The interface
+
+```php
+interface JEDB_Data_Target {
+    public function get_slug(): string;             // 'cct::available_sets_data', 'posts::product', etc.
+    public function get_label(): string;            // 'Available Sets (CCT)', 'WooCommerce Product', ...
+    public function exists( $id ): bool;
+    public function get( $id ): array;              // returns flat assoc array of fields
+    public function update( $id, array $fields ): bool;
+    public function create( array $fields );        // returns new id
+    public function get_field_schema(): array;      // for UI dropdowns
+    public function supports_relations(): bool;
+}
+```
+
+### 4.3 The Woo product target — what's special
+
+`JEDB_Target_Woo_Product` lives in `includes/targets/class-target-woo-product.php` and implements:
+
+- `get( $id )` → `wc_get_product( $id )`, then maps `$product->get_data()` plus `$product->get_meta_data()` into the flat array.
+- `update( $id, $fields )` → uses the typed setters (`$product->set_name()`, `$product->set_regular_price()`, `$product->update_meta_data()`, etc.) with a fallback `update_meta_data()` for unknown keys.
+- After every write: `$product->save()` (this is what triggers HPOS sync + lookup table refresh).
+- `get_field_schema()` returns the union of: core Woo product fields (name, sku, price, stock_status, categories, tags, image, gallery, downloadable_files…) + any registered custom meta keys (the JFB-WC `jetengine_keys` pattern, but generalized to "woo product meta keys").
+
+### 4.4 HPOS / new tables — the gotchas
+
+| Concern | Detail | Mitigation in plugin |
+|---|---|---|
+| `wc_product_meta_lookup` cache table | Used by Woo for fast product queries. Direct `update_post_meta()` does NOT update it. | Always go through `$product->save()`. Helper `jedb_hpos_safe_save( $product )` provided. |
+| HPOS for **orders** | Woo 8.x+ moves orders out of `wp_posts` into `wp_wc_orders`. | We don't write orders, only products. But `helpers/hpos.php` exposes `jedb_is_hpos_enabled()` for any future order-touching code (e.g., when JFB-WC patterns get pulled in). |
+| Product variations | Variations are their own posts (`product_variation`) hanging off a parent variable product. Bridging requires deciding whether the CCT row maps to the parent or to a specific variation. | **In scope.** Both `Target_Woo_Product` and a separate `Target_Woo_Variation` adapter are shipped. Bridge config picks one. See §4.7 for the full pattern (and how "Has Instructions PDF" becomes a variation). |
+| Product type changes (simple → variable, etc.) | Change of type can lose meta. | When the bridge config detects a product-type field in the mapping, the UI warns the editor and the flattener refuses PUSH unless `force=true`. |
+| Image / Gallery fields | Woo expects integer attachment IDs, JE galleries store comma-separated IDs. | Conversion happens in the target adapter, not in the flattener. Single source of truth. |
+| Categories / tags | Woo uses taxonomies (`product_cat`, `product_tag`). | Adapter accepts term IDs OR slugs OR names; resolves to IDs and uses `wp_set_object_terms()`. |
+| Custom product meta from third-party Woo plugins | Need to be visible to bridge UI without hardcoding. | Whitelist textarea in Settings tab (JFB-WC pattern) OR auto-discover by sampling N existing products. |
+
+### 4.5 The "Bridge to CCT" meta box on the product edit screen
+
+A new admin module `JEDB_Woo_Product_Meta_Box` injects a panel on `product` edit screens with these controls:
+
+1. **Bridge type** select — populated from `jedb_bridge_types` (the Settings JSON, see §3.1). For Brick Builder HQ this lists "Available Set", "Mosaic", "Mosaic Instructions PDF". Editors can add new bridge types from the Bridges admin tab without touching code.
+2. **Linked CCT item** — once a type is chosen, an Ajax dropdown shows existing CCT items of that type, plus "Create new from this product" and "Edit linked item". **Cardinality is 1:1** (locked decision; see §8): one product ↔ one CCT row.
+3. **Variation scope** (only shown when product type = `variable`) — radio: `Bridge the parent product` vs `Bridge a specific variation`. If "specific variation" is chosen, a second dropdown picks which variation. See §4.7.
+4. **Direction & lock** — radio: `CCT is canonical (push to product)` vs `Product is canonical (pull from CCT)`. Lock checkbox to freeze sync. **Default direction is CCT-canonical** (locked decision; see §8).
+
+This is what makes the bidirectional model usable: every product knows which bridge it belongs to, what scope it has, and where its truth lives. Stored as product meta:
+- `_jedb_bridge_type` (slug)
+- `_jedb_bridge_cct_id` (single integer — 1:1)
+- `_jedb_bridge_scope` (`parent` | `variation`)
+- `_jedb_bridge_variation_id` (only when scope = variation)
+- `_jedb_bridge_direction` (`cct_canonical` | `product_canonical`)
+- `_jedb_bridge_locked` (bool)
+
+### 4.6 The "Has Single Page = the WC product" CCT pattern
+Using JetEngine's "has single page" feature pointed at the linked Woo product means we never need to build a separate CCT single template. The Bridge meta box's "Linked CCT item" stores the product ID into the CCT row; the CCT's "single page" URL resolves to the product's permalink via a small `template_redirect` shim:
+
+```
+add_action( 'template_redirect', function () {
+    if ( is_jet_cct_single() ) {
+        $linked = jedb_get_linked_woo_product_for_current_cct();
+        if ( $linked ) wp_safe_redirect( get_permalink( $linked ), 301 );
+    }
+});
+```
+
+(The actual implementation will use JetEngine's CCT-single detection helpers, not a placeholder function.)
+
+### 4.7 Variation bridging — the "Has Instructions PDF" pattern
+
+Variations are first-class targets in v1. The use case that drove the decision: a Mosaic CCT row has a `has_instructions_pdf` boolean and an `instructions_price` field. We want that to surface as a **variation** on the parent Mosaic product, not a separate product, so the storefront shows a single product page with a "Just the build (in-person)" / "Build + Instructions PDF" radio. This is also the standard Woo UX for any "with extras" purchase decision.
+
+**How it works end to end:**
+
+1. **Bridge Type definition** in `jedb_bridge_types` JSON includes a `variations` block:
+   ```json
+   {
+     "slug": "mosaic",
+     "label": "Mosaic",
+     "cct": "mosaics_data",
+     "product_type": "variable",
+     "variations": [
+       {
+         "slug": "build_only",
+         "label": "Build only (no instructions)",
+         "show_when": "true",
+         "price_field": null,
+         "downloads": []
+       },
+       {
+         "slug": "with_instructions",
+         "label": "Includes Instructions PDF",
+         "show_when": "{has_instructions_pdf} == true",
+         "price_field": "instructions_price",
+         "downloads": ["instructions_pdf_attachment"]
+       }
+     ]
+   }
+   ```
+   The `show_when` mini-DSL (parsed by a tiny expression evaluator, **not** `eval`) controls whether the variation should exist for a given CCT row.
+
+2. **`Target_Woo_Variation` adapter** writes through `WC_Product_Variation`'s typed setters (`->set_regular_price()`, `->set_downloads()`, etc.) and `->save()`. Same HPOS-safe rules as products.
+
+3. **Variation reconciliation on PUSH** (when CCT row changes):
+   - For each variation defined in the bridge type:
+     - Evaluate `show_when` against current CCT field values.
+     - If true → ensure the variation exists; create if missing; PUSH mapped fields.
+     - If false → soft-delete (set `status = private`) so the variation hangs around for analytics but isn't purchasable. Hard-delete only on explicit "Reconcile" button.
+   - Variations the bridge type doesn't know about are **left alone** — third-party plugins or manual variations stay untouched.
+
+4. **The "Variation Scope" radio in the meta box** (§4.5) is what tells the bridge whether you want to write *to* a specific variation manually or let the auto-reconciliation manage them. 99% of the time editors leave it on "Bridge the parent product" and let the variation engine do its job.
+
+5. **PULL direction** (Woo → CCT): edits to a managed variation's price/downloads back-propagate to the corresponding CCT field defined in the bridge type. Edits to *unmanaged* variations are ignored (no field to map them to).
+
+**Pitfalls specific to variations** (added to §9 risk register):
+- Stock-status drift between parent and variations.
+- Variation attribute taxonomy (`pa_*`) auto-creation — bridge types may need to declare attributes upfront.
+- Variations ordering — Woo respects a `menu_order`; we expose it as a per-variation field in the bridge type JSON.
+
+### 4.8 Custom Code Snippets — the user-defined transformer system
+
+**Why this exists.** Built-in transformers (Year Expander, Name Builder, Regex Replace, Format Number, Lookup Table) handle most cases, but every site eventually needs a one-off transformation that doesn't fit. Rather than ship a code change for each site, we let admins define a transformer in PHP from the admin UI. Snippets are also how power-users customize bridge behavior without forking the plugin.
+
+**The mental model.** A snippet is a small PHP function with a fixed signature, stored as a single file in `wp-content/uploads/jedb-snippets/{slug}.php`. The Flatten config UI lets you pick "Custom Snippet → my_strip_lego_trademark" from the same dropdown that lists built-in transformers.
+
+**File anatomy.** Every snippet file looks like this — the wrapper is auto-generated on save; the editor only sees the `// CODE BEGIN` / `// CODE END` body:
+
+```php
+<?php
+/**
+ * Snippet: my_strip_lego_trademark
+ * Created by: l.gallucci97 (admin)
+ * Last edited: 2026-02-28 11:42:00 UTC
+ * Hash: c4f9...
+ *
+ * Input expected:  string (raw product description)
+ * Output expected: string
+ *
+ * Description (admin-editable):
+ *   Removes "LEGO®", "LEGO(R)", trademark symbols and trailing whitespace.
+ */
+if ( ! defined( 'ABSPATH' ) ) exit;
+
+function jedb_snippet_my_strip_lego_trademark( $value, array $context = [] ) {
+    // CODE BEGIN
+    if ( ! is_string( $value ) ) return $value;
+    $value = preg_replace( '/LEGO\s*(®|\(R\))/iu', 'LEGO', $value );
+    return trim( $value );
+    // CODE END
+}
+```
+
+**The `$context` parameter** gives snippets access to:
+- `$context['source_target']` — the `JEDB_Data_Target` instance the value came from.
+- `$context['source_id']` — the source record ID.
+- `$context['source_field']` — the source field key.
+- `$context['target_target']` / `target_id` / `target_field` — destination equivalents.
+- `$context['direction']` — `pull` or `push`.
+- `$context['bridge_type']` — slug from `jedb_bridge_types`, if applicable.
+
+**Admin UI (Snippets tab).** A list of snippets with: status (enabled / disabled / errored), label, description, last-edit info, and a "Test" button. Clicking a snippet opens a CodeMirror PHP editor (using WP's bundled `wp_enqueue_code_editor`) with:
+- Input field to type a sample value.
+- Run-Test button → invokes the snippet against the sample value, displays result + execution time + any caught exceptions.
+- Save button → does a syntax check (`php -l` via `shell_exec` if available, else `token_get_all` validation) before writing the file. If syntax fails, the editor stays open with errors highlighted; the file on disk is *not* touched.
+- "Where used" panel showing every Flatten config that currently invokes this snippet.
+
+**Lifecycle and safety.**
+
+| Stage | Behavior |
+|---|---|
+| Activation | `JEDB_Snippet_Installer` ensures `uploads/jedb-snippets/` exists with `.htaccess` (`deny from all`) and `index.php`. |
+| Snippet save | Capability check (`manage_options` AND `apply_filters('jedb_can_edit_snippets', true, $user_id)`); nonce check; syntax validation; file written 0644; SHA-256 hash stored in `wp_jedb_snippets`. |
+| Snippet load | `JEDB_Snippet_Loader::load($slug)` → `require_once` only when first invoked in the request, then function exists for the rest of the request. |
+| Snippet run | `JEDB_Snippet_Runner::run($slug, $value, $context)` wraps the call in try/catch + `set_error_handler` so a fatal in user code can't take down a save. On error: returns the original unmodified `$value`, marks the snippet as `errored`, writes a full stack trace to debug log, surfaces an admin notice. |
+| Snippet disable | Setting `enabled = false` in `wp_jedb_snippets` makes it a no-op; the file stays on disk for editing. |
+| Snippet delete | Removes file + DB row + warns about every Flatten config still referencing it (does not auto-orphan configs). |
+| Plugin update | Snippets survive (they live in `uploads/`, not the plugin dir). |
+| Plugin uninstall | `uninstall.php` asks (via a settings flag) whether to also wipe `uploads/jedb-snippets/`. Default: keep. |
+
+**The big safety toggle.** In Settings, a top-level checkbox **"Enable Custom PHP Snippets"** must be ON for the Snippets tab to appear at all. Default OFF. Sites that don't need this never see the surface area.
+
+**Why not a "safe DSL"?** Considered. Rejected because (a) every safe DSL eventually grows into a janky Turing-incomplete PHP-lite; (b) the people allowed to install plugins on a WP site already have full PHP execution; this is no worse. The capability gate + opt-in toggle is the meaningful boundary.
+
+**Distribution.** Snippets can be exported (Utilities tab) as a JSON bundle including their full source. This is how a site author ships a tested set of snippets to other sites running the plugin.
+
+---
+
+## 5. Sync Loop Prevention (`JEDB_Sync_Guard`)
+
+The single biggest source of bugs in any bidirectional bridge is recursive saves. Our guard provides:
+
+- **Static per-request flag**: `JEDB_Sync_Guard::lock( "$direction:$source_id:$target_id" )` returns false if already locked — caller bails.
+- **Transient lock for cross-request cases** (Ajax, REST, CLI): same key persists 30s.
+- **Origin tagging**: every write carries a `$context['origin']` so debug log can read "CCT update → Woo PUSH (origin=admin) → Woo update (skipped, origin=jedb_push)".
+- **Public hooks**: `jedb/sync/before`, `jedb/sync/after`, `jedb/sync/skipped`.
+
+PAC VDM today does this with ad-hoc statics scattered across `class-data-flattener.php`. We centralize it.
+
+---
+
+## 6. File-Level Migration Map
+
+The following maps every meaningful source file to its destination, the action required, and the reason. **"Adapt"** = lift logic, rename namespaces and constants, fix any single-site assumptions. **"Merge"** = combine with another file from a different source plugin. **"Extract"** = pull a sub-piece out of a larger file.
+
+### 6.1 From Jet Engine Relation Injector
+
+| Source path | → Destination | Action | Notes |
+|---|---|---|---|
+| `jet-engine-relation-injector.php` | `je-data-bridge-cc.php` | Adapt | Use as bootstrap skeleton (constants, activation hook, dependency check). Replace all `JET_INJECTOR_*` constants with `JEDB_*`. |
+| `uninstall.php` | `uninstall.php` | Adapt | Drop both `wp_jedb_relation_configs` AND `wp_jedb_flatten_configs` AND `wp_jedb_sync_log` and remove `jedb_*` options. |
+| `includes/class-plugin.php` | `includes/class-plugin.php` | Merge | Merge with PAC VDM's `class-plugin.php`. New singleton wires every subsystem listed in §3.3. |
+| `includes/class-config-db.php` | `includes/class-config-db.php` | Adapt | Generalize: this class manages **all** custom tables (relations, flatten, sync log). Single `install()`, single `uninstall()`. Add `flatten_configs` and `sync_log` schemas. |
+| `includes/class-config-manager.php` | `includes/class-config-manager.php` | Adapt | Add typed methods: `get_relation_configs()`, `get_flatten_configs()`, `get_woo_bridges()`. Becomes the single façade. |
+| `includes/class-discovery.php` | `includes/class-discovery.php` | Merge | Combine with PAC VDM's discovery. Add `discover_woo_product_meta_keys()`, `discover_woo_taxonomies()`. Cache to transient with 5-min TTL + manual flush button in Utilities. |
+| `includes/class-runtime-loader.php` | `includes/relations/class-runtime-loader.php` | Adapt | Move into `relations/` subfolder. Rename JS handle. Same job. |
+| `includes/class-transaction-processor.php` | `includes/relations/class-transaction-processor.php` + `includes/relations/class-relation-attacher.php` | Extract | Pull the "attach a relation between two records" logic out into `class-relation-attacher.php` so it's reusable from the Woo bridge meta box ("create new product from CCT" needs the same operation). |
+| `includes/class-utilities.php` | `includes/class-utilities.php` | Adapt | Add export/import for flatten configs and Woo bridges. Add "rebuild Woo lookup table for bridged products" button. |
+| `includes/class-admin-page.php` | `includes/admin/class-admin-shell.php` + `includes/admin/class-tab-relations.php` | Extract | Split the admin page into a tab router (shell) and one tab class per feature. |
+| `includes/helpers/debug.php` | `includes/helpers/debug.php` | Merge | Merge with PAC VDM's debug helpers and JFB-WC's `jfbwqa_write_log()` pattern. Single function `jedb_log( $msg, $level = 'info' )` writing to `wp-content/uploads/jedb-debug.log` (NOT inside the plugin dir — survives plugin updates). |
+| `templates/admin/settings-page.php` | `templates/admin/shell.php` | Adapt | Becomes the outer tab shell. |
+| `templates/admin/cct-config-card.php` | `templates/admin/relation-config-card.php` | Adapt | Rename only. Same purpose. |
+| `templates/admin/utilities-tab.php` | `templates/admin/tab-utilities.php` | Adapt | Add new buttons mentioned above. |
+| `templates/admin/debug-tab.php` | `templates/admin/tab-debug.php` | Adapt | Add log viewer (tail last 500 lines, JS auto-refresh option). |
+| `assets/js/injector.js` *(implied — confirm path)* | `assets/js/relation-injector.js` | Adapt | Localize via `wp_localize_script` to receive the new ajax action names. |
+| `.cursor/rules/*` (8 docs) | `docs/architecture/*` | Adapt | These are gold. Re-purpose the architecture, glossary, troubleshooting, and JE API reference into the new plugin's developer docs. Update any `Jet_Injector_*` references. |
+
+### 6.2 From PAC Vehicle Data Manager
+
+| Source path | → Destination | Action | Notes |
+|---|---|---|---|
+| `pac-vehicle-data-manager.php` | (merged into `je-data-bridge-cc.php`) | Merge | Pull the activation/deactivation hooks and constant defs into the unified bootstrap. |
+| `uninstall.php` | (merged into `uninstall.php`) | Merge | |
+| `includes/class-plugin.php` | (merged into `includes/class-plugin.php`) | Merge | |
+| `includes/class-data-flattener.php` | `includes/flatten/class-flattener.php` | Adapt | This is the most-touched file in the merge. Changes: (a) replace direct CCT writes with `JEDB_Data_Target` calls, (b) replace ad-hoc loop guards with `JEDB_Sync_Guard`, (c) factor every value transformation through the new transformer pipeline. |
+| `includes/class-field-locker.php` | `includes/flatten/class-field-locker.php` | Adapt | Generalize selectors to also match Woo product edit fields (the meta box outputs them with predictable names). |
+| `includes/class-year-expander.php` | `includes/flatten/transformers/class-year-expander.php` | Adapt | Implements the new `JEDB_Transformer` interface. Domain-specific but useful as a reference transformer. |
+| `includes/class-bulk-sync.php` | `includes/flatten/class-bulk-sync.php` | Adapt | Add `target` parameter so bulk sync can run against any registered target (CCT, CPT, Woo product). |
+| `includes/class-discovery.php` | (merged into `includes/class-discovery.php`) | Merge | Combine its CCT-field discovery with RI's relation-graph discovery. |
+| `includes/class-cct-builder.php` | `includes/builders/class-cct-builder.php` | Adapt | Generalize: builder builds CCTs **and** can register a Woo product type if needed (e.g., `mosaic_instructions_pdf` as a custom Woo product subtype). |
+| `includes/class-config-name-generator.php` | `includes/flatten/transformers/class-name-builder.php` | Adapt | Generalize from "vehicle config name" to "any record's display name from a template string". |
+| `includes/class-config-manager.php` | (merged into `includes/class-config-manager.php`) | Merge | |
+| `includes/class-admin-page.php` | (split across `includes/admin/class-tab-flatten.php`, `class-tab-setup.php`, `class-tab-debug.php`) | Extract | |
+| `includes/helpers/debug.php` | (merged into `includes/helpers/debug.php`) | Merge | |
+| `templates/admin/setup-tab.php` | `templates/admin/tab-setup.php` | Adapt | One-click setup gets a "Setup Brick Builder HQ" button (preset that creates the available_sets and mosaics CCTs + relations). Other sites can drop in their own preset JSON. |
+| `templates/admin/debug-tab.php` | (merged into `templates/admin/tab-debug.php`) | Merge | |
+| `templates/admin/settings-page.php` | (merged into `templates/admin/shell.php`) | Merge | |
+| `assets/js/field-locker.js` | `assets/js/field-locker.js` | Adapt | Add Woo edit-screen selector. |
+| `assets/css/field-locker.css` | `assets/css/field-locker.css` | Adapt | Same. |
+| `BUILD-PLAN.md` | (referenced in this doc) | Read-only | Already reviewed; informs the merger but is not migrated. |
+| `README.md` | (informs new `readme.txt`) | Adapt | |
+
+### 6.3 From JFB WC Quotes Advanced
+
+JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We extract patterns only.
+
+| Pattern source (line in `jfb-wc-quotes-advanced.php`) | → Destination | What we lift |
+|---|---|---|
+| `jfbwqa_settings_init()` (~line 1026) | `includes/admin/class-settings.php` | Settings API skeleton (sections + fields + sanitize callback). |
+| `jfbwqa_get_options()` / sanitize (~lines 39, 1144) | `includes/admin/class-settings.php` | Defaults pattern + boolean coercion. |
+| `jfbwqa_read_mapping()` / `jfbwqa_write_mapping()` (~lines 82-125) | `includes/class-utilities.php` | JSON file-based config with upload + write-permission checks. |
+| `jfbwqa_write_log()` + `debug/debug.log` (~line 127) | `includes/helpers/debug.php` | File-based debug log with toggle. We move the file out of the plugin dir into uploads. |
+| `jetengine_keys` textarea (~line 1040) | `includes/admin/class-settings.php` | Per-site meta-key whitelist textarea, generalized to per-target. |
+| `jfbwqa_render_field_*` callbacks (~line 1122) | `includes/admin/class-settings.php` | Reusable render callbacks for text/textarea/checkbox/wp_editor. |
+| Custom WC order action button + modal (~lines 506, 1684) | `includes/admin/class-woo-product-meta-box.php` | Pattern for adding admin buttons + a footer modal on Woo edit screens. |
+
+---
+
+## 7. Phased Implementation Roadmap
+
+Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
+
+### Phase 0 — Skeleton (½ day)
+- Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
+- Create `class-plugin.php` singleton with empty subsystem registration.
+- Create `class-config-db.php` with `install()` that creates the three custom tables.
+- Activation/uninstall hooks wired.
+- Empty admin shell with one "Hello" tab.
+- ✅ **Exit criterion**: plugin activates clean on a fresh JE+Woo site, creates tables, shows admin menu.
+
+### Phase 1 — Discovery + Targets (1 day)
+- Port and merge `class-discovery.php` from RI + PAC VDM.
+- Build `interface-data-target.php` and the four target classes (`Target_CCT`, `Target_CPT`, `Target_Woo_Product`, `Target_Woo_Variation`).
+- `Target_Registry` with `register()` / `get()` / `all()`.
+- Targets tab shows a read-only list of all discovered targets.
+- ✅ **Exit criterion**: Targets tab on a real site lists every CCT, every public CPT, every product, and every variation without errors.
+
+### Phase 2 — Relation Injector port (1 day)
+- Port RI's runtime loader, transaction processor, admin tab, JS.
+- Test on Brick Builder HQ's `available_sets_data` CCT.
+- ✅ **Exit criterion**: editor can create a new CCT item AND attach a relation in one save, identical to RI's behavior today.
+
+### Phase 3 — Flattener port (1.5 days)
+- Port PAC VDM's flattener, field locker, bulk sync, transformers.
+- Wire `Sync_Guard` everywhere flattener writes.
+- Flatten tab in admin (relation-config-card style cards for flatten configs).
+- ✅ **Exit criterion**: PULL and PUSH work between two CCTs, and the field-locker UI lights up for sourced fields.
+
+### Phase 4 — Woo target & bridge meta box (3 days) — *the new code*
+- Implement `Target_Woo_Product` in full, with HPOS-safe writes.
+- Build the `Woo_Product_Meta_Box` with type select + linked-CCT picker + direction toggle.
+- Build the **Bridges admin tab** (`class-tab-bridges.php`) for managing the `jedb_bridge_types` JSON via UI.
+- Implement the CCT-single → Woo-product redirect shim.
+- Implement loop-safe CCT↔Woo PUSH and PULL through the existing flattener.
+- ✅ **Exit criterion**: editing the Available Sets CCT updates the matching simple Woo product (and vice versa) without recursion, and the Woo product page loads when visiting the CCT single URL.
+
+### Phase 4b — Variation bridging (1.5 days) — *new code, builds on Phase 4*
+- Implement `Target_Woo_Variation`.
+- Add `variations[]` and `show_when` mini-DSL parser to bridge type definitions.
+- Variation reconciliation engine on PUSH (create / update / soft-delete based on `show_when`).
+- Variation Scope radio + variation picker added to the meta box.
+- Wire downloadable-files handling (the "Has Instructions PDF" path).
+- ✅ **Exit criterion**: editing a Mosaic CCT row's `has_instructions_pdf` toggle creates/removes the "Includes Instructions PDF" variation on the bridged Woo product, with the correct price and downloadable file attached.
+
+### Phase 5 — Settings, debug log, utilities (1 day)
+- Settings API setup using JFB-WC pattern (incl. the "Enable Custom PHP Snippets" toggle).
+- File-based debug log + viewer.
+- Export/import config as JSON (now includes bridge types).
+- "Bulk re-sync all bridges" button.
+- ✅ **Exit criterion**: an entire site config can be exported, the plugin uninstalled, reinstalled, and config re-imported with everything working.
+
+### Phase 5b — Custom Code Snippets (1.5 days)
+- Implement `JEDB_Snippet_Installer`, `Snippet_Manager`, `Snippet_Loader`, `Snippet_Runner`.
+- Build the Snippets admin tab with WP-bundled CodeMirror editor + Test runner.
+- Wire `Snippet_Transformer` into the transformer registry so snippets show up in the Flatten config dropdown.
+- Add export/import of snippets in the Utilities tab.
+- ✅ **Exit criterion**: an admin can write, syntax-check, save, test, and apply a snippet to flatten a field, and a deliberately-broken snippet does NOT break a CCT save (it returns the unmodified value and logs the error).
+
+### Phase 6 — Setup tab + presets (½ day)
+- Programmatic CCT/relation builder (PAC VDM's `class-cct-builder.php`).
+- "Brick Builder HQ" preset JSON shipped in plugin (CCTs + relations + bridge types + a starter snippet for LEGO trademark stripping).
+- ✅ **Exit criterion**: on a fresh Woo+JE site, clicking "Apply Brick Builder HQ preset" creates `available_sets_data` CCT, `mosaics_data` CCT, the relations, the bridges (including the variable-product Mosaic bridge with its variations), and the snippet in under 10 seconds.
+
+### Phase 7 — Hardening (1 day)
+- Capability gating (`manage_jedb` + `jedb_can_edit_snippets`).
+- Nonces on every admin form (especially the snippet editor).
+- REST endpoint hardening (auth + caps).
+- Translation strings + `.pot` regeneration.
+- Codex / `readme.txt` written.
+- ✅ **Exit criterion**: passes a basic security pass (no public unauthenticated writes, no SQL injection paths, all admin AJAX nonced, snippet editor blocked for non-admins).
+
+**Total estimated build**: ~11 working days end-to-end, of which ~6 are net-new code (Phases 4, 4b, 5b) and the rest are port-and-generalize.
+
+---
+
+## 8. Decisions Log (locked)
+
+The following decisions are locked in for v1. Future enhancements go in §10 / changelog.
+
+| # | Topic | Decision | Implementation impact |
+|---|---|---|---|
+| D-1 | **Bridge cardinality** | **1:1.** One Woo product (or one variation) ↔ one CCT row. | `_jedb_bridge_cct_id` is a single integer. UI shows a single-select Ajax picker, not multi-select. Validation: saving a product with a CCT ID already linked elsewhere triggers an admin warning and a "swap link" prompt. |
+| D-2 | **Source of truth on conflict** | **CCT-canonical by default.** When both sides change between syncs, CCT wins. Per-bridge override (`Product is canonical`) available in the meta box. **Phase 7+** may add per-field "last write wins" via timestamps. | Default value of `_jedb_bridge_direction` is `cct_canonical`. PUSH events from CCT always overwrite Woo fields. PULL events from Woo only fire when `_jedb_bridge_direction = product_canonical` OR when the meta box "Pull from Woo now" button is clicked. |
+| D-3 | **Variations** | **In scope.** Both parent products and individual variations can be bridge targets. Variation reconciliation engine ships in Phase 4b. | Adds `Target_Woo_Variation`, the `variations[]` block in bridge type JSON, the `show_when` mini-DSL evaluator, and the variation reconciliation logic. See §4.7. |
+| D-4 | **"Has Instructions PDF" implementation** | **Woo product variation** of the parent Mosaic product, NOT a separate product. Reconciled automatically by the bridge type's `variations[]` block. | The Brick Builder HQ preset (Phase 6) ships with a `mosaic` bridge type whose `variations[]` includes both `build_only` and `with_instructions`. The CCT field `has_instructions_pdf` controls whether the second variation exists. |
+| D-5 | **Bridge type enum storage** | **Plugin Settings JSON** (`jedb_bridge_types` option), NOT JetEngine Glossary. | Editable in the Bridges admin tab. Export/importable. Survives plugin updates. JetEngine Glossaries are still used for *content* enums like `story_type` per `site-structure.md`, but bridge configuration is plugin-owned. |
+| D-6 | **Plugin author / license** | **Legwork Media · GPL v2 or later.** Matches existing JFB-WC convention. | Plugin header in `je-data-bridge-cc.php`. `readme.txt` License field. Copyright notice in `LICENSE` file. |
+| D-7 | **JFB WC Quotes Advanced consolidation** | **Stays separate.** Quoting is its own beast and out of scope. We lift *patterns* (Settings API, JSON config files, debug log) but never the quoting logic. Both plugins can co-exist on the same site. | No changes to JFB-WC repo. New plugin's debug-log helper detects if JFB-WC is active and (optionally) tails its log too in the Debug tab. |
+| D-8 | **Repo strategy** | **New standalone GitHub repo** (`legworkmedia/je-data-bridge-cc`). The three reference plugins remain in their own repos and are explicitly ignored in this repo's `.gitignore`. | New repo gets its own README, LICENSE, CHANGELOG. The path `Refrence but block from git/` is already gitignored at the project root; new plugin sits in its own repo entirely separate from the Brick Builder HQ workspace. |
+| D-9 | **Custom Code Snippets** *(net-new from §10 follow-up)* | **In scope, opt-in.** Per-config PHP snippets stored in `uploads/jedb-snippets/`, edited via WP-bundled CodeMirror, gated by `manage_options` + the `jedb_can_edit_snippets` filter + a global Settings toggle (default OFF). Errors caught and logged; never break a save. | Adds Phase 5b (1.5 days). New `includes/snippets/*` subsystem, new `wp_jedb_snippets` table, new Snippets admin tab, new `Snippet_Transformer`. See §4.8. |
+
+---
+
+## 9. Risks & Pitfalls (and how we mitigate them)
+
+| Risk | Likelihood | Impact | Mitigation |
+|---|---|---|---|
+| HPOS / lookup-table desync after a write | Medium | High (broken Woo queries) | Always go through `WC_Product->save()`; never `update_post_meta()` on products. Add a "rebuild lookup table" utility button. |
+| Recursive sync loop bringing site down | Medium | Critical | Centralized `Sync_Guard` with both static and transient locks; debug log shows every "skipped" event. |
+| JetEngine API change between minor versions | Low–Medium | Medium | Pin to `JETENGINE_MIN_VERSION = 3.3.1`; on every bootstrap, call `jet_engine()->cct->...` defensively with `method_exists`. |
+| Editor confusion: "where do I edit this — CCT or product?" | High | Medium | Bridge meta box shows direction prominently; field locker greys out the non-canonical side; admin notice on every edit screen reminds them. |
+| Migration of existing CCT items into Woo bridges | Medium | High (silent data loss) | Bulk Sync supports a `--dry-run` mode that emits a report before any writes. Phase 5 deliverable. |
+| Plugin too generic, becomes hard to use | Medium | Medium | Setup tab presets ship with a working Brick Builder HQ config out of the box. Other sites get a "Generic JE+Woo" preset. |
+| Debug log fills disk | Low | Medium | Log rotates at 5 MB (helper handles it); off by default in production. |
+| Custom DB tables conflict with someone else's plugin | Very Low | Low | Tables prefixed `wp_jedb_*` + plugin slug carries `_cc` suffix. |
+| Woo plugin updates break the meta box hooks | Low | Low | Use only documented hooks (`add_meta_boxes`, `woocommerce_process_product_meta`). |
+| **Variations: stock/attribute drift** between parent and managed variations | Medium | Medium | Variation reconciliation engine writes parent stock as sum of managed variation stock by default; admin can opt out per bridge. Attribute taxonomies (`pa_*`) are auto-created only when declared in the bridge type JSON; otherwise we error loudly rather than silently mis-assigning. |
+| **Variations: orphaned third-party variations** | Low | Medium | Reconciliation only touches variations whose `_jedb_variation_slug` meta matches a slug in the bridge type. Unmanaged variations are never auto-deleted. |
+| **Custom Snippets: malicious or buggy PHP fatal-erroring a save** | Medium | High if not gated | Triple gate: (1) capability check on edit + on run, (2) global "Enable Custom PHP Snippets" toggle default OFF, (3) `Snippet_Runner` wraps every invocation in try/catch + `set_error_handler` so a fatal returns the original value and logs the trace. |
+| **Custom Snippets: snippet file deleted from disk while DB row remains** | Low | Low | `Snippet_Loader::load()` re-checks file existence + hash before include; mismatched/missing → marks snippet `errored`, logs, returns passthrough. Admin notice surfaces orphaned snippets. |
+| **Custom Snippets: privilege escalation via writeable uploads dir** | Low | High (theoretical RCE) | `.htaccess` (`deny from all`) + `index.php` written on activation; files chmod 0644; folder existence + perms re-verified on every plugin load via `Snippet_Installer::verify()`. Disabling the feature in Settings stops the loader from including any snippet file. |
+| **Bridge Types JSON corruption from bad import** | Low | Medium | Import goes through a JSON-schema validator before being persisted; a backup of the previous `jedb_bridge_types` value is kept in `jedb_bridge_types__previous` for one-click rollback. |
+
+---
+
+## 10. What This Document Does NOT Cover (yet)
+
+- Detailed REST endpoint signatures (will be designed during Phase 4).
+- Internals of every built-in transformer (specs ship with each phase that introduces them).
+- The full grammar of the `show_when` mini-DSL for variations (single-page spec to be written at start of Phase 4b — kept intentionally tiny: comparison ops, boolean AND/OR, field-name interpolation `{field_name}`, no function calls).
+- Frontend Elementor template changes for bridged products (lives in `site-structure.md`, not here).
+- Per-field "last write wins" timestamp-based conflict resolution (deferred per D-2; Phase 7+ enhancement).
+- Multisite considerations (deferred — capability gate works as-is, but snippet sandboxing on multisite super-admin needs explicit thought).
+- WP-CLI commands (recommended Phase 7 add-on: `wp jedb sync --bridge=mosaic`, `wp jedb snippet test --slug=...`).
+
+---
+
+## 11. Next Action
+
+All decisions in §8 are locked. We proceed in this order:
+
+1. **I scaffold Phase 0** — bootstrap, constants, empty class graph, all four custom tables (`wp_jedb_relation_configs`, `wp_jedb_flatten_configs`, `wp_jedb_sync_log`, `wp_jedb_snippets`), `Snippet_Installer` writes `uploads/jedb-snippets/.htaccess` + `index.php`, blank admin tab. Result is committable in one sitting and visible in WP admin. Lives in a new repo `legworkmedia/je-data-bridge-cc`.
+2. **You install on a staging copy** of bbhq.legworklabs.com and confirm it activates clean.
+3. **We move through Phases 1 → 7** in order, stopping for review at each exit criterion.
+
+Estimated total: ~11 working days end-to-end.
