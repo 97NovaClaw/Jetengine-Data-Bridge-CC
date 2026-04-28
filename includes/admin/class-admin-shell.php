@@ -40,7 +40,9 @@ class JEDB_Admin_Shell {
 
 	private function load_tabs() {
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-targets.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-debug.php';
 		JEDB_Tab_Targets::instance();
+		JEDB_Tab_Debug::instance();
 	}
 
 	public function register_menu() {

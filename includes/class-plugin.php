@@ -102,7 +102,8 @@ class JEDB_Plugin {
 	}
 
 	/**
-	 * Detect schema-version mismatch and re-run dbDelta if needed.
+	 * Detect schema-version mismatch and re-run dbDelta if needed; apply any
+	 * version-specific data migrations.
 	 *
 	 * Cheap on every request: only reads one option and short-circuits when
 	 * versions match.
@@ -117,7 +118,27 @@ class JEDB_Plugin {
 
 		require_once JEDB_PLUGIN_DIR . 'includes/class-config-db.php';
 		JEDB_Config_DB::install();
+
+		$this->run_migrations( $installed );
+
 		update_option( JEDB_OPTION_DB_VERSION, JEDB_DB_VERSION, 'no' );
+	}
+
+	/**
+	 * Apply per-version data migrations.
+	 *
+	 * @param string|false $from_version The DB version we're upgrading FROM,
+	 *                                   or false on a fresh install.
+	 */
+	private function run_migrations( $from_version ) {
+
+		if ( false === $from_version || version_compare( (string) $from_version, '1.1.0', '<' ) ) {
+			$settings = get_option( JEDB_OPTION_SETTINGS, array() );
+			if ( empty( $settings['enable_debug_log'] ) ) {
+				$settings['enable_debug_log'] = true;
+				update_option( JEDB_OPTION_SETTINGS, $settings, 'no' );
+			}
+		}
 	}
 
 	private function load_admin() {

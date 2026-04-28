@@ -115,27 +115,80 @@ class JEDB_Target_Registry {
 
 		$this->bootstrapped = true;
 
-		$discovery = JEDB_Discovery::instance();
+		try {
 
-		foreach ( $discovery->get_all_ccts() as $cct ) {
-			$this->register( new JEDB_Target_CCT( $cct['slug'] ) );
-		}
+			$discovery = JEDB_Discovery::instance();
 
-		foreach ( $discovery->get_all_public_post_types() as $pt ) {
-			$this->register( new JEDB_Target_CPT( $pt['slug'] ) );
-		}
-
-		if ( $discovery->is_wc_active() ) {
-
-			if ( class_exists( 'JEDB_Target_Woo_Product' ) ) {
-				$this->register( new JEDB_Target_Woo_Product() );
+			$ccts = $discovery->get_all_ccts();
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( 'Registry bootstrap: discovered CCTs', 'debug', array( 'count' => count( $ccts ) ) );
+			}
+			foreach ( $ccts as $cct ) {
+				try {
+					$this->register( new JEDB_Target_CCT( $cct['slug'] ) );
+				} catch ( \Throwable $t ) {
+					if ( function_exists( 'jedb_log' ) ) {
+						jedb_log( 'Registry bootstrap: CCT adapter ctor threw', 'error', array( 'slug' => $cct['slug'], 'error' => $t->getMessage() ) );
+					}
+				}
 			}
 
-			if ( class_exists( 'JEDB_Target_Woo_Variation' ) ) {
-				$this->register( new JEDB_Target_Woo_Variation() );
+			$post_types = $discovery->get_all_public_post_types();
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( 'Registry bootstrap: discovered post types', 'debug', array(
+					'count' => count( $post_types ),
+					'slugs' => wp_list_pluck( $post_types, 'slug' ),
+				) );
+			}
+			foreach ( $post_types as $pt ) {
+				try {
+					$this->register( new JEDB_Target_CPT( $pt['slug'] ) );
+				} catch ( \Throwable $t ) {
+					if ( function_exists( 'jedb_log' ) ) {
+						jedb_log( 'Registry bootstrap: CPT adapter ctor threw', 'error', array( 'slug' => $pt['slug'], 'error' => $t->getMessage() ) );
+					}
+				}
+			}
+
+			if ( $discovery->is_wc_active() ) {
+
+				if ( class_exists( 'JEDB_Target_Woo_Product' ) ) {
+					try {
+						$this->register( new JEDB_Target_Woo_Product() );
+					} catch ( \Throwable $t ) {
+						if ( function_exists( 'jedb_log' ) ) {
+							jedb_log( 'Registry bootstrap: Woo Product adapter ctor threw', 'error', array( 'error' => $t->getMessage() ) );
+						}
+					}
+				}
+
+				if ( class_exists( 'JEDB_Target_Woo_Variation' ) ) {
+					try {
+						$this->register( new JEDB_Target_Woo_Variation() );
+					} catch ( \Throwable $t ) {
+						if ( function_exists( 'jedb_log' ) ) {
+							jedb_log( 'Registry bootstrap: Woo Variation adapter ctor threw', 'error', array( 'error' => $t->getMessage() ) );
+						}
+					}
+				}
+			}
+
+			do_action( 'jedb/data_target/register', $this );
+
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( 'Registry bootstrap: complete', 'debug', array(
+					'total_targets' => count( $this->targets ),
+					'slugs'         => array_keys( $this->targets ),
+				) );
+			}
+		} catch ( \Throwable $t ) {
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( 'Registry bootstrap: top-level exception', 'error', array(
+					'error' => $t->getMessage(),
+					'file'  => $t->getFile(),
+					'line'  => $t->getLine(),
+				) );
 			}
 		}
-
-		do_action( 'jedb/data_target/register', $this );
 	}
 }

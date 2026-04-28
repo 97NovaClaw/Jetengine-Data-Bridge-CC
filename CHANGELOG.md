@@ -2,6 +2,55 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] — 2026-02-28
+
+### Added — Debug tab + Phase 1 hardening
+
+- **Debug tab** under JE Data Bridge → Debug:
+  - Toggle button to enable/disable file logging from one click.
+  - Live tail of the last 500 lines (256 KB cap), styled console-dark.
+  - One-click "Download log" that streams the file as a timestamped
+    attachment for easy sharing.
+  - "Clear log" with a confirm prompt; also wipes the rotated `.1.log`.
+  - "Run discovery diagnostic" button that auto-enables logging,
+    runs a deep dump of every discovery channel (CCT module presence,
+    raw manager output, every `get_post_types` flavor, JEDB_Discovery
+    output, every catch path), writes a structured summary to the log,
+    and renders a result panel with green/red pills for each check plus
+    any caught exceptions.
+- Sample meta-key discovery added to the resilient code path; previously
+  the bootstrap could silently fail at this stage with no log entry.
+
+### Fixed — Phase 1 hardening
+
+- **Discovery: every method now wraps every external call in try/catch.**
+  Exceptions are logged with file/line and the method returns the partial
+  result rather than blanking the page. Per-record exceptions skip just
+  that record.
+- **Discovery: empty results are no longer persisted to the transient.**
+  Previously, an early-init request that found 0 CCTs/CPTs would lock
+  every later request to "0 forever" until manual cache flush. Now empty
+  results are memoized for the request only and re-tried next request.
+- **Registry bootstrap is now exception-safe end to end.** Every adapter
+  constructor is wrapped individually; a single broken adapter no longer
+  prevents the rest from registering.
+- **Excluded post-type list expanded** to cover all WP 6.x block-editor
+  internals (`wp_block`, `wp_template`, `wp_template_part`,
+  `wp_navigation`, `wp_global_styles`, `customize_changeset`, etc.) so
+  the Targets list isn't polluted with internal types.
+- **Defensive WC version + JE version detection** continues to apply — no
+  regression vs 0.2.0.
+
+### Changed
+
+- Default value of `enable_debug_log` is now `true` for fresh installs.
+- DB version bumped to **1.1.0** with a one-time migration that
+  auto-enables `enable_debug_log` for existing installs upgrading from
+  1.0.0. (Idempotent; only flips the toggle if it was off.)
+- `JEDB_Plugin::run_migrations()` introduced as the single home for
+  per-version data migrations going forward.
+- Plugin version bumped to **0.2.1**.
+
 ## [0.2.0] — 2026-02-28
 
 ### Added — Phase 1: Discovery + Targets

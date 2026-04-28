@@ -85,46 +85,95 @@ class JEDB_Discovery {
 	public function get_all_ccts() {
 
 		$cached = $this->memo_get( 'ccts' );
-		if ( null !== $cached ) {
+		if ( null !== $cached && ! empty( $cached ) ) {
 			return $cached;
-		}
-
-		if ( ! class_exists( '\\Jet_Engine\\Modules\\Custom_Content_Types\\Module' ) ) {
-			jedb_log( 'CCT module not found', 'warning' );
-			return $this->memo_set( 'ccts', array() );
-		}
-
-		$module = \Jet_Engine\Modules\Custom_Content_Types\Module::instance();
-
-		if ( ! $module || ! isset( $module->manager ) ) {
-			jedb_log( 'CCT manager not available', 'warning' );
-			return $this->memo_set( 'ccts', array() );
-		}
-
-		$raw = $module->manager->get_content_types();
-
-		if ( empty( $raw ) ) {
-			return $this->memo_set( 'ccts', array() );
 		}
 
 		$ccts = array();
 
-		foreach ( $raw as $slug => $cct_instance ) {
+		try {
 
-			if ( ! is_object( $cct_instance ) ) {
-				continue;
+			if ( ! class_exists( '\\Jet_Engine\\Modules\\Custom_Content_Types\\Module' ) ) {
+				jedb_log( 'get_all_ccts: CCT module class not autoloadable', 'warning' );
+				return $this->maybe_cache( 'ccts', $ccts );
 			}
 
-			$ccts[] = array(
-				'slug'          => $slug,
-				'name'          => $cct_instance->get_arg( 'name' ) ?: $slug,
-				'singular_name' => $cct_instance->get_arg( 'name' ) ?: $slug,
-				'fields'        => $this->get_cct_fields_from_instance( $cct_instance ),
-				'type_id'       => property_exists( $cct_instance, 'type_id' ) ? $cct_instance->type_id : null,
-			);
+			$module = \Jet_Engine\Modules\Custom_Content_Types\Module::instance();
+
+			if ( ! $module || ! isset( $module->manager ) ) {
+				jedb_log( 'get_all_ccts: CCT module/manager not available', 'warning', array(
+					'module_is_object'  => is_object( $module ),
+					'has_manager_prop'  => is_object( $module ) && isset( $module->manager ),
+				) );
+				return $this->maybe_cache( 'ccts', $ccts );
+			}
+
+			$raw = $module->manager->get_content_types();
+
+			if ( empty( $raw ) ) {
+				jedb_log( 'get_all_ccts: manager returned empty', 'debug' );
+				return $this->maybe_cache( 'ccts', $ccts );
+			}
+
+			if ( ! is_array( $raw ) ) {
+				jedb_log( 'get_all_ccts: manager returned non-array', 'warning', array( 'type' => gettype( $raw ) ) );
+				return $this->maybe_cache( 'ccts', $ccts );
+			}
+
+			foreach ( $raw as $slug => $cct_instance ) {
+
+				if ( ! is_object( $cct_instance ) ) {
+					jedb_log( 'get_all_ccts: skipped non-object instance', 'warning', array( 'slug' => $slug, 'type' => gettype( $cct_instance ) ) );
+					continue;
+				}
+
+				try {
+					$name = method_exists( $cct_instance, 'get_arg' ) ? $cct_instance->get_arg( 'name' ) : null;
+					$ccts[] = array(
+						'slug'          => $slug,
+						'name'          => $name ?: $slug,
+						'singular_name' => $name ?: $slug,
+						'fields'        => $this->get_cct_fields_from_instance( $cct_instance ),
+						'type_id'       => property_exists( $cct_instance, 'type_id' ) ? $cct_instance->type_id : null,
+					);
+				} catch ( \Throwable $t ) {
+					jedb_log( 'get_all_ccts: instance threw — skipping', 'error', array(
+						'slug'  => $slug,
+						'error' => $t->getMessage(),
+					) );
+				}
+			}
+		} catch ( \Throwable $t ) {
+			jedb_log( 'get_all_ccts: top-level exception', 'error', array(
+				'error' => $t->getMessage(),
+				'file'  => $t->getFile(),
+				'line'  => $t->getLine(),
+			) );
 		}
 
-		return $this->memo_set( 'ccts', $ccts );
+		return $this->maybe_cache( 'ccts', $ccts );
+	}
+
+	/**
+	 * Cache writes that don't poison subsequent requests. Empty arrays are
+	 * memoized for this request only — never persisted to the transient — so
+	 * an early-init request that finds no CCTs doesn't lock all subsequent
+	 * page loads into "0 CCTs forever until manual flush".
+	 */
+	private function maybe_cache( $key, $value ) {
+		if ( empty( $value ) && in_array( $key, array( 'ccts', 'relations' ), true ) ) {
+			$this->memo[ $key ] = $value;
+			return $value;
+		}
+		if ( is_array( $value ) && empty( $value ) ) {
+			foreach ( array( 'post_types::', 'woo_' ) as $prefix ) {
+				if ( 0 === strpos( $key, $prefix ) ) {
+					$this->memo[ $key ] = $value;
+					return $value;
+				}
+			}
+		}
+		return $this->memo_set( $key, $value );
 	}
 
 	/**
@@ -193,60 +242,73 @@ class JEDB_Discovery {
 	public function get_all_relations() {
 
 		$cached = $this->memo_get( 'relations' );
-		if ( null !== $cached ) {
+		if ( null !== $cached && ! empty( $cached ) ) {
 			return $cached;
-		}
-
-		if ( ! function_exists( 'jet_engine' ) || ! jet_engine()->relations ) {
-			static $logged = false;
-			if ( ! $logged ) {
-				jedb_log( 'JetEngine Relations not loaded yet (normal during early init)', 'debug' );
-				$logged = true;
-			}
-			return array();
-		}
-
-		$raw = jet_engine()->relations->get_active_relations();
-
-		if ( empty( $raw ) ) {
-			return $this->memo_set( 'relations', array() );
 		}
 
 		$relations = array();
 
-		foreach ( $raw as $relation_id => $relation_obj ) {
+		try {
 
-			if ( ! is_object( $relation_obj ) || ! method_exists( $relation_obj, 'get_args' ) ) {
-				continue;
+			if ( ! function_exists( 'jet_engine' ) || ! jet_engine() || ! isset( jet_engine()->relations ) || ! jet_engine()->relations ) {
+				static $logged = false;
+				if ( ! $logged ) {
+					jedb_log( 'get_all_relations: JE relations not loaded yet (normal during early init)', 'debug' );
+					$logged = true;
+				}
+				return $this->maybe_cache( 'relations', $relations );
 			}
 
-			$args = $relation_obj->get_args();
+			$raw = jet_engine()->relations->get_active_relations();
 
-			$name = '';
-			if ( ! empty( $args['name'] ) ) {
-				$name = $args['name'];
-			} elseif ( ! empty( $args['labels']['name'] ) ) {
-				$name = $args['labels']['name'];
-			} else {
-				$parent_name = $this->get_relation_object_name( isset( $args['parent_object'] ) ? $args['parent_object'] : '' );
-				$child_name  = $this->get_relation_object_name( isset( $args['child_object']  ) ? $args['child_object']  : '' );
-				$name        = $parent_name . ' → ' . $child_name;
+			if ( empty( $raw ) || ! is_array( $raw ) ) {
+				return $this->maybe_cache( 'relations', $relations );
 			}
 
-			$relations[] = array(
-				'id'            => $relation_id,
-				'name'          => $name,
-				'parent_object' => isset( $args['parent_object'] ) ? $args['parent_object'] : '',
-				'child_object'  => isset( $args['child_object']  ) ? $args['child_object']  : '',
-				'type'          => isset( $args['type'] )          ? $args['type']          : 'one_to_many',
-				'parent_rel'    => isset( $args['parent_rel'] )    ? $args['parent_rel']    : null,
-				'is_hierarchy'  => ! empty( $args['parent_rel'] ),
-				'table_exists'  => $this->relation_table_exists( $relation_id ),
-				'table_name'    => 'wp_jet_rel_' . $relation_id,
-			);
+			foreach ( $raw as $relation_id => $relation_obj ) {
+
+				if ( ! is_object( $relation_obj ) || ! method_exists( $relation_obj, 'get_args' ) ) {
+					continue;
+				}
+
+				try {
+					$args = $relation_obj->get_args();
+
+					$name = '';
+					if ( ! empty( $args['name'] ) ) {
+						$name = $args['name'];
+					} elseif ( ! empty( $args['labels']['name'] ) ) {
+						$name = $args['labels']['name'];
+					} else {
+						$parent_name = $this->get_relation_object_name( isset( $args['parent_object'] ) ? $args['parent_object'] : '' );
+						$child_name  = $this->get_relation_object_name( isset( $args['child_object']  ) ? $args['child_object']  : '' );
+						$name        = $parent_name . ' → ' . $child_name;
+					}
+
+					$relations[] = array(
+						'id'            => $relation_id,
+						'name'          => $name,
+						'parent_object' => isset( $args['parent_object'] ) ? $args['parent_object'] : '',
+						'child_object'  => isset( $args['child_object']  ) ? $args['child_object']  : '',
+						'type'          => isset( $args['type'] )          ? $args['type']          : 'one_to_many',
+						'parent_rel'    => isset( $args['parent_rel'] )    ? $args['parent_rel']    : null,
+						'is_hierarchy'  => ! empty( $args['parent_rel'] ),
+						'table_exists'  => $this->relation_table_exists( $relation_id ),
+						'table_name'    => 'wp_jet_rel_' . $relation_id,
+					);
+				} catch ( \Throwable $t ) {
+					jedb_log( 'get_all_relations: relation threw — skipping', 'error', array( 'relation_id' => $relation_id, 'error' => $t->getMessage() ) );
+				}
+			}
+		} catch ( \Throwable $t ) {
+			jedb_log( 'get_all_relations: top-level exception', 'error', array(
+				'error' => $t->getMessage(),
+				'file'  => $t->getFile(),
+				'line'  => $t->getLine(),
+			) );
 		}
 
-		return $this->memo_set( 'relations', $relations );
+		return $this->maybe_cache( 'relations', $relations );
 	}
 
 	public function get_relation( $relation_id ) {
@@ -517,58 +579,83 @@ class JEDB_Discovery {
 	 * @param array $exclude  Slugs to skip.
 	 * @return array<int,array{slug:string,label:string,count:int,supports_woo_adapter:bool}>
 	 */
-	public function get_all_public_post_types( $exclude = array( 'attachment', 'revision', 'nav_menu_item' ) ) {
+	public function get_all_public_post_types( $exclude = array( 'attachment', 'revision', 'nav_menu_item', 'custom_css', 'customize_changeset', 'oembed_cache', 'user_request', 'wp_block', 'wp_template', 'wp_template_part', 'wp_navigation', 'wp_global_styles' ) ) {
 
 		$cached_key = 'post_types::' . md5( wp_json_encode( $exclude ) );
 		$cached     = $this->memo_get( $cached_key );
-		if ( null !== $cached ) {
+		if ( null !== $cached && ! empty( $cached ) ) {
 			return $cached;
 		}
 
-		$post_types = get_post_types(
-			array(
-				'public'   => true,
-				'_builtin' => false,
-			),
-			'objects'
-		);
+		$out = array();
 
-		$builtin = get_post_types(
-			array( '_builtin' => true ),
-			'objects'
-		);
+		try {
 
-		$all_pts = array_merge( $post_types, $builtin );
+			$custom = get_post_types(
+				array(
+					'public'   => true,
+					'_builtin' => false,
+				),
+				'objects'
+			);
 
-		$wc_active = class_exists( 'WooCommerce' );
-		$out       = array();
+			$builtin = get_post_types(
+				array( '_builtin' => true ),
+				'objects'
+			);
 
-		foreach ( $all_pts as $slug => $obj ) {
+			$all_pts = array_merge(
+				is_array( $custom )  ? $custom  : array(),
+				is_array( $builtin ) ? $builtin : array()
+			);
 
-			if ( in_array( $slug, $exclude, true ) ) {
-				continue;
+			$wc_active = class_exists( 'WooCommerce' );
+
+			foreach ( $all_pts as $slug => $obj ) {
+
+				if ( in_array( $slug, $exclude, true ) ) {
+					continue;
+				}
+
+				try {
+					$counts = wp_count_posts( $slug );
+					$count  = isset( $counts->publish ) ? (int) $counts->publish : 0;
+				} catch ( \Throwable $t ) {
+					$count = 0;
+					jedb_log( 'get_all_public_post_types: wp_count_posts threw', 'warning', array(
+						'slug'  => $slug,
+						'error' => $t->getMessage(),
+					) );
+				}
+
+				$label          = isset( $obj->labels->name )          ? $obj->labels->name          : $slug;
+				$singular_label = isset( $obj->labels->singular_name ) ? $obj->labels->singular_name : $slug;
+
+				$out[] = array(
+					'slug'                 => $slug,
+					'label'                => $label,
+					'singular_label'       => $singular_label,
+					'count'                => $count,
+					'supports_woo_adapter' => $wc_active && in_array( $slug, array( 'product', 'product_variation' ), true ),
+					'is_woo'               => in_array( $slug, array( 'product', 'product_variation' ), true ),
+				);
 			}
 
-			$count = (int) wp_count_posts( $slug )->publish;
-
-			$out[] = array(
-				'slug'                 => $slug,
-				'label'                => $obj->labels->name,
-				'singular_label'       => $obj->labels->singular_name,
-				'count'                => $count,
-				'supports_woo_adapter' => $wc_active && in_array( $slug, array( 'product', 'product_variation' ), true ),
-				'is_woo'               => in_array( $slug, array( 'product', 'product_variation' ), true ),
+			usort(
+				$out,
+				static function ( $a, $b ) {
+					return strcmp( $a['label'], $b['label'] );
+				}
 			);
+		} catch ( \Throwable $t ) {
+			jedb_log( 'get_all_public_post_types: top-level exception', 'error', array(
+				'error' => $t->getMessage(),
+				'file'  => $t->getFile(),
+				'line'  => $t->getLine(),
+			) );
 		}
 
-		usort(
-			$out,
-			static function ( $a, $b ) {
-				return strcmp( $a['label'], $b['label'] );
-			}
-		);
-
-		return $this->memo_set( $cached_key, $out );
+		return $this->maybe_cache( $cached_key, $out );
 	}
 
 	/* -----------------------------------------------------------------------
