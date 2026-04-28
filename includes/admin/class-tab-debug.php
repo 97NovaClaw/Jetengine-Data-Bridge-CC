@@ -37,6 +37,7 @@ class JEDB_Tab_Debug {
 		add_action( 'admin_post_jedb_clear_debug_log',            array( $this, 'handle_clear_debug_log' ) );
 		add_action( 'admin_post_jedb_download_debug_log',         array( $this, 'handle_download_debug_log' ) );
 		add_action( 'admin_post_jedb_run_discovery_diagnostic',   array( $this, 'handle_run_diagnostic' ) );
+		add_action( 'admin_post_jedb_run_cct_diagnostic',         array( $this, 'handle_run_cct_diagnostic' ) );
 	}
 
 	public function register_tab( $tabs ) {
@@ -112,6 +113,77 @@ class JEDB_Tab_Debug {
 		set_transient( 'jedb_diagnostic_result', $result, 5 * MINUTE_IN_SECONDS );
 
 		$this->redirect_back( 'diagnostic_done' );
+	}
+
+	public function handle_run_cct_diagnostic() {
+		$this->guard( 'jedb_run_cct_diagnostic' );
+
+		$settings = get_option( JEDB_OPTION_SETTINGS, array() );
+		if ( empty( $settings['enable_debug_log'] ) ) {
+			$settings['enable_debug_log'] = true;
+			update_option( JEDB_OPTION_SETTINGS, $settings, 'no' );
+		}
+
+		$result = $this->run_cct_diagnostic();
+
+		set_transient( 'jedb_cct_diagnostic_result', $result, 5 * MINUTE_IN_SECONDS );
+
+		$this->redirect_back( 'cct_diagnostic_done' );
+	}
+
+	/**
+	 * Per-CCT deep dump: every field as JE sees it, every DB column, item
+	 * counts via SQL and via the JE db handle, and a list of fields that
+	 * the schema filter dropped (tabs, section separators, etc.).
+	 *
+	 * Used to diagnose:
+	 *   1. CCT items count = 0 when there should be items.
+	 *   2. CCT field count higher than the JE UI suggests (stale columns,
+	 *      tab/section field types, repeater containers, etc.).
+	 *
+	 * @return array
+	 */
+	public function run_cct_diagnostic() {
+
+		jedb_log( '=== JEDB CCT Diagnostic START ===', 'info' );
+
+		$out = array(
+			'started_at' => gmdate( 'Y-m-d H:i:s' ),
+			'ccts'       => array(),
+			'errors'     => array(),
+		);
+
+		try {
+
+			$registry = JEDB_Target_Registry::instance();
+			$cct_targets = $registry->all_of_kind( 'cct' );
+
+			if ( empty( $cct_targets ) ) {
+				$out['errors'][] = 'No CCT targets registered. Run discovery diagnostic first.';
+			}
+
+			foreach ( $cct_targets as $slug => $target ) {
+
+				if ( ! method_exists( $target, 'diagnose' ) ) {
+					$out['errors'][] = "Target {$slug} has no diagnose() method";
+					continue;
+				}
+
+				try {
+					$dump = $target->diagnose();
+					$out['ccts'][ $slug ] = $dump;
+					jedb_log( 'CCT diagnostic: ' . $slug, 'info', $dump );
+				} catch ( \Throwable $t ) {
+					$out['errors'][] = "diagnose() threw for {$slug}: " . $t->getMessage();
+				}
+			}
+		} catch ( \Throwable $t ) {
+			$out['errors'][] = 'Top-level exception: ' . $t->getMessage();
+		}
+
+		jedb_log( '=== JEDB CCT Diagnostic END ===', 'info' );
+
+		return $out;
 	}
 
 	/**

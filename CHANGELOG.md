@@ -2,6 +2,58 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] — 2026-02-28
+
+### Fixed
+
+- **`JEDB_Target_CCT` now actually reads CCT data.** The original
+  implementation guarded every `$inst->db` access with
+  `method_exists( $inst, 'db' )`, but `db` is a public **property** on
+  the JE CCT factory, not a method. Every check returned false, so
+  `count()`, `get()`, `update()`, `create()`, and `list_records()`
+  silently fell through to a slower or null-returning fallback. Result
+  on Phase 1's Targets tab: every CCT showed "0 items" even when the
+  underlying table had rows.
+- All five methods now use the correct `isset( $inst->db ) && is_object( $inst->db )`
+  check, then call the documented JE db API: `db->get_item( $id )`,
+  `db->query( $args, $limit, $offset, $order )`, `db->update( $data, $where )`,
+  `db->insert( $data )`. Each path is wrapped in try/catch with a
+  direct-SQL fallback on `wp_jet_cct_{slug}` so a JE API change can no
+  longer take counting/listing offline.
+- **CCT field schema now filters out non-data field types** (`tab`,
+  `section`, `section_separator`, `heading`, `group_separator`, etc.).
+  These appear in `get_arg('fields')` as visual organizers but never
+  have a DB column or value, and were previously inflating the field
+  count vs the JE UI count.
+- Schema also de-duplicates by field name in case the same name appears
+  twice in the JE config.
+
+### Added
+
+- **Per-CCT diagnostic** under Debug → "Run CCT diagnostic". For every
+  registered CCT, dumps:
+  - Table name + table existence pill.
+  - Item count via direct SQL AND via `$inst->db->query()`.
+  - Live DB columns from `SHOW COLUMNS` (so deleted-but-not-rebuilt
+    columns are visible).
+  - Raw `get_arg('fields')` output with each entry's name + type.
+  - `get_fields_list()` output for comparison.
+  - The schema after the plugin's filter.
+  - The list of non-data fields the filter dropped (with type names),
+    so you can see at a glance whether the JE-UI/Targets-tab field
+    count mismatch is explained by tabs/sections, repeater containers,
+    or actually-stale config entries.
+- Same data is written to the debug log on every run (one log line per
+  CCT) so it can be downloaded and shared.
+- New `JEDB_Target_CCT::diagnose()` method exposes the per-CCT raw
+  state — useful for any future REST/CLI tooling too.
+- New `JEDB_Target_CCT::get_table_name()` helper.
+
+### Changed
+
+- Plugin version bumped to **0.2.3** (no schema changes; DB version
+  stays at 1.1.0).
+
 ## [0.2.2] — 2026-02-28
 
 ### Fixed

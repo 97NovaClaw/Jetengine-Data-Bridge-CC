@@ -203,3 +203,20 @@
 	margin-top: 8px;
 	border: 1px solid #1d2327;
 }
+
+.jedb-cct-diag {
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 6px;
+	padding: 14px 16px;
+	margin-bottom: 14px;
+}
+
+.jedb-cct-diag h4 .jedb-pill {
+	margin-left: 6px;
+	font-size: 10px;
+}
+
+.jedb-cct-diag table {
+	margin: 0;
+}
