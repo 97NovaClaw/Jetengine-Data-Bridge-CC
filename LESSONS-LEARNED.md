@@ -691,23 +691,189 @@ VALUES
 ```
 
 ### Caveats / outstanding verification before Phase 2 ships
-- **Preferred write API.** Direct SQL works but bypasses JE caches and
-  hooks. Need to confirm the exact JE method to call programmatically —
-  candidates include `jet_engine()->relations->process_relation_data()`
-  (used by RI's transaction processor) and the relation object's own
-  `update()` / `insert()` methods. **TODO before Phase 2 starts:** read
-  RI's `class-transaction-processor.php` end-to-end and document the
-  exact method signature here.
 - **Cascade behavior on parent/child deletion.** Not yet verified. JE
   may or may not auto-clean orphaned relation rows.
 - **"Make this relation a CCT" toggle.** Possibly changes the table
   structure or moves rows into a CCT table. Out of v1 scope but worth
   knowing. Captured for future investigation.
+- **JE-managed caches.** RI uses direct SQL for inserts (verified
+  below). Whether JE listing-grid result caches or other transient
+  caches need post-insert invalidation is not verified — see the
+  "Open items still to verify" section below.
+
+### Update — 2026-04-29: full read of RI's `class-transaction-processor.php`
+
+End-to-end re-read of
+`Refrence but block from git/Jet Engine Relation Injector/includes/class-transaction-processor.php`
+(version present in this workspace; ~358 lines). Verified facts below
+are direct quotes / paraphrases of code RI ships in production. Anything
+not in this update remains uncertain — never assume.
+
+#### Write API actually used by RI
+**Direct `$wpdb->insert()` on `{prefix}jet_rel_{id}`.** RI does NOT use
+any `jet_engine()->relations->...` write method. The relevant code is
+in `Jet_Injector_Transaction_Processor::create_relation()` (lines
+240-316):
+
+```php
+$result = $wpdb->insert(
+    $table,
+    [
+        'rel_id'           => $relation_id,  // Required by JetEngine!
+        'parent_rel'       => $parent_rel,   // For grandparent relations
+        'parent_object_id' => $parent_id,
+        'child_object_id'  => $child_id,
+    ],
+    ['%s', '%d', '%d', '%d']  // rel_id is text type
+);
+```
+
+**Critical contract details:**
+- `rel_id` MUST be included in every insert. The inline comment says
+  *"Required by JetEngine!"* — without it, JE won't recognize the row.
+- `rel_id` format string is `'%s'` (string) even though it looks like
+  an int (varchar(40) in the schema confirms — see DESCRIBE above).
+- `parent_rel` is `null` for non-hierarchical relations, the parent
+  relation's ID for hierarchical chains.
+- `created` is omitted — DB default `CURRENT_TIMESTAMP` handles it.
+
+#### Read API used by RI (for context, since we'll need this in Phase 2 too)
+- `jet_engine()->relations->get_active_relations()` → returns array
+  `[ relation_id => Relation_Object ]`. Verified line 151.
+- `$relation->get_id()` → returns the relation ID. Line 243.
+- `$relation->get_args()` → returns `['parent_object', 'child_object',
+  'type', 'parent_rel', ...]`. Line 159, 284.
+
+#### Pre-insert duplicate check (idempotency)
+RI checks for an existing connection before inserting (lines 267-281):
+
+```php
+$exists = $wpdb->get_var(
+    $wpdb->prepare(
+        "SELECT rel_id FROM {$table} WHERE parent_object_id = %d AND child_object_id = %d",
+        $parent_id,
+        $child_id
+    )
+);
+
+if ( $exists ) {
+    // Already connected — return true without re-inserting.
+    return true;
+}
+```
+
+This makes the operation idempotent. Important for our flatten engine
+since the same bridge can fire multiple times (CCT save → flatten →
+target write → if target is a CCT and bridges loop back, sync_guard
+intercepts but the relation insert path itself stays safe).
+
+#### Clearing for 1:1 / 1:M relation types
+RI clears existing relations on the appropriate side BEFORE inserting
+the new one (lines 192-194 + `clear_existing_relations()` at lines
+325-355):
+
+```php
+if ( $args['type'] === 'one_to_one' || $args['type'] === 'one_to_many' ) {
+    $this->clear_existing_relations( $item_id, $relation_id, $is_parent );
+}
+```
+
+`clear_existing_relations()` does `$wpdb->delete( $table, [ $column => $item_id ], ['%d'] )`
+where `$column` is `parent_object_id` or `child_object_id` depending
+on whether the current item is the parent or child side. **Note: RI
+does NOT clear for `many_to_many` — it just appends.** Bridge code in
+Phase 2 should follow the same convention.
+
+#### Side determination ("am I parent or child?")
+RI parses the relation's `parent_object` / `child_object` strings via
+the discovery's `parse_relation_object()` (the `cct::slug` /
+`posts::slug` / `terms::slug` parser we already ported), then compares
+against the CCT slug from the hook closure (line 182):
+
+```php
+$is_parent = ( $parent_parsed['type'] === 'cct'
+            && $parent_parsed['slug'] === $cct_slug );
+```
+
+For our Phase 4 Bridge meta box on the WC product side, the same
+pattern applies: the bridge type config tells us the source kind, the
+relation's parent/child strings tell us which side the source is on,
+and the insert direction follows.
+
+#### CCT save hook signatures (different for created vs updated)
+This is the part that bit RI badly enough to warrant inline comments
+(lines 42-62). The hook names and signatures:
+
+| Hook | Signature | Notes |
+|---|---|---|
+| `jet-engine/custom-content-types/created-item/{slug}` | `($item, $item_id, $handler)` | New CCT row created. `$item_id` is the new `_ID`. |
+| `jet-engine/custom-content-types/updated-item/{slug}` | `($item, $prev_item, $handler)` | Existing row updated. **No `$item_id` parameter** — extract from `$item['_ID']`. |
+
+Both fire at priority 10 with 3 args. RI registers a closure per CCT
+(line 33's `Jet_Injector_Config_DB::get_enabled('cct')` enumerates
+which CCTs to hook). For the bridge engine, we'll register hooks for
+EVERY CCT that has at least one bridge config pointing at it as source.
+
+#### Trojan Horse data wire format
+RI's hidden inputs carry JSON-encoded relation data (line 106):
+
+```php
+$relations_data = json_decode( stripslashes( $_POST['jet_injector_relations'] ), true );
+```
+
+Shape: `{ relation_id: [related_item_ids] }`. Stripslashes handles
+WP's magic-quotes-on-POST behavior. Nonce input field name is
+`jet_injector_nonce`, action `jet_injector_nonce`.
+
+For our Phase 4 product-side trojan horse, we'll mirror this:
+`_jedb_bridge_trojan` (JSON), `_jedb_bridge_trojan_nonce` (action
+`jedb_bridge_save`).
+
+#### Open items still to verify (Phase 2 punch list)
+1. **JE cache invalidation post-insert.** RI's direct SQL works but
+   does it leave stale data in JE listing caches, smart-filter
+   query caches, or transient cache? Plan: write a test bridge,
+   create a relation row via direct SQL, then load a listing on the
+   front-end before clicking any "refresh cache" button. If the
+   listing is stale, JE has caches we need to invalidate. Possible
+   invalidation methods: `wp_cache_flush()`,
+   `do_action( 'jet-engine/relations/items-changed', $relation_id )`
+   if such a hook exists, or a `delete_transient` sweep.
+2. **`many_to_many` semantics.** RI doesn't clear before append —
+   verify that's actually correct (no UNIQUE constraint conflicts on
+   re-inserts of the same pair) AND that we want our bridge engine to
+   follow the same "append, don't replace" semantics for M:M.
+3. **Relation rows' `created` column on update.** RI inserts but
+   never updates rows. We may want to bump `created` (or add an
+   `updated_at` if JE later adds one) when bridge syncs touch a
+   relation. Probably not — relation rows are connection records,
+   not data records, and don't logically have an "updated" event.
+
+### Affected code (now)
+- `LESSONS-LEARNED.md` — this update.
+
+### Affected code (Phase 2 will write)
+- `includes/relations/class-runtime-loader.php` — port RI's hidden-
+  input injection.
+- `includes/relations/class-transaction-processor.php` — port the
+  trojan-horse handler with the verified hook signatures and the
+  direct-SQL insert pattern.
+- `includes/relations/class-relation-attacher.php` — extracted helper
+  for "create relation row between A and B" usable from both Phase 2
+  (CCT save) and Phase 4 (product save).
 
 ### Prevention
-Verify table structure with `DESCRIBE` before writing to any third-party
-table. Capture the structure here in lessons-learned with the exact
-DESCRIBE output so the contract is auditable across versions.
+- Direct SQL on third-party tables is acceptable when the third-party
+  API doesn't expose the operation cleanly — but it MUST be paired
+  with: (a) the duplicate-check we observed in RI, (b) the type-aware
+  clear-before-insert for 1:1/1:M, (c) explicit cache-invalidation
+  research before shipping.
+- When using closures to register WP hooks per-iteration, capture
+  loop-scoped variables explicitly via `use ( $var )` to avoid
+  closure-binding bugs. RI's lines 40, 45, 55 show the pattern.
+- WP's two CCT save hooks have different signatures even though
+  they're conceptually paired. ALWAYS register both, ALWAYS test
+  both code paths.
 
 ---
 
