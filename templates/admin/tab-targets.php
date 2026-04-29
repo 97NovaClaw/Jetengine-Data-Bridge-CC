@@ -93,18 +93,32 @@ $notice = isset( $_GET['jedb_notice'] ) ? sanitize_key( wp_unslash( $_GET['jedb_
 				<th><?php esc_html_e( 'Slug', 'je-data-bridge-cc' ); ?></th>
 				<th><?php esc_html_e( 'Label', 'je-data-bridge-cc' ); ?></th>
 				<th><?php esc_html_e( 'Items', 'je-data-bridge-cc' ); ?></th>
-				<th><?php esc_html_e( 'Fields', 'je-data-bridge-cc' ); ?></th>
+				<th><?php esc_html_e( 'Fields (user / +system)', 'je-data-bridge-cc' ); ?></th>
 				<th><?php esc_html_e( 'Adapter slug', 'je-data-bridge-cc' ); ?></th>
 			</tr>
 		</thead>
 		<tbody>
 			<?php foreach ( $ccts as $slug => $target ) : ?>
-				<?php $schema = $target->get_field_schema(); ?>
+				<?php
+				$schema      = $target->get_field_schema();
+				$user_count  = 0;
+				$system_count = 0;
+				foreach ( $schema as $field ) {
+					if ( isset( $field['group'] ) && 'system' === $field['group'] ) {
+						$system_count++;
+					} else {
+						$user_count++;
+					}
+				}
+				?>
 				<tr>
 					<td><code><?php echo esc_html( str_replace( 'cct::', '', $slug ) ); ?></code></td>
 					<td><?php echo esc_html( $target->get_label() ); ?></td>
 					<td><?php echo esc_html( number_format_i18n( $target->count() ) ); ?></td>
-					<td><?php echo esc_html( count( $schema ) ); ?></td>
+					<td>
+						<strong><?php echo esc_html( $user_count ); ?></strong>
+						<span style="color:#646970;"> / +<?php echo esc_html( $system_count ); ?> system</span>
+					</td>
 					<td><code><?php echo esc_html( $slug ); ?></code></td>
 				</tr>
 			<?php endforeach; ?>

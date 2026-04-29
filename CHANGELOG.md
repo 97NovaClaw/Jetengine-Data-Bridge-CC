@@ -2,6 +2,65 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] — 2026-02-28
+
+### Changed — JE system columns surfaced as readonly system fields
+
+Earlier versions hard-filtered every JetEngine system column
+(`cct_status`, `cct_author_id`, `cct_created`, `cct_modified`,
+`cct_single_post_id`) out of the schema. Several of those columns are
+useful for upcoming phases — particularly `cct_modified` for the
+Phase 7+ last-write-wins conflict resolution (BUILD-PLAN D-2) and
+`cct_single_post_id` for the Phase 4 Bridge meta box's "use the JE
+native single-page link" path (BUILD-PLAN §4.6) — so they're now kept
+in the schema as **readonly system fields** instead of being hidden.
+
+- New constant `JEDB_Discovery::CCT_SYSTEM_COLUMN_NAMES` (alias for
+  the deprecated `CCT_INTERNAL_COLUMN_NAMES`). Discovery still strips
+  these from the user-fields list so `cct_meta['fields']` contains only
+  what the editor authored — the system fields are injected separately
+  by the target adapter.
+- `JEDB_Target_CCT::get_field_schema()` now lays out the schema as:
+  1. `_ID` (system, readonly, group=system)
+  2. JE system columns that exist on this CCT, each with `readonly=true`,
+     `group=system`, friendly labels (`Status (system)`, `Last Modified
+     (system)`, etc.), and a `jedb_role` marker (`jet_status`,
+     `jet_modified_at`, `jet_created_at`, `jet_author`,
+     `native_single_page_link`).
+  3. User fields from `cct_meta['fields']`.
+  - `cct_single_post_id` is added **only when the column physically
+    exists** in the CCT table — i.e. when "Has Single Page" is enabled
+    on that CCT. The `jedb_role => 'native_single_page_link'` marker
+    will let the Phase 4 Bridge meta box detect this and offer the JE
+    native link as the bridge target on those CCTs (e.g.
+    `featured_parts_data` and `story_bricks_data` in the Brick Builder
+    HQ workspace) without needing duplicate `_jedb_bridge_*` post meta.
+- New `JEDB_Target_CCT::get_db_columns()` helper — cached `SHOW COLUMNS`
+  on `wp_jet_cct_{slug}`. Drives the conditional inclusion of
+  `cct_single_post_id` and is generally reusable.
+
+### Fixed
+
+- **`JEDB_Target_CCT::update()` and `create()` now block writes to
+  readonly fields.** Any attempt to write `_ID` or any system column is
+  silently dropped with a `warning`-level log entry. Defense in depth so
+  a future bridge config can't accidentally clobber the JE-managed
+  `cct_modified` timestamp (which would defeat the entire last-write-wins
+  use case the column unlocks).
+
+### Improved
+
+- **Targets-tab field-count column** now reads
+  `<strong>14</strong> / +5 system` instead of just `19`. Visually
+  separates user-authored fields from JE-managed system fields so the
+  count makes sense at a glance and matches the JE UI's user-field
+  count.
+
+### Changed
+
+- Plugin version bumped to **0.2.5** (no schema changes; DB version
+  stays at 1.1.0).
+
 ## [0.2.4] — 2026-02-28
 
 ### Fixed

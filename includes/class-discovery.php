@@ -194,12 +194,29 @@ class JEDB_Discovery {
 	}
 
 	/**
-	 * JetEngine system column names that exist on every CCT table but are not
-	 * user-defined fields. Filtered out of every schema regardless of source.
+	 * JetEngine system column names. These exist on every CCT table (or on
+	 * CCTs with "Has Single Page" enabled, in the case of cct_single_post_id)
+	 * and are NOT user-defined fields.
+	 *
+	 * Discovery strips these from the user-fields list so the cct_meta['fields']
+	 * array contains only what the editor authored. JEDB_Target_CCT then
+	 * re-injects them in get_field_schema() as readonly system fields with
+	 * group="system", so they remain visible to the bridge UI for read /
+	 * conditional / display purposes (e.g. cct_modified for last-write-wins
+	 * conflict resolution, cct_single_post_id for the JE native single-page
+	 * bridge link) while being protected from accidental overwrites.
 	 */
-	const CCT_INTERNAL_COLUMN_NAMES = array(
+	const CCT_SYSTEM_COLUMN_NAMES = array(
 		'cct_status', 'cct_author_id', 'cct_created', 'cct_modified', 'cct_single_post_id',
 	);
+
+	/**
+	 * Backward-compat alias. Will be removed in a future version once no
+	 * external code references the old name.
+	 *
+	 * @deprecated 0.2.5 Use CCT_SYSTEM_COLUMN_NAMES instead.
+	 */
+	const CCT_INTERNAL_COLUMN_NAMES = self::CCT_SYSTEM_COLUMN_NAMES;
 
 	/**
 	 * Resolve CCT field schema with type information.
@@ -262,7 +279,7 @@ class JEDB_Discovery {
 						if ( '' === $name || '_ID' === $name ) {
 							continue;
 						}
-						if ( in_array( $name, self::CCT_INTERNAL_COLUMN_NAMES, true ) ) {
+						if ( in_array( $name, self::CCT_SYSTEM_COLUMN_NAMES, true ) ) {
 							continue;
 						}
 						$out[] = array(
@@ -306,7 +323,7 @@ class JEDB_Discovery {
 			if ( '' === $name || '_ID' === $name ) {
 				continue;
 			}
-			if ( in_array( $name, self::CCT_INTERNAL_COLUMN_NAMES, true ) ) {
+			if ( in_array( $name, self::CCT_SYSTEM_COLUMN_NAMES, true ) ) {
 				continue;
 			}
 

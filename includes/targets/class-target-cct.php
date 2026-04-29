@@ -32,6 +32,9 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 	/** @var array|null  Cached CCT meta from Discovery. */
 	protected $cct_meta = null;
 
+	/** @var array<int,string>|null  Cached column list from SHOW COLUMNS. */
+	protected $db_columns_cache = null;
+
 	public function __construct( $cct_slug ) {
 		$this->cct_slug = $cct_slug;
 		$this->slug     = 'cct::' . $cct_slug;
@@ -161,6 +164,25 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 			return false;
 		}
 
+		$readonly_names = $this->get_readonly_field_names();
+		$blocked        = array_intersect_key( $fields, array_flip( $readonly_names ) );
+		if ( ! empty( $blocked ) ) {
+			$this->log(
+				'CCT update blocked write to readonly system fields — silently dropped',
+				'warning',
+				array(
+					'id'             => $id,
+					'blocked_fields' => array_keys( $blocked ),
+				)
+			);
+			$fields = array_diff_key( $fields, array_flip( $readonly_names ) );
+		}
+
+		if ( empty( $fields ) ) {
+			$this->log( 'CCT update: nothing to write after stripping readonly fields', 'debug', array( 'id' => $id ) );
+			return false;
+		}
+
 		try {
 			$result = $db->update( $fields, array( '_ID' => $id ) );
 			return false !== $result;
@@ -170,12 +192,37 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 		}
 	}
 
+	/**
+	 * @return array<int,string>  Names of every field in the schema marked
+	 *                            readonly (system fields, _ID, etc.).
+	 */
+	protected function get_readonly_field_names() {
+		$names = array();
+		foreach ( $this->get_field_schema() as $field ) {
+			if ( ! empty( $field['readonly'] ) ) {
+				$names[] = $field['name'];
+			}
+		}
+		return $names;
+	}
+
 	public function create( array $fields ) {
 
 		$db = $this->get_db();
 		if ( ! $db || ! method_exists( $db, 'insert' ) ) {
 			$this->log( 'CCT insert unavailable — db handle missing', 'error' );
 			return null;
+		}
+
+		$readonly_names = $this->get_readonly_field_names();
+		$blocked        = array_intersect_key( $fields, array_flip( $readonly_names ) );
+		if ( ! empty( $blocked ) ) {
+			$this->log(
+				'CCT insert blocked write to readonly system fields — silently dropped',
+				'warning',
+				array( 'blocked_fields' => array_keys( $blocked ) )
+			);
+			$fields = array_diff_key( $fields, array_flip( $readonly_names ) );
 		}
 
 		try {
@@ -191,26 +238,104 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 	 * Schema / count / list
 	 * -------------------------------------------------------------------- */
 
+	/**
+	 * Schema layout:
+	 *   1. _ID (system, readonly)
+	 *   2. JE-managed system columns that exist on this CCT, each readonly:
+	 *        - cct_status, cct_created, cct_modified, cct_author_id always
+	 *        - cct_single_post_id only when "Has Single Page" is enabled
+	 *          (i.e. the column physically exists in the CCT table)
+	 *   3. User fields from cct_meta (already stripped of system columns by
+	 *      Discovery::normalize_field_array).
+	 *
+	 * Marked-readonly fields cannot be written by update() — they're available
+	 * for read / PULL / display only. cct_single_post_id additionally carries
+	 * a `jedb_role => 'native_single_page_link'` marker so the Phase 4 Bridge
+	 * meta box can detect "this CCT has Has Single Page enabled" and offer
+	 * the native single-page link as the bridge target instead of (or in
+	 * addition to) the plugin's own _jedb_bridge_* meta on the product.
+	 */
 	public function get_field_schema() {
 
-		$out = array(
-			array(
-				'name'     => '_ID',
-				'label'    => __( 'Item ID', 'je-data-bridge-cc' ),
-				'type'     => 'number',
-				'group'    => 'system',
-				'is_meta'  => false,
-				'meta_key' => null,
-				'readonly' => true,
+		$out = array();
+
+		$out[] = array(
+			'name'     => '_ID',
+			'label'    => __( 'Item ID', 'je-data-bridge-cc' ),
+			'type'     => 'number',
+			'group'    => 'system',
+			'is_meta'  => false,
+			'meta_key' => null,
+			'readonly' => true,
+		);
+
+		$db_columns         = $this->get_db_columns();
+		$has_single_page    = in_array( 'cct_single_post_id', $db_columns, true );
+
+		$system_field_specs = array(
+			'cct_status' => array(
+				'label' => __( 'Status (system)', 'je-data-bridge-cc' ),
+				'type'  => 'text',
+				'role'  => 'jet_status',
+			),
+			'cct_created' => array(
+				'label' => __( 'Created (system)', 'je-data-bridge-cc' ),
+				'type'  => 'datetime',
+				'role'  => 'jet_created_at',
+			),
+			'cct_modified' => array(
+				'label' => __( 'Last Modified (system)', 'je-data-bridge-cc' ),
+				'type'  => 'datetime',
+				'role'  => 'jet_modified_at',
+			),
+			'cct_author_id' => array(
+				'label' => __( 'Author ID (system)', 'je-data-bridge-cc' ),
+				'type'  => 'number',
+				'role'  => 'jet_author',
 			),
 		);
+
+		foreach ( $system_field_specs as $name => $spec ) {
+
+			if ( ! empty( $db_columns ) && ! in_array( $name, $db_columns, true ) ) {
+				continue;
+			}
+
+			$out[] = array(
+				'name'      => $name,
+				'label'     => $spec['label'],
+				'type'      => $spec['type'],
+				'group'     => 'system',
+				'is_meta'   => false,
+				'meta_key'  => null,
+				'readonly'  => true,
+				'jedb_role' => $spec['role'],
+			);
+		}
+
+		if ( $has_single_page ) {
+			$out[] = array(
+				'name'      => 'cct_single_post_id',
+				'label'     => __( 'Linked Single Page Post ID (system)', 'je-data-bridge-cc' ),
+				'type'      => 'number',
+				'group'     => 'system',
+				'is_meta'   => false,
+				'meta_key'  => null,
+				'readonly'  => true,
+				'jedb_role' => 'native_single_page_link',
+			);
+		}
 
 		if ( ! $this->cct_meta || empty( $this->cct_meta['fields'] ) ) {
 			return $out;
 		}
 
-		$seen     = array( '_ID' );
-		$internal = JEDB_Discovery::CCT_INTERNAL_COLUMN_NAMES;
+		$seen   = array( '_ID' );
+		$system = JEDB_Discovery::CCT_SYSTEM_COLUMN_NAMES;
+
+		foreach ( $out as $existing ) {
+			$seen[] = $existing['name'];
+		}
 
 		foreach ( $this->cct_meta['fields'] as $field ) {
 
@@ -225,7 +350,7 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 				continue;
 			}
 
-			if ( in_array( $name, $internal, true ) ) {
+			if ( in_array( $name, $system, true ) ) {
 				continue;
 			}
 
@@ -246,6 +371,42 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 		}
 
 		return $out;
+	}
+
+	/**
+	 * Cached `SHOW COLUMNS` for this CCT's table. Used to decide which JE
+	 * system fields actually exist on this CCT (cct_single_post_id only
+	 * appears when Has Single Page is enabled).
+	 *
+	 * Returns an empty array if the table doesn't exist or the query fails;
+	 * downstream code treats empty as "unknown — include all standard system
+	 * fields and skip the conditional ones".
+	 *
+	 * @return array<int,string>
+	 */
+	public function get_db_columns() {
+
+		if ( null !== $this->db_columns_cache ) {
+			return $this->db_columns_cache;
+		}
+
+		global $wpdb;
+		$table = $this->get_table_name();
+
+		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+		if ( ! $exists ) {
+			$this->db_columns_cache = array();
+			return $this->db_columns_cache;
+		}
+
+		$rows = $wpdb->get_results( "SHOW COLUMNS FROM `{$table}`", ARRAY_A ); // phpcs:ignore WordPress.DB.PreparedSQL,WordPress.DB.DirectDatabaseQuery
+		if ( ! is_array( $rows ) ) {
+			$this->db_columns_cache = array();
+			return $this->db_columns_cache;
+		}
+
+		$this->db_columns_cache = wp_list_pluck( $rows, 'Field' );
+		return $this->db_columns_cache;
 	}
 
 	/**
