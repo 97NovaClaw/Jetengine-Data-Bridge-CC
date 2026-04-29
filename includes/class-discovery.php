@@ -194,47 +194,189 @@ class JEDB_Discovery {
 	}
 
 	/**
-	 * Resolve CCT field schema. Prefers the rich `fields` arg (with type info);
-	 * falls back to the slim `get_fields_list()` map when only labels are exposed.
+	 * JetEngine system column names that exist on every CCT table but are not
+	 * user-defined fields. Filtered out of every schema regardless of source.
+	 */
+	const CCT_INTERNAL_COLUMN_NAMES = array(
+		'cct_status', 'cct_author_id', 'cct_created', 'cct_modified', 'cct_single_post_id',
+	);
+
+	/**
+	 * Resolve CCT field schema with type information.
 	 *
-	 * @return array<int,array{name:string,title:string,type:string,options:array}>
+	 * JetEngine has shifted where the field config lives between versions:
+	 *   - Older (3.x early):  $instance->get_arg('fields')
+	 *   - Newer (3.8+):       $instance->get_arg('meta_fields')
+	 *   - Direct property:    $instance->args['meta_fields'] / ['fields']
+	 *   - Persisted option:   get_option('jet_engine_active_content_types')[N]['meta_fields']
+	 *
+	 * We try every channel in order and accept the first non-empty result.
+	 * If all channels fail, we fall back to `get_fields_list()` which gives
+	 * us field names but no types — and we filter out the JE internal columns
+	 * by name so the schema doesn't include `cct_status` & friends.
+	 *
+	 * @return array<int,array{name:string,title:string,type:string,options:array,source:string}>
 	 */
 	private function get_cct_fields_from_instance( $cct_instance ) {
 
-		$fields = array();
+		$slug = $this->resolve_cct_slug( $cct_instance );
 
-		$rich = $cct_instance->get_arg( 'fields' );
-
-		if ( ! empty( $rich ) && is_array( $rich ) ) {
-			foreach ( $rich as $field ) {
-				if ( ! is_array( $field ) ) {
-					continue;
+		foreach ( array( 'meta_fields', 'fields' ) as $arg_key ) {
+			if ( method_exists( $cct_instance, 'get_arg' ) ) {
+				try {
+					$raw = $cct_instance->get_arg( $arg_key );
+					$normalized = $this->normalize_field_array( $raw, 'get_arg("' . $arg_key . '")' );
+					if ( ! empty( $normalized ) ) {
+						return $normalized;
+					}
+				} catch ( \Throwable $t ) {
+					jedb_log( 'get_arg threw resolving CCT fields', 'warning', array( 'arg' => $arg_key, 'slug' => $slug, 'error' => $t->getMessage() ) );
 				}
-				$fields[] = array(
-					'name'    => isset( $field['name'] ) ? $field['name'] : '',
-					'title'   => isset( $field['title'] ) ? $field['title'] : ( isset( $field['name'] ) ? $field['name'] : '' ),
-					'type'    => isset( $field['type'] ) ? $field['type'] : 'text',
-					'options' => isset( $field['options'] ) ? $field['options'] : array(),
-				);
 			}
-			return $fields;
+		}
+
+		if ( isset( $cct_instance->args ) && is_array( $cct_instance->args ) ) {
+			foreach ( array( 'meta_fields', 'fields' ) as $key ) {
+				if ( ! empty( $cct_instance->args[ $key ] ) && is_array( $cct_instance->args[ $key ] ) ) {
+					$normalized = $this->normalize_field_array( $cct_instance->args[ $key ], '$instance->args["' . $key . '"]' );
+					if ( ! empty( $normalized ) ) {
+						return $normalized;
+					}
+				}
+			}
+		}
+
+		if ( $slug ) {
+			$option_field_set = $this->lookup_cct_fields_in_option( $slug );
+			if ( ! empty( $option_field_set ) ) {
+				return $option_field_set;
+			}
 		}
 
 		if ( method_exists( $cct_instance, 'get_fields_list' ) ) {
-			$slim = $cct_instance->get_fields_list();
-			if ( ! empty( $slim ) ) {
-				foreach ( $slim as $name => $title ) {
-					$fields[] = array(
-						'name'    => $name,
-						'title'   => $title,
-						'type'    => 'text',
-						'options' => array(),
-					);
+			try {
+				$slim = $cct_instance->get_fields_list();
+				if ( is_array( $slim ) && ! empty( $slim ) ) {
+					$out = array();
+					foreach ( $slim as $name => $title ) {
+						if ( '' === $name || '_ID' === $name ) {
+							continue;
+						}
+						if ( in_array( $name, self::CCT_INTERNAL_COLUMN_NAMES, true ) ) {
+							continue;
+						}
+						$out[] = array(
+							'name'    => $name,
+							'title'   => $title,
+							'type'    => 'text',
+							'options' => array(),
+							'source'  => 'get_fields_list (no type info)',
+						);
+					}
+					return $out;
+				}
+			} catch ( \Throwable $t ) {
+				jedb_log( 'get_fields_list threw', 'warning', array( 'slug' => $slug, 'error' => $t->getMessage() ) );
+			}
+		}
+
+		return array();
+	}
+
+	/**
+	 * Normalize a raw JetEngine fields array into our internal shape, filtering
+	 * out the system internal columns by name.
+	 *
+	 * @return array<int,array{name:string,title:string,type:string,options:array,source:string}>
+	 */
+	private function normalize_field_array( $raw, $source ) {
+
+		if ( empty( $raw ) || ! is_array( $raw ) ) {
+			return array();
+		}
+
+		$out = array();
+
+		foreach ( $raw as $field ) {
+			if ( ! is_array( $field ) ) {
+				continue;
+			}
+
+			$name = isset( $field['name'] ) ? trim( (string) $field['name'] ) : '';
+			if ( '' === $name || '_ID' === $name ) {
+				continue;
+			}
+			if ( in_array( $name, self::CCT_INTERNAL_COLUMN_NAMES, true ) ) {
+				continue;
+			}
+
+			$out[] = array(
+				'name'    => $name,
+				'title'   => isset( $field['title'] ) && '' !== $field['title'] ? $field['title'] : $name,
+				'type'    => isset( $field['type'] ) && '' !== $field['type'] ? $field['type'] : 'text',
+				'options' => isset( $field['options'] ) ? $field['options'] : array(),
+				'source'  => $source,
+			);
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Last-resort field source: read directly from JetEngine's persisted
+	 * option `jet_engine_active_content_types`, find the entry matching this
+	 * CCT's slug, and pull `meta_fields` (or `fields`) out of it.
+	 *
+	 * @return array<int,array{name:string,title:string,type:string,options:array,source:string}>
+	 */
+	private function lookup_cct_fields_in_option( $cct_slug ) {
+
+		$stored = get_option( 'jet_engine_active_content_types' );
+		if ( ! is_array( $stored ) ) {
+			return array();
+		}
+
+		foreach ( $stored as $cct_config ) {
+			if ( ! is_array( $cct_config ) ) {
+				continue;
+			}
+			$config_slug = isset( $cct_config['slug'] ) ? $cct_config['slug'] : '';
+			if ( $config_slug !== $cct_slug ) {
+				continue;
+			}
+
+			foreach ( array( 'meta_fields', 'fields' ) as $key ) {
+				if ( ! empty( $cct_config[ $key ] ) && is_array( $cct_config[ $key ] ) ) {
+					return $this->normalize_field_array( $cct_config[ $key ], 'option:jet_engine_active_content_types[' . $key . ']' );
 				}
 			}
 		}
 
-		return $fields;
+		return array();
+	}
+
+	/**
+	 * Resolve a JE CCT instance's slug, trying the documented APIs first then
+	 * falling back to the known property names.
+	 */
+	public function resolve_cct_slug( $cct_instance ) {
+
+		if ( method_exists( $cct_instance, 'get_arg' ) ) {
+			try {
+				$slug = $cct_instance->get_arg( 'slug' );
+				if ( ! empty( $slug ) ) {
+					return $slug;
+				}
+			} catch ( \Throwable $t ) {} // phpcs:ignore Generic.CodeAnalysis.EmptyStatement.DetectedCatch
+		}
+
+		foreach ( array( 'slug', 'type_id', 'type', 'cct_slug' ) as $prop ) {
+			if ( property_exists( $cct_instance, $prop ) && ! empty( $cct_instance->{$prop} ) ) {
+				return $cct_instance->{$prop};
+			}
+		}
+
+		return '';
 	}
 
 	/* -----------------------------------------------------------------------

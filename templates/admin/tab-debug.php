@@ -191,41 +191,69 @@ $notice_map = array(
 					<span class="jedb-pill jedb-pill-warn"><?php printf( esc_html__( 'JE db: %s', 'je-data-bridge-cc' ), esc_html( (string) $dump['item_count_via_db'] ) ); ?></span>
 				<?php endif; ?>
 			</h4>
+			<?php
+			$render_field_array = static function ( $arr ) {
+				if ( empty( $arr ) || ! is_array( $arr ) ) {
+					return '<em>—</em>';
+				}
+				$bits = array();
+				foreach ( $arr as $f ) {
+					if ( ! is_array( $f ) ) { continue; }
+					$bits[] = ( isset( $f['name'] ) ? $f['name'] : '?' ) . ' [' . ( isset( $f['type'] ) ? $f['type'] : '?' ) . ']';
+				}
+				return '<code style="font-size:11px;">' . esc_html( implode( ', ', $bits ) ) . '</code>';
+			};
+			?>
 			<table class="widefat striped jedb-status-table" style="margin-bottom:14px;">
 				<tbody>
 					<tr>
-						<th style="width:240px;"><?php esc_html_e( 'Table name', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:280px;"><?php esc_html_e( 'Table name', 'je-data-bridge-cc' ); ?></th>
 						<td><code><?php echo esc_html( $dump['table_name'] ); ?></code></td>
+					</tr>
+					<tr>
+						<th><?php esc_html_e( 'Field source actually used', 'je-data-bridge-cc' ); ?></th>
+						<td><code style="font-weight:bold; color:<?php echo 'none' === $dump['field_source_used'] ? '#b32d2e' : '#1e6b2c'; ?>;"><?php echo esc_html( $dump['field_source_used'] ); ?></code></td>
 					</tr>
 					<tr>
 						<th><?php printf( esc_html__( 'DB columns (%d)', 'je-data-bridge-cc' ), count( $dump['db_columns'] ) ); ?></th>
 						<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', $dump['db_columns'] ) ); ?></code></td>
 					</tr>
 					<tr>
-						<th><?php printf( esc_html__( 'JE get_arg("fields") raw (%d)', 'je-data-bridge-cc' ), count( $dump['fields_via_get_arg'] ) ); ?></th>
-						<td>
-							<?php if ( empty( $dump['fields_via_get_arg'] ) ) : ?>
-								<em>—</em>
-							<?php else : ?>
-								<code style="font-size:11px;">
-								<?php
-								$bits = array();
-								foreach ( $dump['fields_via_get_arg'] as $f ) {
-									if ( ! is_array( $f ) ) { continue; }
-									$bits[] = ( isset( $f['name'] ) ? $f['name'] : '?' ) . ' [' . ( isset( $f['type'] ) ? $f['type'] : '?' ) . ']';
-								}
-								echo esc_html( implode( ', ', $bits ) );
-								?>
-								</code>
-							<?php endif; ?>
-						</td>
+						<th><?php printf( esc_html__( 'JE get_arg("fields") (%d)', 'je-data-bridge-cc' ), count( $dump['fields_via_get_arg'] ) ); ?></th>
+						<td><?php echo wp_kses_post( $render_field_array( $dump['fields_via_get_arg'] ) ); ?></td>
 					</tr>
+					<tr>
+						<th><?php printf( esc_html__( 'JE get_arg("meta_fields") (%d)', 'je-data-bridge-cc' ), count( $dump['fields_via_get_arg_meta'] ) ); ?></th>
+						<td><?php echo wp_kses_post( $render_field_array( $dump['fields_via_get_arg_meta'] ) ); ?></td>
+					</tr>
+					<?php if ( ! empty( $dump['fields_via_args_property'] ) ) : ?>
+						<?php foreach ( $dump['fields_via_args_property'] as $key => $value ) : ?>
+							<tr>
+								<th><?php printf( esc_html__( '$instance->args["%1$s"] (%2$d)', 'je-data-bridge-cc' ), esc_html( $key ), count( $value ) ); ?></th>
+								<td><?php echo wp_kses_post( $render_field_array( $value ) ); ?></td>
+							</tr>
+						<?php endforeach; ?>
+					<?php endif; ?>
+					<?php if ( ! empty( $dump['fields_via_option'] ) ) : ?>
+						<?php foreach ( $dump['fields_via_option'] as $key => $value ) : ?>
+							<tr>
+								<th><?php printf( esc_html__( 'option(jet_engine_active_content_types).%1$s (%2$d)', 'je-data-bridge-cc' ), esc_html( $key ), count( $value ) ); ?></th>
+								<td><?php echo wp_kses_post( $render_field_array( $value ) ); ?></td>
+							</tr>
+						<?php endforeach; ?>
+					<?php endif; ?>
+					<?php if ( ! empty( $dump['top_level_args_keys'] ) ) : ?>
+						<tr>
+							<th><?php esc_html_e( 'All instance->args keys', 'je-data-bridge-cc' ); ?></th>
+							<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', $dump['top_level_args_keys'] ) ); ?></code></td>
+						</tr>
+					<?php endif; ?>
 					<tr>
 						<th><?php printf( esc_html__( 'JE get_fields_list (%d)', 'je-data-bridge-cc' ), count( $dump['fields_via_get_list'] ) ); ?></th>
 						<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', $dump['fields_via_get_list'] ) ); ?></code></td>
 					</tr>
 					<tr>
-						<th><?php printf( esc_html__( 'After plugin filter (%d)', 'je-data-bridge-cc' ), count( $dump['schema_after_filter'] ) ); ?></th>
+						<th><?php printf( esc_html__( 'Plugin schema (%d)', 'je-data-bridge-cc' ), count( $dump['schema_after_filter'] ) ); ?></th>
 						<td>
 							<code style="font-size:11px;">
 							<?php

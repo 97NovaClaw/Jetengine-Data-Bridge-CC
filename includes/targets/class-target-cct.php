@@ -209,7 +209,8 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 			return $out;
 		}
 
-		$seen = array( '_ID' );
+		$seen     = array( '_ID' );
+		$internal = JEDB_Discovery::CCT_INTERNAL_COLUMN_NAMES;
 
 		foreach ( $this->cct_meta['fields'] as $field ) {
 
@@ -221,6 +222,10 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 			}
 
 			if ( in_array( $type, self::NON_DATA_FIELD_TYPES, true ) ) {
+				continue;
+			}
+
+			if ( in_array( $name, $internal, true ) ) {
 				continue;
 			}
 
@@ -348,17 +353,22 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 		$table = $this->get_table_name();
 
 		$out = array(
-			'slug'                  => $this->cct_slug,
-			'label'                 => $this->label,
-			'table_name'            => $table,
-			'table_exists'          => false,
-			'item_count_sql'        => 0,
-			'item_count_via_db'     => null,
-			'db_columns'            => array(),
-			'fields_via_get_arg'    => array(),
-			'fields_via_get_list'   => array(),
-			'schema_after_filter'   => array(),
-			'non_data_filtered_out' => array(),
+			'slug'                       => $this->cct_slug,
+			'label'                      => $this->label,
+			'table_name'                 => $table,
+			'table_exists'               => false,
+			'item_count_sql'             => 0,
+			'item_count_via_db'          => null,
+			'db_columns'                 => array(),
+			'fields_via_get_arg'         => array(),
+			'fields_via_get_arg_meta'    => array(),
+			'fields_via_args_property'   => array(),
+			'fields_via_option'          => array(),
+			'fields_via_get_list'        => array(),
+			'top_level_args_keys'        => array(),
+			'schema_after_filter'        => array(),
+			'non_data_filtered_out'      => array(),
+			'field_source_used'          => 'none',
 		);
 
 		$out['table_exists']    = (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
@@ -379,19 +389,44 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 			if ( method_exists( $inst, 'get_arg' ) ) {
 				try {
 					$rich = $inst->get_arg( 'fields' );
-					if ( is_array( $rich ) ) {
-						foreach ( $rich as $field ) {
-							if ( ! is_array( $field ) ) {
-								continue;
-							}
-							$out['fields_via_get_arg'][] = array(
-								'name' => isset( $field['name'] ) ? $field['name'] : '',
-								'type' => isset( $field['type'] ) ? $field['type'] : '',
-							);
-						}
-					}
+					$out['fields_via_get_arg'] = $this->summarize_field_array( $rich );
 				} catch ( \Throwable $t ) {
 					$out['fields_via_get_arg'] = array( 'ERROR' => $t->getMessage() );
+				}
+
+				try {
+					$rich_meta = $inst->get_arg( 'meta_fields' );
+					$out['fields_via_get_arg_meta'] = $this->summarize_field_array( $rich_meta );
+				} catch ( \Throwable $t ) {
+					$out['fields_via_get_arg_meta'] = array( 'ERROR' => $t->getMessage() );
+				}
+			}
+
+			if ( isset( $inst->args ) && is_array( $inst->args ) ) {
+				$out['top_level_args_keys'] = array_keys( $inst->args );
+				foreach ( array( 'meta_fields', 'fields' ) as $key ) {
+					if ( isset( $inst->args[ $key ] ) && is_array( $inst->args[ $key ] ) ) {
+						$out['fields_via_args_property'][ $key ] = $this->summarize_field_array( $inst->args[ $key ] );
+					}
+				}
+			}
+
+			$stored = get_option( 'jet_engine_active_content_types' );
+			if ( is_array( $stored ) ) {
+				foreach ( $stored as $cct_config ) {
+					if ( ! is_array( $cct_config ) ) {
+						continue;
+					}
+					$config_slug = isset( $cct_config['slug'] ) ? $cct_config['slug'] : '';
+					if ( $config_slug !== $this->cct_slug ) {
+						continue;
+					}
+					foreach ( array( 'meta_fields', 'fields' ) as $key ) {
+						if ( isset( $cct_config[ $key ] ) && is_array( $cct_config[ $key ] ) ) {
+							$out['fields_via_option'][ $key ] = $this->summarize_field_array( $cct_config[ $key ] );
+						}
+					}
+					break;
 				}
 			}
 
@@ -416,16 +451,45 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 			}
 		}
 
+		if ( $this->cct_meta && ! empty( $this->cct_meta['fields'] ) ) {
+			$first = $this->cct_meta['fields'][0];
+			$out['field_source_used'] = isset( $first['source'] ) ? $first['source'] : 'unknown';
+		}
+
 		foreach ( $this->get_field_schema() as $f ) {
 			$out['schema_after_filter'][] = array( 'name' => $f['name'], 'type' => $f['type'] );
 		}
 
 		foreach ( $out['fields_via_get_arg'] as $raw ) {
-			if ( is_array( $raw ) && in_array( strtolower( (string) $raw['type'] ), self::NON_DATA_FIELD_TYPES, true ) ) {
+			if ( is_array( $raw ) && isset( $raw['type'] ) && in_array( strtolower( (string) $raw['type'] ), self::NON_DATA_FIELD_TYPES, true ) ) {
 				$out['non_data_filtered_out'][] = $raw;
 			}
 		}
 
+		return $out;
+	}
+
+	/**
+	 * Compress a raw JE fields array into [{name, type}, ...] for the
+	 * diagnostic UI. Returns an empty array on null / non-array input so
+	 * the diagnostic can render "(0)" cleanly.
+	 */
+	private function summarize_field_array( $raw ) {
+
+		if ( empty( $raw ) || ! is_array( $raw ) ) {
+			return array();
+		}
+
+		$out = array();
+		foreach ( $raw as $field ) {
+			if ( ! is_array( $field ) ) {
+				continue;
+			}
+			$out[] = array(
+				'name' => isset( $field['name'] ) ? $field['name'] : '',
+				'type' => isset( $field['type'] ) ? $field['type'] : '',
+			);
+		}
 		return $out;
 	}
 }

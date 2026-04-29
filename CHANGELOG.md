@@ -2,6 +2,55 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.4] — 2026-02-28
+
+### Fixed
+
+- **CCT field discovery on JetEngine 3.8+** — JE moved its field config
+  out of the `'fields'` arg some time after the source plugins were
+  written. Result on Brick Builder HQ: every CCT showed
+  `JE get_arg("fields") raw (0)` in the diagnostic, the resolver fell
+  through to `get_fields_list()` (names only, no types), and the
+  schema rendered every field as `[text]` while including 4–5
+  internal columns (`cct_status`, `cct_author_id`, `cct_created`,
+  `cct_modified`, `cct_single_post_id`).
+- New multi-source resolver in `JEDB_Discovery::get_cct_fields_from_instance()`
+  tries every known channel in order:
+  1. `$instance->get_arg('meta_fields')` — JE 3.8+ canonical key
+  2. `$instance->get_arg('fields')` — older JE alias
+  3. `$instance->args['meta_fields']` / `['fields']` — direct property
+  4. `get_option('jet_engine_active_content_types')[N]['meta_fields']`
+     / `['fields']` — persisted config in `wp_options`, last-resort
+  5. `get_fields_list()` — names-only fallback, no types
+- Each returned field now carries a `source` key so the diagnostic can
+  show **exactly which channel produced the data** for that CCT.
+- New constant `JEDB_Discovery::CCT_INTERNAL_COLUMN_NAMES` is enforced
+  by both the resolver AND `JEDB_Target_CCT::get_field_schema()`.
+  Internal columns can never appear in the schema regardless of which
+  source produced the field list.
+
+### Added
+
+- **CCT diagnostic now dumps every field-source attempt** side by
+  side, including the count and `name [type]` summary for each:
+  - JE `get_arg("fields")`
+  - JE `get_arg("meta_fields")`
+  - `$instance->args["meta_fields"]` / `["fields"]` (direct property)
+  - `get_option("jet_engine_active_content_types").meta_fields` /
+    `.fields`
+  - JE `get_fields_list()`
+- New "Field source actually used" row colored green/red shows which
+  resolution path the plugin ended up using for each CCT (or
+  `none` in red if every channel failed).
+- New "All `instance->args` keys" row prints every top-level arg key
+  on the CCT factory so we can see what JE 3.8+ actually exposes.
+- Same data is still written to the debug log for sharing.
+
+### Changed
+
+- Plugin version bumped to **0.2.4** (no schema changes; DB version
+  stays at 1.1.0).
+
 ## [0.2.3] — 2026-02-28
 
 ### Fixed
