@@ -231,8 +231,118 @@ JEDB_Plugin (singleton, 'plugins_loaded')
      ├── JEDB_Flattener                → on CCT save (PULL) + on parent update (PUSH)
      │     └── pipes through JEDB_Transformer chain
      │           └── JEDB_Snippet_Transformer → JEDB_Snippet_Runner (try/catch + log)
+     ├── JEDB_Condition_Evaluator      → DSL parser + snippet runner for bridge conditions
      └── JEDB_Field_Locker             → injects locker JS/CSS on CCT/CPT/Woo edit
 ```
+
+### 3.4 JetEngine storage model — what lives where
+
+> **Critical:** This is the canonical reference for where each kind of
+> JetEngine data lives. See `LESSONS-LEARNED.md` L-007 for the bug that
+> motivated this section. Update this table whenever JE moves something.
+
+JetEngine uses two distinct storage systems for two distinct purposes:
+
+| Concern | Storage | Notes |
+|---|---|---|
+| **CCT data** (one row = one CCT item) | Per-CCT dedicated table: `{prefix}jet_cct_{slug}` | Reads via `$cct_factory->db->get_item($id)` / `db->query($args, $limit, $offset, $order)`. Writes via `db->insert($data)` / `db->update($data, $where)`. **Never** in `wp_posts`. **Never** in `wp_postmeta`. |
+| **JE relation data** (one row = one connection) | Per-relation table: `{prefix}jet_rel_{relation_id}` | Schema verified in L-014. Reads/writes via `jet_engine()->relations->...` API preferred over direct SQL. |
+| **CCT / CPT / Relation / Query / Glossary CONFIG** (the schema, not the data) | Single master table: `{prefix}jet_post_types` | Discriminated by the `status` column (see table below). `meta_fields` column is a serialized PHP array. **Canonical home for field schemas in JE 3.8+.** |
+| WP-registered CPTs (post-type registration via `register_post_type()`) | WP code at `init` priority + JE meta-box configs in `{prefix}jet_post_types` rows with `status='publish'` | Data lives in `wp_posts` + `wp_postmeta` like every other CPT. JE's row in `jet_post_types` carries the meta-box config (currently empty in our discovery — JE may hold field configs elsewhere for `status='publish'` rows; needs verification before Phase 4). |
+
+**`{prefix}jet_post_types` `status` column dictionary:**
+
+| `status` value | Object kind | `meta_fields` content |
+|---|---|---|
+| `content-type` | A CCT (e.g. `mosaics_data`) | The serialized field schema for that CCT |
+| `publish` | A JE-registered CPT (e.g. `story_bricks`) | Empty in samples; field configs likely in JE meta-boxes elsewhere |
+| `relation` | A JE Relation (e.g. `Mosaic → Product`) | Empty unless the relation has user-defined meta fields |
+| `query` | A JE Query Builder query | Empty (queries' definitions live in `args`) |
+| `glossary` | A JE Glossary (e.g. `Story Types`) | Serialized array of `{value, label}` entries |
+
+**Discovery resolution order** for CCT field schemas (in `JEDB_Discovery::get_cct_fields_from_instance()`):
+
+1. **`{prefix}jet_post_types` SELECT** — JE 3.8+ canonical home. **Channel #1.**
+2. `$cct_factory->get_arg('meta_fields')` — older JE compatibility.
+3. `$cct_factory->get_arg('fields')` — even older alias.
+4. `$cct_factory->args['meta_fields']` / `['fields']` — direct property fallback.
+5. `get_option('jet_engine_active_content_types')[N]['meta_fields']` — pre-3.8 storage (kept for back-compat).
+6. `$cct_factory->get_fields_list()` — names-only fallback if every other channel returns nothing.
+
+Each returned field carries a `source` key so the diagnostic shows exactly which channel produced the data on this site.
+
+**Prefix discipline:** every table reference in code MUST be `$wpdb->prefix . 'name'`. Even display strings — they end up in screenshots and shared logs. See `LESSONS-LEARNED.md` L-008.
+
+### 3.5 Bridge condition model — declarative DSL with snippet escape hatch
+
+> **Critical:** This section governs how multiple bridge configs can share
+> a source target without colliding (the M:1 / 1:N pattern). See
+> `LESSONS-LEARNED.md` L-013 for the design rationale.
+
+A bridge config carries an optional `condition` field. The sync engine
+evaluates the condition against the source and target context before
+applying the bridge. If the condition returns false, the bridge is skipped
+for that sync event and a `skipped_condition` row is written to
+`wp_jedb_sync_log`.
+
+**Two evaluation modes:**
+
+1. **Declarative DSL** — a tiny expression language for simple cases. No
+   loops, no function calls, no side effects. Versioned via `dsl_version: 1`
+   in the bridge config so we can extend without breaking existing configs.
+2. **Snippet escape hatch** — `condition_snippet: my_complex_condition_slug`
+   references a sandboxed snippet (Phase 5b runtime). Snippet returns bool;
+   throws are treated as "skip this bridge" and logged.
+
+**v1 DSL grammar:**
+
+```
+condition  := expr
+expr       := and_expr ( "OR" and_expr )*
+and_expr   := not_expr ( "AND" not_expr )*
+not_expr   := "NOT"? primary
+primary    := "(" expr ")" | comparison
+comparison := value op value
+op         := "==" | "!=" | ">" | "<" | ">=" | "<="
+              | "contains" | "not_contains"
+              | "starts_with" | "ends_with"
+              | "in" | "not_in"
+value      := PATH | LITERAL
+PATH       := "{" SCOPE "." FIELD_NAME "}"
+SCOPE      := "source" | "target" | "cct" | "product" | "variation"
+              -- "cct" / "product" / "variation" are aliases that resolve
+              -- to source/target depending on bridge type
+LITERAL    := QUOTED_STRING | NUMBER | BOOLEAN | ARRAY_LITERAL
+ARRAY_LITERAL := "[" LITERAL ( "," LITERAL )* "]"
+```
+
+**Examples:**
+
+```
+{product.product_cat} contains "Mosaics"
+{cct.has_instructions_pdf} == "yes"
+{product.status} == "publish" AND {cct.featured} == "yes"
+{cct.price} >= 500 AND {cct.price} <= 1500
+{product.product_type} in ["simple", "variable"]
+NOT ({product.stock_status} == "outofstock")
+```
+
+**Conditional sync engine flow** (covered in §4.9):
+
+1. Sync trigger fires (CCT save, product save, manual sync, bulk sync).
+2. Engine collects every bridge config whose `source_target` matches the
+   triggering source kind.
+3. For each, the `JEDB_Condition_Evaluator` runs the condition.
+4. Bridges with `condition` returning true (or no condition) execute in
+   declared `priority` order (default 100; lower runs first).
+5. Each individual bridge application is still 1:1 and atomic per D-1.
+6. Every applied / skipped / errored bridge writes one row to
+   `wp_jedb_sync_log` with the appropriate status.
+
+**Editor docs (Phase 6 / Phase 7 deliverable):** Bridges admin tab includes
+a "Condition syntax" help drawer documenting every operator with copy-paste
+examples drawn from the user's actual schema. Snippet authors get a
+separate "Writing condition snippets" appendix in the developer docs.
 
 ---
 
@@ -284,22 +394,47 @@ interface JEDB_Data_Target {
 | Categories / tags | Woo uses taxonomies (`product_cat`, `product_tag`). | Adapter accepts term IDs OR slugs OR names; resolves to IDs and uses `wp_set_object_terms()`. |
 | Custom product meta from third-party Woo plugins | Need to be visible to bridge UI without hardcoding. | Whitelist textarea in Settings tab (JFB-WC pattern) OR auto-discover by sampling N existing products. |
 
-### 4.5 The "Bridge to CCT" meta box on the product edit screen
+### 4.5 The "Bridge to CCT" meta box + link strategy
+
+> **Locked decision (D-10):** JE Relations are the **primary** link
+> mechanism. `cct_single_post_id` is a special-case alternative for CCTs
+> that have JE's "Has Single Page" enabled. **No `_jedb_bridge_cct_id`
+> meta** is stored on the product — the link lives where JE owns it.
+> See `LESSONS-LEARNED.md` L-013/L-015.
 
 A new admin module `JEDB_Woo_Product_Meta_Box` injects a panel on `product` edit screens with these controls:
 
 1. **Bridge type** select — populated from `jedb_bridge_types` (the Settings JSON, see §3.1). For Brick Builder HQ this lists "Available Set", "Mosaic", "Mosaic Instructions PDF". Editors can add new bridge types from the Bridges admin tab without touching code.
-2. **Linked CCT item** — once a type is chosen, an Ajax dropdown shows existing CCT items of that type, plus "Create new from this product" and "Edit linked item". **Cardinality is 1:1** (locked decision; see §8): one product ↔ one CCT row.
+2. **Linked CCT item** — once a type is chosen, an Ajax dropdown shows existing CCT items of that type, plus "Create new from this product" and "Edit linked item". **Cardinality is 1:1 per bridge** (D-1) — but multiple bridge configs can target the same source via the conditional engine (§4.9 / D-14).
 3. **Variation scope** (only shown when product type = `variable`) — radio: `Bridge the parent product` vs `Bridge a specific variation`. If "specific variation" is chosen, a second dropdown picks which variation. See §4.7.
-4. **Direction & lock** — radio: `CCT is canonical (push to product)` vs `Product is canonical (pull from CCT)`. Lock checkbox to freeze sync. **Default direction is CCT-canonical** (locked decision; see §8).
+4. **Direction & lock** — radio: `CCT is canonical (push to product)` vs `Product is canonical (pull from CCT)`. Lock checkbox to freeze sync. **Default direction is CCT-canonical** (D-2).
 
-This is what makes the bidirectional model usable: every product knows which bridge it belongs to, what scope it has, and where its truth lives. Stored as product meta:
-- `_jedb_bridge_type` (slug)
-- `_jedb_bridge_cct_id` (single integer — 1:1)
-- `_jedb_bridge_scope` (`parent` | `variation`)
-- `_jedb_bridge_variation_id` (only when scope = variation)
-- `_jedb_bridge_direction` (`cct_canonical` | `product_canonical`)
-- `_jedb_bridge_locked` (bool)
+#### Link mechanism (D-10)
+
+A bridge type declares its `link_via` in the bridge config JSON (mutually exclusive):
+
+| `link_via` value | Mechanism | When to use |
+|---|---|---|
+| `je_relation` | A row in `{prefix}jet_rel_{relation_id}` with `parent_object_id` = source `_ID` and `child_object_id` = product ID (or vice-versa). The `relation_id` is declared in the bridge config. | Default for CCT ↔ Woo bridges. Required when you want JetEngine Smart Filters / Listings / Query Builder to traverse the link natively. |
+| `cct_single_post_id` | The JE-managed `cct_single_post_id` column on the CCT row stores the linked WP post ID. No relation row needed; JE already maintains the column. | **Only available** when the CCT has JE's "Has Single Page" enabled. Detected via the schema's `jedb_role: 'native_single_page_link'` marker (added in 0.2.5). |
+
+**Auto-create policy (D-13):** the plugin does NOT auto-create JE Relations for v1. The Bridges admin tab lists existing JE Relations whose `parent_object` and `child_object` resolve to registered targets; the user picks one. For declarative provisioning (Phase 6 setup-tab presets) the cct-builder pattern from PAC VDM creates relations programmatically — but only when invoked via a preset, never as a side effect of bridge-config save.
+
+#### Stored product-side meta (minimal — link is NOT here)
+
+```
+_jedb_bridge_type       slug       "Which bridge type config governs this product?"
+_jedb_bridge_locked     bool       "Don't sync at all" override for this specific product
+_jedb_bridge_direction  enum       Per-product override of the bridge type's default direction (rare)
+```
+
+The actual source-record link is resolved at runtime by:
+1. Reading `_jedb_bridge_type` from the product.
+2. Looking up the bridge type config to find its `link_via` setting.
+3. If `je_relation`: query the relation table for the row whose `child_object_id` equals this product's ID.
+4. If `cct_single_post_id`: query the CCT for the row whose `cct_single_post_id` equals this product's ID.
+
+**Why no `_jedb_bridge_cct_id`:** keeping the link in JE's own structures eliminates the dual-source-of-truth problem. The product page stays simple (just the type tag). JE Smart Filters and Listings see the bridge automatically.
 
 ### 4.6 The "Has Single Page = the WC product" CCT pattern
 Using JetEngine's "has single page" feature pointed at the linked Woo product means we never need to build a separate CCT single template. The Bridge meta box's "Linked CCT item" stores the product ID into the CCT row; the CCT's "single page" URL resolves to the product's permalink via a small `template_redirect` shim:
@@ -317,7 +452,14 @@ add_action( 'template_redirect', function () {
 
 ### 4.7 Variation bridging — the "Has Instructions PDF" pattern
 
-Variations are first-class targets in v1. The use case that drove the decision: a Mosaic CCT row has a `has_instructions_pdf` boolean and an `instructions_price` field. We want that to surface as a **variation** on the parent Mosaic product, not a separate product, so the storefront shows a single product page with a "Just the build (in-person)" / "Build + Instructions PDF" radio. This is also the standard Woo UX for any "with extras" purchase decision.
+> **Locked decision (L-015):** Variations represent **different purchase
+> options for ONE source record**, not different bridge types. Each
+> variation's data comes from the same CCT row as its parent product.
+> Bridge-type disambiguation across multiple source kinds is handled by
+> the conditional engine in §4.9 — typically using product category,
+> NOT variations.
+
+Variations are first-class targets in v1. The use case that drove the decision: a Mosaic CCT row has a `has_instructions_pdf` boolean and an `instructions_price` field. We want that to surface as a **variation** on the parent Mosaic product, not a separate product, so the storefront shows a single product page with a "Just the build (in-person)" / "Build + Instructions PDF" radio. This is also the standard Woo UX for any "with extras" purchase decision — and it's *that one Mosaic*'s purchase options, not a routing mechanism for "is this a Mosaic or an Available Set?".
 
 **How it works end to end:**
 
@@ -368,9 +510,50 @@ Variations are first-class targets in v1. The use case that drove the decision: 
 
 ### 4.8 Custom Code Snippets — the user-defined transformer system
 
+> **Locked decision (D-11):** Every field mapping carries **two**
+> transformer chains: `push_transform` (source → target) and
+> `pull_transform` (target → source). They are **not** assumed to be
+> inverses. Built-in transformers ship as paired inverses where
+> well-defined; custom snippets are direction-agnostic functions and the
+> bridge config picks which snippet runs in which chain. See
+> `LESSONS-LEARNED.md` L-010.
+
 **Why this exists.** Built-in transformers (Year Expander, Name Builder, Regex Replace, Format Number, Lookup Table) handle most cases, but every site eventually needs a one-off transformation that doesn't fit. Rather than ship a code change for each site, we let admins define a transformer in PHP from the admin UI. Snippets are also how power-users customize bridge behavior without forking the plugin.
 
-**The mental model.** A snippet is a small PHP function with a fixed signature, stored as a single file in `wp-content/uploads/jedb-snippets/{slug}.php`. The Flatten config UI lets you pick "Custom Snippet → my_strip_lego_trademark" from the same dropdown that lists built-in transformers.
+**The mental model.** A snippet is a small PHP function with a fixed signature, stored as a single file in `wp-content/uploads/jedb-snippets/{slug}.php`. The Flatten config UI lets you pick "Custom Snippet → my_strip_lego_trademark" from the same dropdown that lists built-in transformers — separately for the push chain and the pull chain.
+
+**Bidirectional chains in a flatten config:**
+
+```json
+{
+  "source_field": "display_price_publicly",
+  "target_field": "featured",
+  "push_transform": [
+    { "type": "builtin", "name": "yes_no_to_bool" }
+  ],
+  "pull_transform": [
+    { "type": "builtin", "name": "bool_to_yes_no" }
+  ]
+}
+```
+
+```json
+{
+  "source_field": "description",
+  "target_field": "short_description",
+  "push_transform": [
+    { "type": "snippet", "slug": "my_strip_html_to_plain" },
+    { "type": "builtin", "name": "truncate_words", "args": { "limit": 30 } }
+  ],
+  "pull_transform": [
+    { "type": "noop", "comment": "HTML can't be re-derived from plain text; pull is intentionally no-op" }
+  ]
+}
+```
+
+The Bridges admin UI renders two transformer-chain pickers per mapping, side by side, labeled `→ when pushing` and `← when pulling`. A snippet appears in both pickers; the editor adds it to whichever chain (or both) makes sense.
+
+**Snippet condition mode (per L-013):** the same snippet runtime hosts **condition snippets** for the conditional bridge engine (§4.9). The function signature is identical (`($value, array $context = [])`); only the contract differs — condition snippets MUST return `bool`. Throws are treated as "skip this bridge" by `JEDB_Condition_Evaluator` and logged with `status='skipped_error'`.
 
 **File anatomy.** Every snippet file looks like this — the wrapper is auto-generated on save; the editor only sees the `// CODE BEGIN` / `// CODE END` body:
 
@@ -431,6 +614,72 @@ function jedb_snippet_my_strip_lego_trademark( $value, array $context = [] ) {
 **Why not a "safe DSL"?** Considered. Rejected because (a) every safe DSL eventually grows into a janky Turing-incomplete PHP-lite; (b) the people allowed to install plugins on a WP site already have full PHP execution; this is no worse. The capability gate + opt-in toggle is the meaningful boundary.
 
 **Distribution.** Snippets can be exported (Utilities tab) as a JSON bundle including their full source. This is how a site author ships a tested set of snippets to other sites running the plugin.
+
+### 4.9 Conditional Sync Engine (`JEDB_Condition_Evaluator`)
+
+> **Locked decision (D-14):** Bridge configs may carry an optional
+> `condition` (declarative DSL — see §3.5) and/or `condition_snippet`
+> (snippet slug). The conditional engine evaluates these before each
+> bridge application. This is what allows multiple bridge configs to
+> share a source target while staying 1:1 per bridge (per D-1).
+> Documented in `LESSONS-LEARNED.md` L-013.
+
+**Goal.** Allow the system as a whole to express patterns like:
+
+- "Sync this Mosaic CCT row to Woo product **only if** the product is in the `Mosaics` category."
+- "Push to the `with_instructions` variation **only when** `cct.has_instructions_pdf == 'yes'`."
+- "Skip this bridge entirely **if** the product is out of stock."
+
+…while keeping every individual bridge a clean, predictable 1:1 source-target sync.
+
+**Engine flow** (called by the flattener / transaction processor / bulk-sync runner):
+
+1. **Trigger fires.** A CCT row saves, a product saves, the editor clicks a manual sync button, or the cron runs bulk re-sync.
+2. **Candidate collection.** `JEDB_Flattener::collect_bridges_for_source($source_target_slug, $direction)` returns every bridge config in `wp_jedb_flatten_configs` whose `source_target` matches and whose `enabled = 1`.
+3. **Sort by priority.** Lower `priority` (default 100) runs first. Ties resolved by `id ASC` for determinism.
+4. **For each candidate, evaluate condition** via `JEDB_Condition_Evaluator::evaluate( $condition_dsl, $condition_snippet, $context )`:
+   - If both empty → return `true`.
+   - If `condition_snippet` is set → run via `JEDB_Snippet_Runner` with the same `$context` shape as a transformer; cast result to bool.
+   - Else parse the DSL string with the v1 grammar (§3.5) and evaluate against the source + target field values bound to the path scopes.
+5. **Apply each matching bridge** through the existing flatten / transaction flow:
+   - Pre-write `Sync_Guard` lock check (per §5).
+   - Run `push_transform` or `pull_transform` chain per direction.
+   - Write to target via the appropriate adapter.
+6. **Log every candidate** to `wp_jedb_sync_log` regardless of outcome:
+
+| `status` value | Meaning |
+|---|---|
+| `success` | Bridge ran end-to-end, target write returned true. |
+| `partial` | Some mapped fields wrote, some failed (per-field results in `context_json`). |
+| `errored` | Bridge applied but target write threw. |
+| `skipped_condition` | Condition returned false; bridge intentionally skipped. |
+| `skipped_error` | Condition snippet threw; bridge skipped, snippet stack trace in `context_json`. |
+| `skipped_locked` | Bridge target is locked via `_jedb_bridge_locked` or sync_guard locked. |
+| `noop` | All mapped fields had identical source/target values; nothing written. |
+
+**`$context` for condition evaluation:**
+
+```
+[
+    'source_target'  => JEDB_Data_Target  // the source adapter
+    'source_id'      => mixed             // source record's ID
+    'source_data'    => array             // source record fields (lazy-loaded)
+    'target_target'  => JEDB_Data_Target  // the target adapter
+    'target_id'      => mixed             // target record's ID
+    'target_data'    => array             // target record fields (lazy-loaded)
+    'direction'      => 'push' | 'pull'
+    'bridge_type'    => string            // bridge type slug
+    'trigger'        => 'auto' | 'manual' | 'bulk' | 'cron'
+]
+```
+
+The DSL path resolver maps `{cct.foo}` to `$source_data['foo']` when source is a CCT, `{product.foo}` to `$target_data['foo']` when target is a Woo product, etc. Lazy loading: `source_data` and `target_data` are only fetched on first access via the adapter's `get($id)`, so a condition that doesn't reference them stays cheap.
+
+**Failure-mode policy (per Q4 / D-2):** condition snippet throws → skip THIS bridge only, log `status='skipped_error'`, continue evaluating the next candidate. A throw never blocks other bridges from running.
+
+**Cycle detection:** if bridge A fires bridge B which fires bridge A again, `Sync_Guard` (§5) detects via origin tagging and refuses the recursive write. Logged as `skipped_locked`.
+
+**Editor UX (Phase 4 deliverable):** the Bridges admin tab "Add condition" UI shows a syntax cheatsheet drawer + sample value picker that pulls live values from one of the user's actual records to validate the DSL parses + returns the expected bool. Same drawer offers "Switch to snippet mode" which generates a stub snippet pre-populated with the current DSL converted to PHP for the user to extend.
 
 ---
 
@@ -606,6 +855,13 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | D-7 | **JFB WC Quotes Advanced consolidation** | **Stays separate.** Quoting is its own beast and out of scope. We lift *patterns* (Settings API, JSON config files, debug log) but never the quoting logic. Both plugins can co-exist on the same site. | No changes to JFB-WC repo. New plugin's debug-log helper detects if JFB-WC is active and (optionally) tails its log too in the Debug tab. |
 | D-8 | **Repo strategy** | **New standalone GitHub repo** (`legworkmedia/je-data-bridge-cc`). The three reference plugins remain in their own repos and are explicitly ignored in this repo's `.gitignore`. | New repo gets its own README, LICENSE, CHANGELOG. The path `Refrence but block from git/` is already gitignored at the project root; new plugin sits in its own repo entirely separate from the Brick Builder HQ workspace. |
 | D-9 | **Custom Code Snippets** *(net-new from §10 follow-up)* | **In scope, opt-in.** Per-config PHP snippets stored in `uploads/jedb-snippets/`, edited via WP-bundled CodeMirror, gated by `manage_options` + the `jedb_can_edit_snippets` filter + a global Settings toggle (default OFF). Errors caught and logged; never break a save. | Adds Phase 5b (1.5 days). New `includes/snippets/*` subsystem, new `wp_jedb_snippets` table, new Snippets admin tab, new `Snippet_Transformer`. See §4.8. |
+| D-10 | **Bridge link mechanism** | **JE Relations are the primary link.** `cct_single_post_id` is a special-case alternative for CCTs with "Has Single Page" enabled. **NO `_jedb_bridge_cct_id`** post-meta on the product — the link lives where JE owns it, eliminating dual-source-of-truth. | Bridge type config declares `link_via: 'je_relation' \| 'cct_single_post_id'`. Product-side meta is reduced to `_jedb_bridge_type`, `_jedb_bridge_locked`, optional `_jedb_bridge_direction`. Native JE Smart Filters / Listings / Query Builder traverse the link automatically. See §4.5 + L-013/L-015. |
+| D-11 | **Bidirectional transformer chains** | Each field mapping carries **two** transformer chains (`push_transform` and `pull_transform`), not one. They are not assumed to be inverses. Built-in transformers ship as paired inverses where well-defined; custom snippets are direction-agnostic and the bridge config picks which snippet runs in which chain. | Bridge config schema gains separate `push_transform[]` and `pull_transform[]` arrays per mapping. UI renders two transformer pickers per mapping side by side. See §4.8 + L-010. |
+| D-12 | **Field mapping policy** | **Explicit only.** No silent auto-matching by name. The Bridges admin UI renders a two-column picker; the destination column is adapter-aware (Woo Product picker shows only Woo product fields, with variation-attribute fields appearing only when product type = `variable`). | No "auto-map by name" code path. Bridge config requires every mapping to be explicit. Adapter-aware picker is a Phase 4 deliverable. See L-009 / Q1. |
+| D-13 | **JE Relation creation policy** | **Manual for v1.** The Bridges admin tab lists existing JE Relations whose endpoints resolve to registered targets; the user picks one. Phase 6 setup-tab presets MAY auto-create relations programmatically via the cct-builder pattern (PAC VDM precedent), but only as a preset side effect — never as a side effect of bridge-config save. | Bridges admin UI = "pick from existing". Setup-tab presets ship a relations array that gets created programmatically. JE-version-specific surface stays in JE's own admin code, not ours. See §4.5. |
+| D-14 | **Conditional bridges (M:1 / 1:N routing)** | **In scope.** Multiple bridge configs may share a `source_target`. Each carries an optional `condition` (declarative DSL) and/or `condition_snippet`. The conditional engine evaluates conditions before each bridge applies; matching bridges run in declared `priority` order. Each individual bridge is still 1:1 (D-1) — conditions just keep the matching set disjoint. | New §3.5 (DSL grammar) + §4.9 (conditional engine). New `JEDB_Condition_Evaluator` class. Adds `condition`, `condition_snippet`, `priority`, `dsl_version` columns/keys to `wp_jedb_flatten_configs`. Same snippet runtime as D-9. Sync log gains `skipped_condition` and `skipped_error` statuses. See L-013. |
+| D-15 | **Mandatory-field policy** | **Adapter-owned, bridge-overridable.** Each `JEDB_Data_Target` declares `get_required_fields()`. Bridge type config can extend or relax via `required_overrides: { add: [], remove: [] }`. Bridges admin UI shows a "Mandatory coverage" panel that warns (does not block) when required target fields aren't covered by the mapping, with three remediations: add a mapping, attach a synthesizing snippet, mark intentionally-unmapped. | Adds `get_required_fields()` to the `JEDB_Data_Target` interface in Phase 4. Adapter defaults: Target_CCT `[]`, Target_CPT `['post_title']`, Target_Woo_Product `['name', 'status']`, Target_Woo_Variation `['parent_id', 'attributes']`. See L-011. |
+| D-16 | **Field-render-hint ownership** | **Adapter-owned via `is_natively_rendered($field_name)`.** Bridge meta box on the WC product edit screen renders inputs ONLY for fields where the adapter returns false (i.e. fields with no native Woo input). Native fields stay in their native boxes; the sync engine talks to them via the `WC_Product` setter API. | Adds `is_natively_rendered()` to the `JEDB_Data_Target` interface in Phase 4. Target_Woo_Product returns true for typed-setter fields + standard taxonomies; false for arbitrary meta keys. Conflict detection (two configs both wanting to render the same custom field) surfaces as a warning in the Bridges admin tab BEFORE save. See L-012. |
 
 ---
 

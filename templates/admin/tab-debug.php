@@ -368,6 +368,38 @@ $notice_map = array(
 								<th><?php esc_html_e( 'Matching wp_options', 'je-data-bridge-cc' ); ?></th>
 								<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', (array) ( $probe['option_keys_matched'] ?? array() ) ) ); ?></code></td>
 							</tr>
+							<tr>
+								<th><?php esc_html_e( '{prefix}jet_post_types table', 'je-data-bridge-cc' ); ?></th>
+								<td>
+									<?php if ( ! empty( $probe['jet_post_types_table_present'] ) ) : ?>
+										<span class="jedb-pill jedb-pill-ok"><?php esc_html_e( 'PRESENT', 'je-data-bridge-cc' ); ?></span>
+									<?php else : ?>
+										<span class="jedb-pill jedb-pill-bad"><?php esc_html_e( 'NOT FOUND', 'je-data-bridge-cc' ); ?></span>
+									<?php endif; ?>
+								</td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( 'jet_post_types row for this CCT', 'je-data-bridge-cc' ); ?></th>
+								<td>
+									<?php if ( ! empty( $probe['jet_post_types_row_found'] ) ) : ?>
+										<span class="jedb-pill jedb-pill-ok"><?php esc_html_e( 'FOUND', 'je-data-bridge-cc' ); ?></span>
+										<code style="font-size:11px;">status=<?php echo esc_html( (string) ( $probe['jet_post_types_status'] ?? '' ) ); ?></code>
+										<code style="font-size:11px;">meta_fields=<?php echo esc_html( (string) ( $probe['jet_post_types_meta_fields_count'] ?? 0 ) ); ?></code>
+										<?php if ( ! empty( $probe['jet_post_types_meta_fields_preview'] ) ) : ?>
+											<br><code style="font-size:11px;">preview: <?php
+												$bits = array();
+												foreach ( (array) $probe['jet_post_types_meta_fields_preview'] as $entry ) {
+													if ( ! is_array( $entry ) ) { continue; }
+													$bits[] = ( isset( $entry['name'] ) ? $entry['name'] : '?' ) . ' [' . ( isset( $entry['type'] ) ? $entry['type'] : '?' ) . ']';
+												}
+												echo esc_html( implode( ', ', $bits ) );
+											?></code>
+										<?php endif; ?>
+									<?php else : ?>
+										<em><?php esc_html_e( 'no row', 'je-data-bridge-cc' ); ?></em>
+									<?php endif; ?>
+								</td>
+							</tr>
 						</tbody>
 					</table>
 				</details>

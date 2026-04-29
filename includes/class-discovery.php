@@ -221,22 +221,34 @@ class JEDB_Discovery {
 	/**
 	 * Resolve CCT field schema with type information.
 	 *
-	 * JetEngine has shifted where the field config lives between versions:
-	 *   - Older (3.x early):  $instance->get_arg('fields')
-	 *   - Newer (3.8+):       $instance->get_arg('meta_fields')
-	 *   - Direct property:    $instance->args['meta_fields'] / ['fields']
-	 *   - Persisted option:   get_option('jet_engine_active_content_types')[N]['meta_fields']
+	 * JetEngine has shifted where the field config lives between versions.
+	 * See LESSONS-LEARNED.md L-007 for the full investigation. Resolution
+	 * order (each channel returns the first non-empty result):
 	 *
-	 * We try every channel in order and accept the first non-empty result.
-	 * If all channels fail, we fall back to `get_fields_list()` which gives
-	 * us field names but no types — and we filter out the JE internal columns
-	 * by name so the schema doesn't include `cct_status` & friends.
+	 *   1. {prefix}jet_post_types row WHERE slug = $slug AND status = 'content-type'
+	 *      — JE 3.8+ canonical home (verified on bbhq.legworklabs.com 2026-04-29)
+	 *   2. $instance->get_arg('meta_fields')        — JE 3.x intermediate
+	 *   3. $instance->get_arg('fields')             — older JE alias
+	 *   4. $instance->args['meta_fields']/['fields'] — direct property
+	 *   5. get_option('jet_engine_active_content_types')[N]['meta_fields']
+	 *      — pre-3.8 storage
+	 *   6. $instance->get_fields_list()             — names-only fallback
+	 *
+	 * Each returned field carries a `source` key so the diagnostic can show
+	 * exactly which channel produced the data on this site.
 	 *
 	 * @return array<int,array{name:string,title:string,type:string,options:array,source:string}>
 	 */
 	private function get_cct_fields_from_instance( $cct_instance ) {
 
 		$slug = $this->resolve_cct_slug( $cct_instance );
+
+		if ( $slug ) {
+			$from_table = $this->get_cct_fields_from_jet_post_types_table( $slug );
+			if ( ! empty( $from_table ) ) {
+				return $from_table;
+			}
+		}
 
 		foreach ( array( 'meta_fields', 'fields' ) as $arg_key ) {
 			if ( method_exists( $cct_instance, 'get_arg' ) ) {
@@ -340,6 +352,136 @@ class JEDB_Discovery {
 	}
 
 	/**
+	 * **Channel #1** — read CCT field schema from `{prefix}jet_post_types`,
+	 * the canonical home in JetEngine 3.8+.
+	 *
+	 * Schema confirmed on bbhq.legworklabs.com (JE 3.8.5) by direct SQL
+	 * inspection on 2026-04-29. The `meta_fields` column is a serialized
+	 * PHP array of `{name, type, title, options, ...}` per field.
+	 *
+	 * Status discriminator: `content-type` for CCTs (vs `publish` for
+	 * JE-registered CPTs, `relation` for JE Relations, `query` for JE
+	 * Queries, `glossary` for JE Glossaries — see §3.4 in BUILD-PLAN).
+	 *
+	 * @return array<int,array{name:string,title:string,type:string,options:array,source:string}>
+	 */
+	public function get_cct_fields_from_jet_post_types_table( $cct_slug ) {
+
+		global $wpdb;
+		$table = $wpdb->prefix . 'jet_post_types';
+
+		try {
+			$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			if ( ! $exists ) {
+				return array();
+			}
+
+			$raw = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT meta_fields FROM `{$table}` WHERE slug = %s AND status = %s LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL
+					$cct_slug,
+					'content-type'
+				)
+			); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+
+			if ( null === $raw || '' === $raw ) {
+				return array();
+			}
+
+			$decoded = maybe_unserialize( $raw );
+			if ( ! is_array( $decoded ) || empty( $decoded ) ) {
+				return array();
+			}
+
+			return $this->normalize_field_array( $decoded, 'wp_jet_post_types.meta_fields' );
+
+		} catch ( \Throwable $t ) {
+			jedb_log( 'get_cct_fields_from_jet_post_types_table threw', 'warning', array(
+				'slug'  => $cct_slug,
+				'error' => $t->getMessage(),
+			) );
+			return array();
+		}
+	}
+
+	/**
+	 * Discover JE Glossaries — also rows in `{prefix}jet_post_types`,
+	 * differentiated by `status = 'glossary'`.
+	 *
+	 * Each glossary's `meta_fields` is a serialized array of
+	 * `{value, label, ...}` entries. Used by Phase 4's bridge UI to
+	 * resolve `select`/`radio` field options to human-readable labels.
+	 *
+	 * @return array<int,array{slug:string,label:string,values:array<int,array{value:string,label:string}>}>
+	 */
+	public function get_all_glossaries() {
+
+		$cached = $this->memo_get( 'glossaries' );
+		if ( null !== $cached && ! empty( $cached ) ) {
+			return $cached;
+		}
+
+		$out = array();
+
+		try {
+			global $wpdb;
+			$table = $wpdb->prefix . 'jet_post_types';
+
+			$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			if ( ! $exists ) {
+				return $this->maybe_cache( 'glossaries', $out );
+			}
+
+			$rows = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT id, slug, labels, meta_fields FROM `{$table}` WHERE status = %s ORDER BY id ASC", // phpcs:ignore WordPress.DB.PreparedSQL
+					'glossary'
+				),
+				ARRAY_A
+			); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+
+			if ( ! is_array( $rows ) ) {
+				return $this->maybe_cache( 'glossaries', $out );
+			}
+
+			foreach ( $rows as $row ) {
+
+				$labels      = isset( $row['labels'] ) ? maybe_unserialize( $row['labels'] ) : null;
+				$meta_fields = isset( $row['meta_fields'] ) ? maybe_unserialize( $row['meta_fields'] ) : null;
+
+				$label = '';
+				if ( is_array( $labels ) && ! empty( $labels['name'] ) ) {
+					$label = (string) $labels['name'];
+				}
+
+				$values = array();
+				if ( is_array( $meta_fields ) ) {
+					foreach ( $meta_fields as $entry ) {
+						if ( ! is_array( $entry ) ) {
+							continue;
+						}
+						$values[] = array(
+							'value' => isset( $entry['value'] ) ? (string) $entry['value'] : '',
+							'label' => isset( $entry['label'] ) ? (string) $entry['label'] : '',
+						);
+					}
+				}
+
+				$out[] = array(
+					'id'     => isset( $row['id'] ) ? (int) $row['id'] : 0,
+					'slug'   => isset( $row['slug'] ) ? (string) $row['slug'] : '',
+					'label'  => $label ? $label : ( isset( $row['slug'] ) ? (string) $row['slug'] : '' ),
+					'values' => $values,
+				);
+			}
+		} catch ( \Throwable $t ) {
+			jedb_log( 'get_all_glossaries threw', 'warning', array( 'error' => $t->getMessage() ) );
+		}
+
+		return $this->maybe_cache( 'glossaries', $out );
+	}
+
+	/**
 	 * Last-resort field source: read directly from JetEngine's persisted
 	 * option `jet_engine_active_content_types`, find the entry matching this
 	 * CCT's slug, and pull `meta_fields` (or `fields`) out of it.
@@ -425,6 +567,11 @@ class JEDB_Discovery {
 			'jet_engine_post_count'            => 0,
 			'jet_engine_post_meta_keys_sample' => array(),
 			'option_keys_matched'              => array(),
+			'jet_post_types_table_present'     => false,
+			'jet_post_types_row_found'         => false,
+			'jet_post_types_status'            => null,
+			'jet_post_types_meta_fields_count' => 0,
+			'jet_post_types_meta_fields_preview' => array(),
 		);
 
 		try {
@@ -527,6 +674,36 @@ class JEDB_Discovery {
 			$out['option_probe_error'] = $t->getMessage();
 		}
 
+		try {
+			global $wpdb;
+			$jpt_table = $wpdb->prefix . 'jet_post_types';
+			$jpt_exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $jpt_table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			$out['jet_post_types_table_present'] = (bool) $jpt_exists;
+
+			if ( $jpt_exists && $slug ) {
+				$row = $wpdb->get_row(
+					$wpdb->prepare(
+						"SELECT status, meta_fields FROM `{$jpt_table}` WHERE slug = %s LIMIT 1", // phpcs:ignore WordPress.DB.PreparedSQL
+						$slug
+					),
+					ARRAY_A
+				); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+
+				if ( $row ) {
+					$out['jet_post_types_row_found'] = true;
+					$out['jet_post_types_status']    = isset( $row['status'] ) ? $row['status'] : null;
+
+					$decoded = isset( $row['meta_fields'] ) ? maybe_unserialize( $row['meta_fields'] ) : null;
+					if ( is_array( $decoded ) ) {
+						$out['jet_post_types_meta_fields_count']   = count( $decoded );
+						$out['jet_post_types_meta_fields_preview'] = array_slice( $decoded, 0, 3 );
+					}
+				}
+			}
+		} catch ( \Throwable $t ) {
+			$out['jet_post_types_probe_error'] = $t->getMessage();
+		}
+
 		return $out;
 	}
 
@@ -598,6 +775,8 @@ class JEDB_Discovery {
 			return $cached;
 		}
 
+		global $wpdb;
+
 		$relations = array();
 
 		try {
@@ -646,7 +825,7 @@ class JEDB_Discovery {
 						'parent_rel'    => isset( $args['parent_rel'] )    ? $args['parent_rel']    : null,
 						'is_hierarchy'  => ! empty( $args['parent_rel'] ),
 						'table_exists'  => $this->relation_table_exists( $relation_id ),
-						'table_name'    => 'wp_jet_rel_' . $relation_id,
+						'table_name'    => $wpdb->prefix . 'jet_rel_' . $relation_id,
 					);
 				} catch ( \Throwable $t ) {
 					jedb_log( 'get_all_relations: relation threw — skipping', 'error', array( 'relation_id' => $relation_id, 'error' => $t->getMessage() ) );

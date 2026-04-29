@@ -2,6 +2,75 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] — 2026-02-28
+
+### Fixed — JE 3.8+ field-schema resolution + prefix discipline
+
+- **CCT field types now resolve correctly on JetEngine 3.8+.** New
+  primary channel `JEDB_Discovery::get_cct_fields_from_jet_post_types_table()`
+  reads from `{prefix}jet_post_types WHERE slug=%s AND status='content-type'`
+  and `maybe_unserialize`s the `meta_fields` blob. Becomes channel #1 in
+  the resolver; older channels remain as fallbacks for older JE versions.
+  Each returned field carries a `source` key so the diagnostic shows
+  exactly which channel produced the data on this site. See
+  `LESSONS-LEARNED.md` L-007 for the full investigation.
+- **Prefix discipline bug.** `Discovery::get_all_relations()` was
+  emitting a hardcoded `'wp_jet_rel_' . $relation_id` display string;
+  now uses `$wpdb->prefix . 'jet_rel_' . $relation_id`. Display-only
+  but matters on sites with non-default `$table_prefix`. Caught by an
+  audit grep on 2026-04-29; documented as L-008.
+
+### Added — JE Glossary discovery + deep-probe enhancement
+
+- **`JEDB_Discovery::get_all_glossaries()`** — reads
+  `WHERE status='glossary'` from `{prefix}jet_post_types` and returns
+  `[ id, slug, label, values:[{value, label}, ...] ]` per glossary. The
+  Phase 4 Bridge meta box will use this to resolve `select`/`radio`
+  field options to human-readable labels. Cached via the existing
+  transient layer.
+- **Deep probe gains `{prefix}jet_post_types` lookup.** New rows in
+  the per-CCT diagnostic show: table presence, this CCT's row presence,
+  the row's `status` value, the `meta_fields` count, and a 3-entry
+  preview of `name [type]` pairs. Future regressions of this storage
+  model will be obvious in one screenshot.
+
+### Documentation — major BUILD-PLAN + LESSONS-LEARNED expansion
+
+- **`LESSONS-LEARNED.md`** — created in the previous session, expanded
+  this version with:
+  - L-012: WC product-edit meta-box injection has rough edges; Phase 4
+    field-render-hint is adapter-owned via `is_natively_rendered()`.
+  - L-013: Conditional bridges (DSL + snippet fallback) keep individual
+    bridges 1:1 while supporting M:1 and 1:N source→targets.
+  - L-014: Verified `{prefix}jet_rel_{id}` table structure (DESCRIBE
+    output captured) and write semantics. Outstanding: confirm exact
+    JE write-API method via RI source review before Phase 2.
+  - L-015: Woo product variations are for purchase options, NOT for
+    bridge-type disambiguation. Phase 4b unchanged; bridge-type
+    routing handled by §4.9 conditional engine.
+- **`BUILD-PLAN.md`** added six new sections / decisions:
+  - §3.4 — JetEngine storage model (canonical reference for where each
+    kind of JE data lives, with `wp_jet_post_types` `status` value
+    dictionary and the resolver's channel order).
+  - §3.5 — Bridge condition model (declarative DSL grammar v1 +
+    snippet escape hatch).
+  - §4.5 — Rewritten link strategy (JE Relations primary,
+    `cct_single_post_id` special case, NO `_jedb_bridge_cct_id` meta).
+  - §4.7 — Tightened variation framing (variations = purchase options
+    for ONE source record, not bridge-type routing).
+  - §4.8 — Updated to document push/pull split per mapping.
+  - §4.9 — Conditional Sync Engine spec (engine flow, `$context`
+    shape, sync-log status taxonomy, failure-mode policy).
+  - Decisions Log additions: D-10 (link strategy), D-11 (bidirectional
+    transformer chains), D-12 (explicit-only mapping), D-13 (manual
+    JE Relation creation), D-14 (conditional bridges), D-15 (mandatory
+    fields), D-16 (field-render-hint).
+
+### Changed
+
+- Plugin version bumped to **0.2.7** (no schema changes; DB version
+  stays at 1.1.0).
+
 ## [0.2.6] — 2026-02-28
 
 ### Added — Deep JE 3.8+ field-storage probe
