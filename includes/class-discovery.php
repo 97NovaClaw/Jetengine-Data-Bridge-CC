@@ -373,6 +373,197 @@ class JEDB_Discovery {
 	}
 
 	/**
+	 * Deep introspection probe for "where does JetEngine 3.8+ store CCT field
+	 * definitions?". The 0.2.4 resolver tried every previously-known channel
+	 * (get_arg fields/meta_fields, $args property, persisted option) and
+	 * Brick Builder HQ's diagnostic showed all four returning empty AND the
+	 * factory's $args has no fields/meta_fields key at all. So fields must
+	 * live somewhere we haven't looked yet.
+	 *
+	 * This method introspects every reachable JE surface and reports what it
+	 * finds. The result is a structured array suitable for rendering in the
+	 * Debug tab and for ingestion by the field resolver — once we know which
+	 * channel actually contains data, the resolver can claim it.
+	 *
+	 * Tested channels:
+	 *   1. $instance->meta_fields       (direct property)
+	 *   2. $instance->fields            (direct property)
+	 *   3. $instance->get_meta_fields() (method)
+	 *   4. $instance->get_fields()      (method)
+	 *   5. Manager->meta_boxes / ->fields_manager / ->meta_fields (siblings)
+	 *   6. jet_engine()->meta_boxes->* probe (the global meta-boxes service)
+	 *   7. Posts of type `jet-engine` whose meta links back to this CCT slug
+	 *      (JE stores meta-box configs as posts of this type)
+	 *   8. wp_options entries matching `jet_engine_meta_boxes_%` /
+	 *      `jet_engine_cct_%`
+	 *
+	 * For each channel it records: presence, sample preview, count where
+	 * applicable. NEVER throws — every probe is wrapped in try/catch.
+	 *
+	 * @param object $cct_instance The CCT factory.
+	 * @return array
+	 */
+	public function deep_probe_je_field_storage( $cct_instance ) {
+
+		$slug = $this->resolve_cct_slug( $cct_instance );
+
+		$out = array(
+			'cct_slug'                         => $slug,
+			'instance_class'                   => is_object( $cct_instance ) ? get_class( $cct_instance ) : 'NOT-OBJECT',
+			'instance_public_props'            => array(),
+			'instance_public_methods'          => array(),
+			'probe_meta_fields_property'       => null,
+			'probe_fields_property'            => null,
+			'probe_get_meta_fields_method'     => null,
+			'probe_get_fields_method'          => null,
+			'manager_class'                    => null,
+			'manager_public_props'             => array(),
+			'jet_engine_top_level_props'       => array(),
+			'jet_engine_meta_boxes_present'    => false,
+			'jet_engine_meta_boxes_class'      => null,
+			'jet_engine_meta_boxes_methods'    => array(),
+			'jet_engine_post_count'            => 0,
+			'jet_engine_post_meta_keys_sample' => array(),
+			'option_keys_matched'              => array(),
+		);
+
+		try {
+			if ( is_object( $cct_instance ) ) {
+				$out['instance_public_props']   = array_keys( get_object_vars( $cct_instance ) );
+				$out['instance_public_methods'] = array_values( array_filter( get_class_methods( $cct_instance ), static function ( $m ) {
+					return 0 !== strpos( $m, '__' );
+				} ) );
+
+				if ( isset( $cct_instance->meta_fields ) ) {
+					$mf = $cct_instance->meta_fields;
+					$out['probe_meta_fields_property'] = $this->summarize_field_value( $mf );
+				}
+				if ( isset( $cct_instance->fields ) ) {
+					$f = $cct_instance->fields;
+					$out['probe_fields_property'] = $this->summarize_field_value( $f );
+				}
+
+				if ( method_exists( $cct_instance, 'get_meta_fields' ) ) {
+					try {
+						$mf = $cct_instance->get_meta_fields();
+						$out['probe_get_meta_fields_method'] = $this->summarize_field_value( $mf );
+					} catch ( \Throwable $t ) {
+						$out['probe_get_meta_fields_method'] = array( 'ERROR' => $t->getMessage() );
+					}
+				}
+				if ( method_exists( $cct_instance, 'get_fields' ) ) {
+					try {
+						$f = $cct_instance->get_fields();
+						$out['probe_get_fields_method'] = $this->summarize_field_value( $f );
+					} catch ( \Throwable $t ) {
+						$out['probe_get_fields_method'] = array( 'ERROR' => $t->getMessage() );
+					}
+				}
+			}
+		} catch ( \Throwable $t ) {
+			$out['instance_introspection_error'] = $t->getMessage();
+		}
+
+		try {
+			if ( class_exists( '\\Jet_Engine\\Modules\\Custom_Content_Types\\Module' ) ) {
+				$module = \Jet_Engine\Modules\Custom_Content_Types\Module::instance();
+				if ( $module && isset( $module->manager ) && is_object( $module->manager ) ) {
+					$out['manager_class']        = get_class( $module->manager );
+					$out['manager_public_props'] = array_keys( get_object_vars( $module->manager ) );
+				}
+			}
+		} catch ( \Throwable $t ) {
+			$out['manager_introspection_error'] = $t->getMessage();
+		}
+
+		try {
+			if ( function_exists( 'jet_engine' ) ) {
+				$je = jet_engine();
+				if ( is_object( $je ) ) {
+					$out['jet_engine_top_level_props'] = array_keys( get_object_vars( $je ) );
+
+					if ( isset( $je->meta_boxes ) ) {
+						$out['jet_engine_meta_boxes_present'] = true;
+						$out['jet_engine_meta_boxes_class']   = is_object( $je->meta_boxes ) ? get_class( $je->meta_boxes ) : 'NOT-OBJECT';
+						if ( is_object( $je->meta_boxes ) ) {
+							$out['jet_engine_meta_boxes_methods'] = array_values( array_filter( get_class_methods( $je->meta_boxes ), static function ( $m ) {
+								return 0 !== strpos( $m, '__' );
+							} ) );
+						}
+					}
+				}
+			}
+		} catch ( \Throwable $t ) {
+			$out['jet_engine_introspection_error'] = $t->getMessage();
+		}
+
+		try {
+			$je_posts = get_posts( array(
+				'post_type'      => 'jet-engine',
+				'post_status'    => array( 'publish', 'draft' ),
+				'posts_per_page' => -1,
+				'fields'         => 'ids',
+				'no_found_rows'  => true,
+			) );
+			$out['jet_engine_post_count'] = is_array( $je_posts ) ? count( $je_posts ) : 0;
+
+			if ( ! empty( $je_posts ) ) {
+				global $wpdb;
+				$ids_in = implode( ',', array_map( 'absint', array_slice( $je_posts, 0, 25 ) ) );
+				$keys   = $wpdb->get_col( "SELECT DISTINCT meta_key FROM {$wpdb->postmeta} WHERE post_id IN ({$ids_in}) ORDER BY meta_key ASC LIMIT 50" ); // phpcs:ignore WordPress.DB.PreparedSQL,WordPress.DB.DirectDatabaseQuery
+				$out['jet_engine_post_meta_keys_sample'] = is_array( $keys ) ? $keys : array();
+			}
+		} catch ( \Throwable $t ) {
+			$out['jet_engine_post_probe_error'] = $t->getMessage();
+		}
+
+		try {
+			global $wpdb;
+			$rows = $wpdb->get_col(
+				"SELECT option_name FROM {$wpdb->options} WHERE option_name LIKE 'jet_engine_%' OR option_name LIKE 'jet-engine_%' ORDER BY option_name ASC LIMIT 100" // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+			);
+			$out['option_keys_matched'] = is_array( $rows ) ? $rows : array();
+		} catch ( \Throwable $t ) {
+			$out['option_probe_error'] = $t->getMessage();
+		}
+
+		return $out;
+	}
+
+	/**
+	 * Helper for deep_probe: convert an unknown value into a tiny preview that
+	 * can be rendered safely in the diagnostic UI.
+	 *
+	 * @param mixed $value
+	 * @return array
+	 */
+	private function summarize_field_value( $value ) {
+		if ( is_array( $value ) ) {
+			$first_keys = array_slice( array_keys( $value ), 0, 5 );
+			$first_item = reset( $value );
+			return array(
+				'present'    => true,
+				'php_type'   => 'array',
+				'count'      => count( $value ),
+				'first_keys' => $first_keys,
+				'first_item' => is_array( $first_item ) ? array_intersect_key( $first_item, array_flip( array( 'name', 'type', 'title', 'label' ) ) ) : gettype( $first_item ),
+			);
+		}
+		if ( is_object( $value ) ) {
+			return array(
+				'present'  => true,
+				'php_type' => 'object (' . get_class( $value ) . ')',
+				'count'    => null,
+			);
+		}
+		return array(
+			'present'  => null !== $value,
+			'php_type' => gettype( $value ),
+			'value'    => is_scalar( $value ) ? (string) $value : null,
+		);
+	}
+
+	/**
 	 * Resolve a JE CCT instance's slug, trying the documented APIs first then
 	 * falling back to the known property names.
 	 */

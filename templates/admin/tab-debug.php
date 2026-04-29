@@ -284,6 +284,94 @@ $notice_map = array(
 					<?php endif; ?>
 				</tbody>
 			</table>
+
+			<?php if ( ! empty( $dump['deep_probe'] ) && is_array( $dump['deep_probe'] ) ) : ?>
+				<?php $probe = $dump['deep_probe']; ?>
+				<details class="jedb-deep-probe">
+					<summary><strong><?php esc_html_e( 'Deep JE 3.8+ probe — where the field types might live', 'je-data-bridge-cc' ); ?></strong></summary>
+					<table class="widefat striped jedb-status-table">
+						<tbody>
+							<tr>
+								<th style="width:280px;"><?php esc_html_e( 'Instance class', 'je-data-bridge-cc' ); ?></th>
+								<td><code><?php echo esc_html( isset( $probe['instance_class'] ) ? $probe['instance_class'] : '?' ); ?></code></td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( 'Instance public properties', 'je-data-bridge-cc' ); ?></th>
+								<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', (array) ( $probe['instance_public_props'] ?? array() ) ) ); ?></code></td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( 'Instance public methods', 'je-data-bridge-cc' ); ?></th>
+								<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', (array) ( $probe['instance_public_methods'] ?? array() ) ) ); ?></code></td>
+							</tr>
+							<?php
+							$probe_rows = array(
+								'$instance->meta_fields'        => $probe['probe_meta_fields_property']    ?? null,
+								'$instance->fields'             => $probe['probe_fields_property']         ?? null,
+								'$instance->get_meta_fields()'  => $probe['probe_get_meta_fields_method']  ?? null,
+								'$instance->get_fields()'       => $probe['probe_get_fields_method']       ?? null,
+							);
+							foreach ( $probe_rows as $label => $value ) :
+								?>
+								<tr>
+									<th><code style="font-size:12px;"><?php echo esc_html( $label ); ?></code></th>
+									<td>
+										<?php if ( null === $value ) : ?>
+											<em><?php esc_html_e( 'absent', 'je-data-bridge-cc' ); ?></em>
+										<?php elseif ( isset( $value['ERROR'] ) ) : ?>
+											<code style="color:#b32d2e;"><?php echo esc_html( $value['ERROR'] ); ?></code>
+										<?php elseif ( isset( $value['count'] ) && $value['count'] ) : ?>
+											<span class="jedb-pill jedb-pill-ok"><?php printf( esc_html__( '%d items', 'je-data-bridge-cc' ), (int) $value['count'] ); ?></span>
+											<code style="font-size:11px;">first_keys: <?php echo esc_html( implode( ',', (array) ( $value['first_keys'] ?? array() ) ) ); ?></code>
+											<?php if ( ! empty( $value['first_item'] ) && is_array( $value['first_item'] ) ) : ?>
+												<br><code style="font-size:11px;">first_item: <?php echo esc_html( wp_json_encode( $value['first_item'] ) ); ?></code>
+											<?php endif; ?>
+										<?php else : ?>
+											<em><?php echo esc_html( isset( $value['php_type'] ) ? $value['php_type'] : 'present but empty' ); ?></em>
+										<?php endif; ?>
+									</td>
+								</tr>
+							<?php endforeach; ?>
+							<tr>
+								<th><?php esc_html_e( 'Manager class', 'je-data-bridge-cc' ); ?></th>
+								<td><code><?php echo esc_html( isset( $probe['manager_class'] ) ? $probe['manager_class'] : '?' ); ?></code></td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( 'Manager public properties', 'je-data-bridge-cc' ); ?></th>
+								<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', (array) ( $probe['manager_public_props'] ?? array() ) ) ); ?></code></td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( 'jet_engine() public properties', 'je-data-bridge-cc' ); ?></th>
+								<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', (array) ( $probe['jet_engine_top_level_props'] ?? array() ) ) ); ?></code></td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( 'jet_engine()->meta_boxes', 'je-data-bridge-cc' ); ?></th>
+								<td>
+									<?php if ( ! empty( $probe['jet_engine_meta_boxes_present'] ) ) : ?>
+										<span class="jedb-pill jedb-pill-ok"><?php esc_html_e( 'PRESENT', 'je-data-bridge-cc' ); ?></span>
+										<code style="font-size:11px;"><?php echo esc_html( $probe['jet_engine_meta_boxes_class'] ); ?></code>
+										<br><code style="font-size:11px;">methods: <?php echo esc_html( implode( ', ', (array) ( $probe['jet_engine_meta_boxes_methods'] ?? array() ) ) ); ?></code>
+									<?php else : ?>
+										<em><?php esc_html_e( 'absent', 'je-data-bridge-cc' ); ?></em>
+									<?php endif; ?>
+								</td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( '`jet-engine` posts', 'je-data-bridge-cc' ); ?></th>
+								<td>
+									<?php printf( esc_html__( '%d posts', 'je-data-bridge-cc' ), (int) ( $probe['jet_engine_post_count'] ?? 0 ) ); ?>
+									<?php if ( ! empty( $probe['jet_engine_post_meta_keys_sample'] ) ) : ?>
+										<br><code style="font-size:11px;">meta keys: <?php echo esc_html( implode( ', ', (array) $probe['jet_engine_post_meta_keys_sample'] ) ); ?></code>
+									<?php endif; ?>
+								</td>
+							</tr>
+							<tr>
+								<th><?php esc_html_e( 'Matching wp_options', 'je-data-bridge-cc' ); ?></th>
+								<td><code style="font-size:11px;"><?php echo esc_html( implode( ', ', (array) ( $probe['option_keys_matched'] ?? array() ) ) ); ?></code></td>
+							</tr>
+						</tbody>
+					</table>
+				</details>
+			<?php endif; ?>
 		</div>
 	<?php endforeach; ?>
 	<?php if ( ! empty( $cct_diagnostic['errors'] ) ) : ?>

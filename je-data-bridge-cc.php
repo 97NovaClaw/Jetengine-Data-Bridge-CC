@@ -3,7 +3,7 @@
  * Plugin Name:       JetEngine Data Bridge CC
  * Plugin URI:        https://github.com/legworkmedia/je-data-bridge-cc
  * Description:       Bridges JetEngine CCTs, CPTs, and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
- * Version:           0.2.5
+ * Version:           0.2.6
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Legwork Media
@@ -24,7 +24,7 @@ if ( ! defined( 'WPINC' ) ) {
  * Plugin constants
  * -------------------------------------------------------------------------- */
 
-define( 'JEDB_VERSION',              '0.2.5' );
+define( 'JEDB_VERSION',              '0.2.6' );
 define( 'JEDB_DB_VERSION',           '1.1.0' );
 define( 'JEDB_PLUGIN_FILE',          __FILE__ );
 define( 'JEDB_PLUGIN_DIR',           plugin_dir_path( __FILE__ ) );

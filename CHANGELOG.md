@@ -2,6 +2,47 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] — 2026-02-28
+
+### Added — Deep JE 3.8+ field-storage probe
+
+The 0.2.4 multi-source resolver tried every previously-known channel
+for CCT field configs (`get_arg("fields")`, `get_arg("meta_fields")`,
+`$instance->args["fields"]`, `$instance->args["meta_fields"]`, the
+persisted `jet_engine_active_content_types` option). Brick Builder
+HQ's diagnostic showed all four returning empty AND that
+`$instance->args` on JE 3.8.5 has no `fields`/`meta_fields` key at
+all — the args carry only CCT-level settings (single-page support,
+REST permissions, admin column config). So fields must live somewhere
+we haven't looked yet.
+
+- New `JEDB_Discovery::deep_probe_je_field_storage()` introspects
+  every reachable JetEngine surface and reports what it finds.
+  Tested channels:
+  1. `$instance->meta_fields` (direct property)
+  2. `$instance->fields` (direct property)
+  3. `$instance->get_meta_fields()` (method)
+  4. `$instance->get_fields()` (method)
+  5. Manager class + sibling property names (`meta_boxes`,
+     `fields_manager`, etc.)
+  6. `jet_engine()->meta_boxes` (the global meta-boxes service) —
+     class name and public method list
+  7. Posts of type `jet-engine` (JE stores meta-box configs as posts
+     of this type) — count + sample of meta keys
+  8. `wp_options` entries matching `jet_engine_%` / `jet-engine_%`
+- Each probe is wrapped in try/catch and reports presence + sample
+  preview + count where applicable.
+- New "Deep JE 3.8+ probe" collapsible panel in the per-CCT
+  diagnostic renders all of this, plus class names + public method
+  lists for everything reachable. Once we see which channel
+  contains the field config on JE 3.8+, the resolver gets a new
+  channel and field types come back.
+
+### Changed
+
+- Plugin version bumped to **0.2.6** (no schema changes; DB version
+  stays at 1.1.0).
+
 ## [0.2.5] — 2026-02-28
 
 ### Changed — JE system columns surfaced as readonly system fields

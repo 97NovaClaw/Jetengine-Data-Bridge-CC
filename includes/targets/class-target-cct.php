@@ -530,6 +530,7 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 			'schema_after_filter'        => array(),
 			'non_data_filtered_out'      => array(),
 			'field_source_used'          => 'none',
+			'deep_probe'                 => array(),
 		);
 
 		$out['table_exists']    = (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
@@ -615,6 +616,14 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 		if ( $this->cct_meta && ! empty( $this->cct_meta['fields'] ) ) {
 			$first = $this->cct_meta['fields'][0];
 			$out['field_source_used'] = isset( $first['source'] ) ? $first['source'] : 'unknown';
+		}
+
+		if ( $inst ) {
+			try {
+				$out['deep_probe'] = JEDB_Discovery::instance()->deep_probe_je_field_storage( $inst );
+			} catch ( \Throwable $t ) {
+				$out['deep_probe'] = array( 'ERROR' => $t->getMessage() );
+			}
 		}
 
 		foreach ( $this->get_field_schema() as $f ) {
