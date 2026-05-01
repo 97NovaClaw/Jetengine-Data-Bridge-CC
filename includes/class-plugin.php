@@ -63,7 +63,10 @@ class JEDB_Plugin {
 	}
 
 	/**
-	 * Load the always-on subsystems (Discovery + Target Registry + adapters).
+	 * Load the always-on subsystems (Discovery + Target Registry + adapters,
+	 * plus the relation runtime which has to be available on both admin and
+	 * the CCT save hooks fire during admin_init).
+	 *
 	 * Registry bootstrap is lazy — instantiating it doesn't trigger discovery
 	 * until something calls ->all() / ->get() / ->has().
 	 */
@@ -77,6 +80,16 @@ class JEDB_Plugin {
 		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-woo-product.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-woo-variation.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/targets/class-target-registry.php';
+
+		require_once JEDB_PLUGIN_DIR . 'includes/relations/class-relation-config-manager.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/relations/class-relation-attacher.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/relations/class-data-broker.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/relations/class-runtime-loader.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/relations/class-transaction-processor.php';
+
+		JEDB_Relation_Data_Broker::instance();
+		JEDB_Relation_Runtime_Loader::instance();
+		JEDB_Relation_Transaction_Processor::instance();
 	}
 
 	/**

@@ -2,6 +2,129 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] — 2026-02-28
+
+### Added — Phase 2: Relation Injector port
+
+First phase that writes to JE-managed tables. Implementation strictly
+follows the verified contract documented in `LESSONS-LEARNED.md` L-014
+(direct `$wpdb->insert()` on `{prefix}jet_rel_{id}` with the exact
+column set, idempotent duplicate-check, type-aware clearing).
+
+**JE Relations themselves are NEVER created or edited by this plugin.**
+They live entirely in JetEngine → Relations. The Relations tab in our
+admin only configures *which existing relations* the picker UI exposes
+on each CCT edit screen. Locked decision D-13.
+
+#### New files (10)
+
+- `includes/relations/class-relation-config-manager.php` — CRUD wrapper
+  around `wp_jedb_relation_configs`. **One row per CCT** (matches RI's
+  storage model). Each row's `config_json` carries the array of which
+  JE Relation IDs to enable on that CCT, plus per-relation display-field
+  choices and UI preferences. The Phase-0 schema's `relation_id` and
+  `direction` columns stay NULL/empty for relation-config rows
+  (vestigial; will be cleaned up in a future schema migration —
+  decision A from the Phase 2 design discussion).
+- `includes/relations/class-relation-attacher.php` — direct-SQL writer
+  per L-014. Public API: `attach()`, `detach()`, `relation_exists()`,
+  `clear_existing_for_side()`, `get_relation_object()`,
+  `determine_side()`, `determine_side_for_post_type()`. Idempotent
+  duplicate-check, type-aware clearing for 1:1 and 1:M, append for
+  M:M. Reusable from Phase 4's product-side processor.
+- `includes/relations/class-data-broker.php` — single AJAX endpoint
+  `wp_ajax_jedb_relation_search_items` that delegates to whichever
+  `JEDB_Data_Target` matches the requested object slug. Adapter-aware,
+  so the same endpoint serves CCT, CPT, Woo product, and Woo
+  variation searches uniformly.
+- `includes/relations/class-runtime-loader.php` — detects CCT edit
+  pages (`admin.php?page=jet-cct-{slug}`), looks up the config, builds
+  per-relation payload (with `cct_side` resolved from the relation's
+  parent/child object strings), enqueues JS + CSS, localizes via
+  `wp_localize_script` as `window.jedbRelationConfig`.
+- `includes/relations/class-transaction-processor.php` — registers
+  BOTH `jet-engine/custom-content-types/created-item/{slug}` AND
+  `updated-item/{slug}` hooks for every CCT with an enabled relation
+  config. Different argument shapes per L-014 (created has
+  `$item_id`, updated does not — extracted from `$item['_ID']`). Each
+  hook reads `$_POST['jedb_relations']`, verifies the
+  `jedb_relations_nonce`, dispatches to the attacher. Wrapped in
+  try/catch end-to-end so a fatal in our code never blocks the CCT
+  save itself.
+- `includes/admin/class-tab-relations.php` — admin tab class. Three
+  POST handlers: save config, toggle enabled, delete. Helper
+  `get_relations_per_cct()` returns the list of valid JE Relations
+  per CCT (filtered to ones whose endpoints resolve to registered
+  targets) for the picker dropdowns.
+- `templates/admin/tab-relations.php` — main template. Lists existing
+  config cards + the "Add a new configuration" form with a CCT
+  dropdown that, on change, populates the relations checkbox list
+  client-side from a JSON map embedded in the page.
+- `templates/admin/relation-config-card.php` — single config card.
+  Per-relation checkbox row with type, this-CCT-side, other-side
+  label, and storage-table OK/MISSING pill. Toggle, edit, delete
+  forms.
+- `assets/js/relation-injector.js` — picker UI. Ports RI's verified
+  flow: form-poll for `form[action*="jet-cct-save-item"]` (or
+  fallback selector); inject "Relations" block before submit
+  button; modal-based search with 300ms debounce; chip rendering for
+  selected items; serialize selections into hidden input on form
+  submit. **No cascading / hierarchical UI in v1** — deferred to
+  Phase 2.5.
+- `assets/css/relation-injector.css` — styles for both the CCT
+  edit-screen picker block + modal, and the Relations admin tab's
+  config cards.
+
+#### Modified files (2)
+
+- `includes/class-plugin.php` — `load_core()` now requires every new
+  relation class file and instantiates the three runtime singletons
+  (data broker, runtime loader, transaction processor).
+- `includes/admin/class-admin-shell.php` — registers `JEDB_Tab_Relations`
+  alongside the existing tab classes.
+
+### Deferred to Phase 2.5+
+
+- **Cascading hierarchical relations** (grandparent / grandchild). RI's
+  most complex code (~600 lines including the cascading modal); doesn't
+  apply to BBHQ's flat 1:1 bridges. Phase 2.5 if/when needed.
+- **"Add New" related-item creation from the picker modal.** Cleaner
+  to build alongside Phase 4's Bridge meta box which has the same UX
+  needs. Picker is select-existing only in v1.
+- **Per-relation `display_field` selection.** Auto-default via Phase 1's
+  `Target_*::list_records()` heuristic (`name`/`title`/`set_name`/
+  `mosaic_name`/`label` → first match). Add an explicit picker in
+  Phase 2.5 if the heuristic ever picks wrong.
+- **Per-config `injection_point` setting** (`before_save` vs
+  `after_fields`). Hardcoded to `before_save` in v1. RI editors never
+  touched this knob.
+
+### Phase 2 punch list (verified by writing test bridges, NOT by static review)
+
+These three remain to confirm/refute on staging. From L-014:
+
+1. **JE cache invalidation post-insert.** Direct SQL works, but does it
+   leave stale data in JE listing-grid result caches, smart-filter
+   query caches, or transients? Test plan: configure relation #8
+   (Available Set → Product), create a new CCT row with picker
+   selection, immediately load a JE Listing on the front-end — does
+   the new connection appear?
+2. **`many_to_many` UNIQUE constraint.** RI assumes you can re-insert
+   the same `(parent_object_id, child_object_id)` pair on M:M. Need
+   to test with a real M:M relation if/when one exists on the test
+   site.
+3. **Relation row "updated" timestamp.** Probably we just leave it
+   alone (relation rows are connection records, not data records),
+   but worth confirming once.
+
+Findings will be appended to LESSONS-LEARNED.md as L-016+ once tested.
+
+### Changed
+
+- Plugin version bumped to **0.3.0** (minor bump because this is the
+  first phase that writes to JE-managed tables; major architectural
+  milestone). DB version stays at 1.1.0 (no schema changes).
+
 ## [0.2.7] — 2026-02-28
 
 ### Fixed — JE 3.8+ field-schema resolution + prefix discipline

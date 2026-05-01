@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** Phase 1 complete — discovery layer + four target adapters (CCT, CPT, Woo Product, Woo Variation) + Targets admin inventory. No sync logic exercised yet (write paths exist but Phase 2 is the first to use them).
+**Status:** Phase 2 complete — relation picker on CCT edit screens. Editors can attach JE Relations to a new CCT row in a single save (no more "save twice" UX). Relations themselves remain authored in JetEngine → Relations; this plugin only configures which ones the picker exposes per CCT. Direct-SQL writes follow the L-014 verified contract.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -89,7 +89,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the eight-phase plan and exit cri
 |---|---|---|
 | 0  | Skeleton, tables, snippet folder, status screen | **✅ Complete** |
 | 1  | Discovery + Targets (CCT, CPT, Woo Product, Woo Variation) | **✅ Complete** |
-| 2  | Relation Injector port | Pending |
+| 2  | Relation Injector port (picker on CCT edit screens) | **✅ Complete** |
 | 3  | Flattener port (PULL/PUSH + Field Locker + Bulk Sync + transformers) | Pending |
 | 4  | Woo product target + Bridge meta box + Bridges admin tab | Pending |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
