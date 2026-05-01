@@ -927,3 +927,305 @@ have semantics customers learn — don't subvert them for engineering
 convenience.
 
 ---
+
+## L-016: JetEngine auto-creates the related post on CCT save, but ONLY in one direction
+
+**Discovered:** 2026-05-01 (Phase 2 / version 0.3.1)
+**Severity:** High
+**Category:** API drift / Wrong assumption
+
+### Context
+Phase 2's transaction processor was designed assuming the plugin would
+either create related records itself (per the original Phase 4 design)
+or attach editor-picked records via the picker. We hadn't accounted
+for JetEngine's own auto-create behavior.
+
+### Wrong
+We treated JE Relations as a passive storage primitive — JE owns the
+table, we write to it via the verified L-014 contract. We didn't know
+JE actively *creates* the related post on CCT save when the relation
+is configured for it.
+
+### Reality (verified by user testing 2026-05-01)
+JetEngine Relations supports an "auto-create related item" toggle in
+the relation's settings. When enabled:
+
+1. CCT row is saved (created or updated).
+2. JE checks if a related post already exists via the relation table.
+3. If not, JE calls `wp_insert_post()` to create one. Title is
+   populated from a configured CCT field (typically the title field);
+   description optional.
+4. JE writes the relation row in `{prefix}jet_rel_{id}`.
+5. The `created-item/{slug}` action fires.
+
+**Critical caveat: this works in ONE direction only.** Configuring
+the CCT → product auto-create does NOT enable the reverse. When a
+product is created directly in WooCommerce (not through JE's CCT
+flow), JE does NOT auto-create a corresponding CCT row. The user
+verified this on 2026-05-01: products created via WC's admin appear
+in `wp_posts` but no row appears in `wp_jet_rel_{id}` and no CCT
+row materializes.
+
+### Architectural implication
+Cooperate with JE for the CCT → post direction:
+- JE handles the create + relation insert.
+- Our Phase 3 flatten engine hooks at priority 20+ on the same
+  `created-item/{slug}` and pushes ADDITIONAL mapped fields onto the
+  JE-created post.
+- Then calls `WC_Product->save()` to refresh the WC lookup table
+  (covers L-017).
+
+For the post → CCT direction, JE provides nothing. Our plugin's
+reverse-sync layer (BUILD-PLAN §4.10, added in 0.3.1) is the only
+place this can happen. Hooks: `save_post_{type}`, optionally
+`woocommerce_new_product` / `woocommerce_update_product` for Woo.
+
+### Affected code
+- `includes/relations/class-transaction-processor.php` — Phase 2's
+  picker-driven attach path is unaffected; it still works at priority
+  10 because explicit picker selections don't conflict with JE's
+  auto-create (auto-create only fires when no relation row exists,
+  the picker creates one).
+- Phase 3 flatten engine (planned): MUST register at priority 20+ to
+  guarantee JE's auto-create has finished.
+
+### Prevention
+When porting code that touches a third-party relation system, **test
+both directions of every supposed-bidirectional behavior** before
+assuming they're symmetric. JE Relations look bidirectional in
+queries but auto-create is a one-way switch.
+
+---
+
+## L-017: WooCommerce product visibility — `wc_get_products()` is unreliable for picker / discovery use cases
+
+**Discovered:** 2026-05-01 (Phase 2 / version 0.3.1)
+**Severity:** High
+**Category:** API drift
+
+### Context
+The Phase 2 picker on the CCT edit screen calls
+`Target_Woo_Product::list_records()` which uses `wc_get_products()` to
+find candidate Woo products to relate. User tested: created a CCT
+row that triggered JE's auto-create of a Woo product (verified by
+direct SQL — products 397, 398, 399 all `post_status='publish'`),
+then opened our picker and the new products didn't appear.
+
+### Wrong
+Two false hypotheses ruled out by the user's SQL:
+1. **Status filter mismatch.** I assumed JE creates with `auto-draft`
+   and our `array('publish', 'private', 'draft')` filter excluded it.
+   FALSE. Verified: JE creates with `publish`.
+2. **`wc_product_meta_lookup` row missing → not visible.** Was unable
+   to verify directly because MariaDB rejected the LIMIT-in-subquery
+   syntax, but circumstantially this is still the most likely
+   underlying cause.
+
+### Reality
+`wc_get_products()` is a high-level WC wrapper that filters by
+several internal criteria beyond just `post_status`:
+- The `_visibility` meta key (set by `WC_Product->save()`)
+- The `wc_product_meta_lookup` table (populated by
+  `WC_Product->save()`)
+- Product visibility taxonomy
+
+A post created via raw `wp_insert_post( ['post_type' => 'product'] )`
+— which is what JE's auto-create does — is a "skeleton" product. It
+exists in `wp_posts` with the right `post_type`, but lacks every WC
+meta convention until `WC_Product->save()` is called on it once.
+Until then, it's invisible to `wc_get_products()` even though
+`post_status='publish'` and `post_type='product'`.
+
+### Resolution
+Switch `Target_Woo_Product::list_records()` to use **`WP_Query` with
+`post_type='product'`** directly. WP_Query doesn't care about WC's
+visibility meta or lookup table. We lose nothing useful for picker
+purposes — the picker is showing every product as a candidate, not
+filtering by purchasability.
+
+For PUSH writes through `update()` we still go through
+`WC_Product->save()` (HPOS-safe per L-014 / D-10), which has the
+side effect of populating the lookup table the first time it runs
+on a JE-created product. So the bug self-heals after the first PUSH.
+
+For products that JE creates and the editor never pushes anything to,
+the lookup table stays stale. A "Reconcile WC lookup" Utilities-tab
+button (deferred to Phase 5) is the long-term fix.
+
+### Affected code
+- `includes/targets/class-target-woo-product.php` — `list_records()`
+
+### Fix shipped in
+v0.3.1.
+
+### Prevention
+For discovery use cases (pickers, search, inventory), prefer raw
+`WP_Query` over `wc_get_products()` when the target is a post type.
+Reserve `WC_Product` API for read/write operations on records you've
+already identified.
+
+---
+
+## L-018: Phase 3 flatten engine MUST register at priority >= 20 on JE CCT save hooks
+
+**Discovered:** 2026-05-01 (Phase 2 / version 0.3.1)
+**Severity:** Medium (forward-looking; Phase 3 hasn't shipped)
+**Category:** Architecture / Defensive coding
+
+### Context
+Direct consequence of L-016. Phase 2's transaction processor
+registers at priority 10 on `created-item/{slug}` and that's fine
+for picker-driven explicit attaches. Phase 3's flatten engine MUST
+fire AFTER JE has finished its own auto-create logic.
+
+### Reality
+WordPress action priorities run in ascending numeric order. JE's
+own `created-item/{slug}` consumers (including the auto-create
+related-post code path) run at priority 10. Anything that needs to
+observe a fully-constructed JE state must register at >= 20.
+
+### Resolution
+Phase 3 Flatten engine hooks register at priority 20. Documented
+here as the contract; Phase 3 implementation is required to honor
+it. Same applies to any future code that needs to read the related
+post that JE just created.
+
+### Affected code
+None yet. Phase 3 implementation will reference this entry.
+
+### Prevention
+WP action priorities are the only contract for "what runs when"
+within a single request. Document priority requirements explicitly
+when an action chain has ordering constraints.
+
+---
+
+## L-019: RI's primary historical purpose was taxonomy attachment, not relation attachment
+
+**Discovered:** 2026-05-01 (Phase 2 / decision-log)
+**Severity:** Low (historical note; informs Phase 3+ scope)
+**Category:** Documentation
+
+### Context
+User clarified during Phase 2.5 design discussion (2026-05-01):
+> "the whole point of RI was more about showing avialble taxonommys
+> to a post before the CCT is saved. this way taxonomys could be
+> established on first save."
+
+This recontextualizes the entire RI port. RI was named "Relation
+Injector" but its dominant use case was attaching **taxonomies** to
+new CCT items in a single save — a parallel problem to relations
+since both require the CCT row to exist before the attachment can
+happen.
+
+### Reality
+RI's data broker (`includes/class-data-broker.php`) explicitly
+supports `terms::*` object slugs alongside `cct::*` and `posts::*`.
+The taxonomy support is built into:
+- `search_taxonomy_terms()` (line ~458)
+- `create_taxonomy_term()` (line ~149)
+- `get_taxonomy_term()` (line ~281)
+
+Phase 2 of this plugin shipped with `cct::*` and `posts::*` target
+adapters but NO `terms::*` adapter. So a CCT that has a relation to
+a taxonomy term cannot use our picker for that side. The picker
+silently skips relations whose `other_object` slug doesn't resolve
+to a registered target — the user wouldn't see them as an option.
+
+### Resolution
+Adding a `JEDB_Target_Term` adapter (or generalizing the registry
+to handle the `terms::` kind) is a deferred capability. Could land
+in Phase 2.5 as a small additive improvement, OR in Phase 3
+alongside the field-mapping UI (taxonomy assignments from CCT
+fields are a common flatten config pattern).
+
+For now, taxonomy-side relations are an acknowledged gap. The
+Phase 2 `Tab_Relations` admin filters out invalid relations
+silently; we should add a "skipped because no adapter" pill in the
+admin tab so the user knows when this happens.
+
+### Affected code
+- `includes/targets/class-target-registry.php` — needs a
+  `JEDB_Target_Term` adapter and registration
+- `includes/admin/class-tab-relations.php`
+  `get_relations_per_cct()` — should mark unsupported sides
+
+### Fix planned for
+Phase 2.5 hotfix (admin marker only) + Phase 3 (full term adapter).
+NOT shipped in 0.3.1 to keep that release tightly focused on the
+picker bug fix and architecture documentation.
+
+### Prevention
+"Plugin name" is a marketing concept; "plugin actual capability" is
+a code concept. When porting from a plugin called "X Injector",
+read the actual feature surface, don't assume the name describes
+it accurately.
+
+---
+
+## L-020: Bidirectional sync requires explicit reverse-direction handling — JE Relations doesn't help on the post side
+
+**Discovered:** 2026-05-01 (Phase 2 / decision-log)
+**Severity:** High
+**Category:** Architecture
+
+### Context
+User test on 2026-05-01: created a Woo product directly via the WC
+admin (no CCT flow involved). Result: the product exists in
+`wp_posts`, but no row appears in any `wp_jet_rel_*` table and no
+CCT row is created. JE Relations does NOT auto-create a CCT row when
+a product is created on its own (per L-016).
+
+### Wrong
+The original BUILD-PLAN §4.5 implied that JE Relations + the bridge
+meta box would handle bidirectional create. JE handles only one
+direction; the reverse is entirely our responsibility.
+
+### Reality
+Two genuinely separate code paths are needed:
+
+**Direction A: CCT → post (JE handles auto-create; we extend)**
+- Our Phase 3 flatten engine listens at priority 20+ on
+  `created-item/{slug}` / `updated-item/{slug}`.
+- JE has already created the related post and attached the relation
+  by the time we run.
+- We push additional mapped fields onto the JE-created post via
+  `WC_Product->save()`.
+
+**Direction B: post → CCT (we handle entirely)**
+- Hooks: `save_post_{type}`, plus optionally
+  `woocommerce_new_product` / `woocommerce_update_product` for Woo.
+- For each registered bridge config, evaluate the trigger + condition
+  (per the conditional engine §4.9).
+- If the post should bridge to a CCT row but no relation exists yet,
+  optionally auto-create the CCT row (via
+  `JEDB_Target_CCT::create()`) and attach the relation via
+  `JEDB_Relation_Attacher::attach()`.
+- If the relation exists, just push mapped fields onto the existing
+  CCT row.
+
+The user explicitly endorsed this asymmetry (2026-05-01):
+> "...support both the case where we deffer to JE to make a relation
+> one way (and follow through with our own syncing of fields) and
+> then if the admin chooses, to manually sync another way, it will
+> do so."
+
+### Resolution
+- BUILD-PLAN gains §4.10 "Reverse-direction sync (post → CCT)".
+- Trigger configuration becomes a per-direction concept (push trigger
+  for direction A, pull trigger for direction B).
+- D-17 / D-18 / D-19 added to the Decisions Log to lock the
+  asymmetry, the trigger taxonomy, and the hook priority contract.
+
+### Affected code
+None yet. Phase 3 will implement direction A; direction B is Phase
+3.5 or Phase 4 depending on scope decisions.
+
+### Prevention
+"Bidirectional sync" needs to be designed as two separate uni-
+directional flows from day one. The two flows are NOT inverses, do
+not run on symmetric hooks, and have different failure modes. Always
+spec them separately and only tie them together at the conceptual
+"bridge" level.
+
+---

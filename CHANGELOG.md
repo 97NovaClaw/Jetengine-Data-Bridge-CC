@@ -2,6 +2,65 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] — 2026-05-01
+
+### Fixed
+
+- **Picker on CCT edit screen now sees JE-auto-created products.**
+  Phase 2 used `wc_get_products()` to populate the picker's search
+  results, which filters by `_visibility` meta and the
+  `wc_product_meta_lookup` table — both populated only by
+  `WC_Product->save()`. Posts created via raw `wp_insert_post()`
+  (which is what JetEngine Relations' auto-create does) are
+  therefore invisible to `wc_get_products()` until they've been saved
+  through the WC API once. `Target_Woo_Product::list_records()` now
+  uses `WP_Query` directly. Documented as L-017.
+
+### Added — design documentation for Phase 3 + Phase 4
+
+No new feature code beyond the picker bug fix above. Substantial
+documentation locking in the bidirectional sync architecture before
+Phase 3 implementation begins:
+
+- **L-016** — JetEngine auto-creates the related post on CCT save in
+  ONE direction only. Reverse direction (post → CCT) is not handled
+  by JE; our plugin owns it entirely.
+- **L-017** — `wc_get_products()` is unreliable for picker / discovery
+  use cases because of its visibility-meta + lookup-table filtering.
+  Use `WP_Query` for discovery, reserve `WC_Product` for read/write
+  on already-identified records.
+- **L-018** — Phase 3 flatten engine MUST register at priority >= 20
+  on JE CCT save hooks so JE's own auto-create has finished first.
+  Phase 2's transaction processor stays at priority 10 because it
+  handles explicit picker-driven attaches (no JE-auto-create
+  conflict possible).
+- **L-019** — RI's primary historical purpose was taxonomy
+  attachment, not relation attachment. Plugin's `terms::*` adapter
+  support is a deferred capability for Phase 2.5+ / Phase 3.
+- **L-020** — Bidirectional sync requires explicit reverse-direction
+  handling. The two flows (CCT → post and post → CCT) are NOT
+  inverses, run on different hooks, and need separate engine paths.
+
+- **BUILD-PLAN updates:**
+  - §4.9 expanded with explicit **trigger taxonomy** (the *when* axis)
+    separate from condition (the *whether* axis). v1 trigger types:
+    `cct_save`, `cct_field_changed`, `post_save`, `wc_product_save`,
+    `term_assigned`, `manual`, `bulk`. Cron-based triggers deferred.
+  - New §4.10 — Reverse-direction sync (post → CCT) — full engine
+    flow including the `auto_create_target_when_unlinked` opt-in
+    flag (default off) and explicit cycle-prevention notes via
+    `Sync_Guard` origin tagging.
+  - Decisions Log additions:
+    - **D-17** JE auto-create is one-directional; reverse is ours.
+    - **D-18** Trigger taxonomy as a separate axis from condition.
+    - **D-19** Hook priority contract (>= 20 for Phase 3+ engines).
+
+### Changed
+
+- Plugin version bumped to **0.3.1** (patch — picker bug fix +
+  documentation expansion; no schema changes; DB version stays at
+  1.1.0).
+
 ## [0.3.0] — 2026-02-28
 
 ### Added — Phase 2: Relation Injector port

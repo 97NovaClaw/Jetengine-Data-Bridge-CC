@@ -632,10 +632,34 @@ function jedb_snippet_my_strip_lego_trademark( $value, array $context = [] ) {
 
 …while keeping every individual bridge a clean, predictable 1:1 source-target sync.
 
+**Trigger taxonomy** (the *when* axis — per L-018 / D-18):
+
+A bridge config declares its trigger separately from its condition. Triggers
+are *what event causes the engine to evaluate the bridge*; conditions are
+*whether to apply once it's evaluating*. Both axes get DSL + snippet escape
+hatches in v1, but for v1 only a small set of trigger types is supported.
+
+| Trigger slug | Fires on | Direction | Notes |
+|---|---|---|---|
+| `cct_save` | `jet-engine/custom-content-types/created-item/{slug}` AND `updated-item/{slug}` at priority 20+ (per L-018 to let JE finish auto-create first) | push | Default for CCT-source bridges. |
+| `cct_field_changed` | Same hooks, but only if a declared watch-list of CCT fields actually changed value | push | More efficient than `cct_save` when only specific field changes should propagate. Diff calculation via the `$prev_item` arg from the updated-item hook. |
+| `post_save` | `save_post_{post_type}`, priority 20+ | pull | For non-Woo CPTs and JE-managed CPTs alike. |
+| `wc_product_save` | `woocommerce_new_product` + `woocommerce_update_product`, priority 20+ | pull | WC-specific so we get the typed product object. |
+| `term_assigned` | `set_object_terms` for a watched taxonomy/term combination | push or pull | E.g., "when a product gets the `Mosaics` category, ensure a Mosaic CCT row exists." Implements §4.10's auto-link pattern. |
+| `manual` | Editor clicks a "Sync now" button on the bridge admin tab | push or pull | Bypasses both trigger and condition; always evaluates. |
+| `bulk` | Editor runs a bulk-sync utility from the Utilities tab | push or pull | Iterates every record matching a query, applies bridge with both trigger and condition checks bypassed. |
+| `cron` *(deferred — Phase 7+)* | A scheduled task | push or pull | For periodic reconciliation on sites with high churn. |
+
+Each bridge config carries a `trigger` field (string) and an optional
+`trigger_args` object (e.g., `{ "watched_fields": ["price", "stock_quantity"] }`
+for `cct_field_changed`, or `{ "taxonomy": "product_cat", "terms": ["mosaics"] }`
+for `term_assigned`). The conditional engine reads these to wire the right
+hooks at boot.
+
 **Engine flow** (called by the flattener / transaction processor / bulk-sync runner):
 
-1. **Trigger fires.** A CCT row saves, a product saves, the editor clicks a manual sync button, or the cron runs bulk re-sync.
-2. **Candidate collection.** `JEDB_Flattener::collect_bridges_for_source($source_target_slug, $direction)` returns every bridge config in `wp_jedb_flatten_configs` whose `source_target` matches and whose `enabled = 1`.
+1. **Trigger fires.** A configured trigger (per the taxonomy above) hits its hook.
+2. **Candidate collection.** `JEDB_Flattener::collect_bridges_for_trigger($trigger_slug, $context)` returns every bridge config whose `trigger` matches AND whose `enabled = 1`. Direction (push vs pull) is implicit from the trigger.
 3. **Sort by priority.** Lower `priority` (default 100) runs first. Ties resolved by `id ASC` for determinism.
 4. **For each candidate, evaluate condition** via `JEDB_Condition_Evaluator::evaluate( $condition_dsl, $condition_snippet, $context )`:
    - If both empty → return `true`.
@@ -680,6 +704,69 @@ The DSL path resolver maps `{cct.foo}` to `$source_data['foo']` when source is a
 **Cycle detection:** if bridge A fires bridge B which fires bridge A again, `Sync_Guard` (§5) detects via origin tagging and refuses the recursive write. Logged as `skipped_locked`.
 
 **Editor UX (Phase 4 deliverable):** the Bridges admin tab "Add condition" UI shows a syntax cheatsheet drawer + sample value picker that pulls live values from one of the user's actual records to validate the DSL parses + returns the expected bool. Same drawer offers "Switch to snippet mode" which generates a stub snippet pre-populated with the current DSL converted to PHP for the user to extend.
+
+### 4.10 Reverse-direction sync (post → CCT)
+
+> **Locked decision (D-17):** JE Relations auto-creates the related post on
+> CCT save in **one direction only**. The reverse — creating a CCT row when
+> a post is created independently in WC or directly via WP — is entirely
+> our responsibility. Documented in `LESSONS-LEARNED.md` L-016 + L-020.
+
+**The asymmetry, made explicit:**
+
+| Direction | What JE does | What our plugin does |
+|---|---|---|
+| **CCT → post** (push direction) | Auto-creates the post via `wp_insert_post()`, populates title (and optionally description) from configured CCT fields, attaches the relation row. | Hooks at priority 20+ on `created-item/{slug}` AND `updated-item/{slug}`. Pushes ADDITIONAL mapped fields onto the JE-created post. Calls `WC_Product->save()` to refresh the WC lookup table (covers L-017). |
+| **post → CCT** (pull direction) | Nothing — JE does not auto-create CCT rows when a post is saved. | The entire pipeline. Hook the post-save action, find or create the related CCT row, push mapped fields onto it. |
+
+**Reverse-direction engine flow:**
+
+1. **Hook fires.** One of the post-save triggers from §4.9's taxonomy:
+   - `wc_product_save` → fires on `woocommerce_new_product` + `woocommerce_update_product` for products.
+   - `post_save` → fires on `save_post_{type}` for non-Woo CPTs.
+   - `term_assigned` → fires when a watched taxonomy term is set on a post.
+2. **Candidate collection.** Find every bridge config whose direction is `pull` (or `bidirectional`) and whose `source_target` matches the post's type — e.g., `posts::product`.
+3. **Condition evaluation.** Per §4.9. Conditions are how the editor scopes "only sync if product has category Mosaics" or "only if SKU starts with M-".
+4. **Find or create the CCT row.**
+   - Query the relation table for an existing connection involving this post.
+   - If found: load that CCT row, that's our target.
+   - If not found AND the bridge config has `auto_create_target_when_unlinked: true`:
+     - Call `JEDB_Target_CCT::create([...minimal seed fields...])` to create a new CCT row. Seed fields are typically the bridge config's mapped fields, populated from the just-saved post's values via the `pull_transform` chain.
+     - Call `JEDB_Relation_Attacher::attach($relation_id, $parent_id, $child_id)` to link them.
+   - If not found AND `auto_create_target_when_unlinked: false`: log as `status='skipped_no_target'` and stop. The editor must manually link via the Phase 4 Bridge meta box.
+5. **Push mapped fields onto the CCT row.** Run the `pull_transform` chain per mapping, then call `JEDB_Target_CCT::update($id, $fields)`.
+6. **Log to `wp_jedb_sync_log`** as `status='success'` (or per §4.9's status taxonomy).
+
+**Why this isn't symmetric with §4.9's CCT → post path:**
+
+- JE owns post creation in the forward direction (one-time `wp_insert_post`); we cannot intercept it without breaking JE.
+- JE does NOT own CCT creation in the reverse direction; we have full control over when and how.
+- The forward direction always finds the post already created by JE; the reverse direction must decide whether to auto-create or not.
+- Therefore: forward bridges have NO `auto_create_target_when_unlinked` flag (always implicit-yes via JE); reverse bridges DO have it (default false; editor opts in per bridge type).
+
+**Cycle prevention** is critical here:
+
+- Reverse-direction sync writes to a CCT row.
+- That CCT write fires `updated-item/{slug}`.
+- The Phase 3 forward flatten engine listens on that hook and writes back to the post.
+- That post write fires `wc_product_save` (or `save_post_{type}`).
+- We're back at step 1 with a recursive cycle.
+
+`JEDB_Sync_Guard` (§5) catches this via origin tagging — every write
+carries a `$context['origin']` (e.g., `'reverse_pull'`, `'forward_push'`)
+and the guard's per-request lock refuses re-entry on the same
+`(direction, source_id, target_id)` triplet. Logged as
+`status='skipped_locked'`. Without the guard, this cycle is the
+default-failure mode of bidirectional sync; with it, it's a no-op.
+
+**Editor UX (Phase 4 / 4.5 deliverable):**
+
+- The Bridges admin tab gains a "Direction" toggle per bridge config:
+  - `Push only` (CCT → post; uses §4.9 forward path)
+  - `Pull only` (post → CCT; uses §4.10 reverse path)
+  - `Bidirectional` (registers both)
+- For `Pull only` and `Bidirectional`, an additional "Auto-create CCT row when unlinked post is saved" checkbox surfaces (default off — opt-in to keep the surface area conservative).
+- Per-direction trigger pickers (per §4.9) so the editor can configure the WHEN axis for each direction independently.
 
 ---
 
@@ -862,6 +949,9 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | D-14 | **Conditional bridges (M:1 / 1:N routing)** | **In scope.** Multiple bridge configs may share a `source_target`. Each carries an optional `condition` (declarative DSL) and/or `condition_snippet`. The conditional engine evaluates conditions before each bridge applies; matching bridges run in declared `priority` order. Each individual bridge is still 1:1 (D-1) — conditions just keep the matching set disjoint. | New §3.5 (DSL grammar) + §4.9 (conditional engine). New `JEDB_Condition_Evaluator` class. Adds `condition`, `condition_snippet`, `priority`, `dsl_version` columns/keys to `wp_jedb_flatten_configs`. Same snippet runtime as D-9. Sync log gains `skipped_condition` and `skipped_error` statuses. See L-013. |
 | D-15 | **Mandatory-field policy** | **Adapter-owned, bridge-overridable.** Each `JEDB_Data_Target` declares `get_required_fields()`. Bridge type config can extend or relax via `required_overrides: { add: [], remove: [] }`. Bridges admin UI shows a "Mandatory coverage" panel that warns (does not block) when required target fields aren't covered by the mapping, with three remediations: add a mapping, attach a synthesizing snippet, mark intentionally-unmapped. | Adds `get_required_fields()` to the `JEDB_Data_Target` interface in Phase 4. Adapter defaults: Target_CCT `[]`, Target_CPT `['post_title']`, Target_Woo_Product `['name', 'status']`, Target_Woo_Variation `['parent_id', 'attributes']`. See L-011. |
 | D-16 | **Field-render-hint ownership** | **Adapter-owned via `is_natively_rendered($field_name)`.** Bridge meta box on the WC product edit screen renders inputs ONLY for fields where the adapter returns false (i.e. fields with no native Woo input). Native fields stay in their native boxes; the sync engine talks to them via the `WC_Product` setter API. | Adds `is_natively_rendered()` to the `JEDB_Data_Target` interface in Phase 4. Target_Woo_Product returns true for typed-setter fields + standard taxonomies; false for arbitrary meta keys. Conflict detection (two configs both wanting to render the same custom field) surfaces as a warning in the Bridges admin tab BEFORE save. See L-012. |
+| D-17 | **JE auto-create is one-directional; reverse direction is ours** | JetEngine Relations auto-creates the related post on CCT save (CCT → post direction) when configured. The reverse (post → CCT) is **not** handled by JE. Our plugin owns the entire reverse-direction pipeline. | Forward-direction bridges have NO `auto_create` flag (JE handles it). Reverse-direction bridges DO have an opt-in `auto_create_target_when_unlinked` flag (default false). Two distinct hook sets, two distinct engine paths (§4.9 forward + §4.10 reverse). See L-016, L-020. |
+| D-18 | **Trigger taxonomy** is a separate axis from condition | A bridge config carries both a `trigger` (what event causes evaluation) and an optional `condition` (whether to apply once evaluating). v1 trigger types: `cct_save`, `cct_field_changed`, `post_save`, `wc_product_save`, `term_assigned`, `manual`, `bulk`. Cron-based triggers deferred to Phase 7+. | Each bridge config has `trigger` + optional `trigger_args` (e.g., watched fields for `cct_field_changed`). Engine wires the right hooks at boot based on the registered triggers across all enabled bridges. See §4.9 + L-013/L-018. |
+| D-19 | **Hook priority contract** for Phase 3+ engines | Phase 2's relation-injector transaction processor registers at priority 10 on `created-item/{slug}` (correct for picker-driven attaches). Phase 3+ flatten engine MUST register at priority **>= 20** so JE's auto-create logic finishes first. Documented as a hard contract. | Compile-time check: any code that hooks `created-item/{slug}` or `updated-item/{slug}` for sync purposes (not picker purposes) uses priority 20. New `JEDB_FLATTEN_HOOK_PRIORITY` constant (= 20) referenced by every flatten-engine `add_action` call. See L-018. |
 
 ---
 

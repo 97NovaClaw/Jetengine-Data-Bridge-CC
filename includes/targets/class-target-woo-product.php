@@ -289,31 +289,71 @@ class JEDB_Target_Woo_Product extends JEDB_Target_Abstract {
 		return isset( $counts->publish ) ? (int) $counts->publish : 0;
 	}
 
+	/**
+	 * List candidate products for the picker. Uses WP_Query directly (NOT
+	 * `wc_get_products()`) per L-017 — `wc_get_products()` filters by
+	 * `_visibility` meta and the `wc_product_meta_lookup` table, both of
+	 * which are populated only by `WC_Product->save()`. Posts created via
+	 * raw `wp_insert_post()` (e.g., JE Relations' auto-create) are
+	 * therefore invisible to `wc_get_products()` until they've been saved
+	 * through the WC API once.
+	 *
+	 * For picker / discovery use cases we want the COMPLETE list of
+	 * products regardless of WC's internal visibility flags, so WP_Query
+	 * is the right tool. We then load each match through `wc_get_product()`
+	 * to format the label with the SKU when available; if WC can't load a
+	 * particular ID, we fall back to the post title.
+	 */
 	public function list_records( array $args = array() ) {
-
-		if ( ! function_exists( 'wc_get_products' ) ) {
-			return array();
-		}
 
 		$per_page = isset( $args['per_page'] ) ? absint( $args['per_page'] ) : 25;
 		$page     = isset( $args['page'] )     ? absint( $args['page'] )     : 1;
 		$search   = isset( $args['search'] )   ? (string) $args['search']    : '';
 
-		$products = wc_get_products( array(
-			'limit'   => $per_page,
-			'page'    => $page,
-			'status'  => array( 'publish', 'private', 'draft' ),
-			's'       => $search,
-			'orderby' => 'date',
-			'order'   => 'DESC',
-		) );
+		$query_args = array(
+			'post_type'      => self::POST_TYPE,
+			'post_status'    => array( 'publish', 'private', 'draft', 'pending' ),
+			'posts_per_page' => $per_page,
+			'paged'          => $page,
+			'orderby'        => 'ID',
+			'order'          => 'DESC',
+			'no_found_rows'  => true,
+			'fields'         => 'ids',
+		);
 
-		$out = array();
+		if ( '' !== $search ) {
+			$query_args['s'] = $search;
+		}
 
-		foreach ( $products as $product ) {
+		$query = new WP_Query( $query_args );
+		$out   = array();
+
+		if ( empty( $query->posts ) ) {
+			return $out;
+		}
+
+		foreach ( $query->posts as $post_id ) {
+
+			$post_id = (int) $post_id;
+			$label   = '';
+			$sku     = '';
+
+			if ( function_exists( 'wc_get_product' ) ) {
+				$product = wc_get_product( $post_id );
+				if ( $product ) {
+					$label = (string) $product->get_name();
+					$sku   = (string) $product->get_sku();
+				}
+			}
+
+			if ( '' === $label ) {
+				$post  = get_post( $post_id );
+				$label = $post ? (string) $post->post_title : sprintf( 'Product #%d', $post_id );
+			}
+
 			$out[] = array(
-				'id'    => (int) $product->get_id(),
-				'label' => $product->get_name() . ( $product->get_sku() ? ' [' . $product->get_sku() . ']' : '' ),
+				'id'    => $post_id,
+				'label' => $sku ? $label . ' [' . $sku . ']' : $label,
 			);
 		}
 
