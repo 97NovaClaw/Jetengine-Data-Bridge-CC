@@ -854,31 +854,54 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-### Phase 0 — Skeleton (½ day)
+> **Live status as of 2026-05-01:** Phases 0, 1, 2, and 2.5 are complete (v0.3.1 on `main`). Phase 3 is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+
+### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
 - Create `class-plugin.php` singleton with empty subsystem registration.
-- Create `class-config-db.php` with `install()` that creates the three custom tables.
+- Create `class-config-db.php` with `install()` that creates the four custom tables.
 - Activation/uninstall hooks wired.
 - Empty admin shell with one "Hello" tab.
 - ✅ **Exit criterion**: plugin activates clean on a fresh JE+Woo site, creates tables, shows admin menu.
 
-### Phase 1 — Discovery + Targets (1 day)
+### Phase 1 — Discovery + Targets (1 day) ✅
 - Port and merge `class-discovery.php` from RI + PAC VDM.
 - Build `interface-data-target.php` and the four target classes (`Target_CCT`, `Target_CPT`, `Target_Woo_Product`, `Target_Woo_Variation`).
 - `Target_Registry` with `register()` / `get()` / `all()`.
 - Targets tab shows a read-only list of all discovered targets.
 - ✅ **Exit criterion**: Targets tab on a real site lists every CCT, every public CPT, every product, and every variation without errors.
 
-### Phase 2 — Relation Injector port (1 day)
+### Phase 2 — Relation Injector port (1 day) ✅
 - Port RI's runtime loader, transaction processor, admin tab, JS.
 - Test on Brick Builder HQ's `available_sets_data` CCT.
 - ✅ **Exit criterion**: editor can create a new CCT item AND attach a relation in one save, identical to RI's behavior today.
 
-### Phase 3 — Flattener port (1.5 days)
-- Port PAC VDM's flattener, field locker, bulk sync, transformers.
-- Wire `Sync_Guard` everywhere flattener writes.
-- Flatten tab in admin (relation-config-card style cards for flatten configs).
-- ✅ **Exit criterion**: PULL and PUSH work between two CCTs, and the field-locker UI lights up for sourced fields.
+### Phase 2.5 — Bidirectional architecture lock + picker visibility fix (½ day) ✅
+- Documented the JE one-directional auto-create + post-side reverse responsibility (L-016, L-020, D-17).
+- Added trigger taxonomy as a separate axis from condition (D-18, §4.9).
+- Locked Phase 3+ hook priority contract (D-19, L-018).
+- Added §4.10 — reverse-direction sync (post → CCT) full engine flow.
+- Switched `Target_Woo_Product::list_records()` from `wc_get_products()` to `WP_Query` so the picker sees JE-auto-created products (L-017).
+- ✅ **Exit criterion**: picker on CCT edit screen finds every product on the site regardless of whether it was created via WC API or JE auto-create; bidirectional architecture is documented before any flatten code is written.
+
+### Phase 3 — Flattener forward direction (2 days) ▶ **NEXT UP**
+- Port PAC VDM's flattener engine, generalized.
+- New `JEDB_Flatten_Config_Manager` (CRUD on `wp_jedb_flatten_configs`).
+- New `JEDB_Flattener` runs on JE CCT save hooks at **priority ≥ 20** per D-19, so JE's own auto-create has finished before we read the related post.
+- Push-direction transformer pipeline + condition evaluator + sync log writes (per §4.9).
+- Flatten admin tab with the field-mapping UI (D-12 explicit-only, D-15 mandatory coverage panel, D-16 adapter-owned `is_natively_rendered`).
+- Field-existence checker pattern adapted from PAC VDM's role-mapping screen.
+- Wire `Sync_Guard` so PUSH writes never recurse (§5).
+- After every PUSH, call `WC_Product->save()` to refresh the WC lookup table — this is the side effect that makes JE-auto-created products visible to other Woo queries (L-017 long-term self-heal).
+- ✅ **Exit criterion**: when an editor saves a CCT row, mapped fields PUSH onto the related JE-auto-created post correctly. Flatten config UI lets editors add mappings, set per-direction transformer chains, and see mandatory coverage. Sync log records every push.
+
+### Phase 3.5 — Reverse-direction flatten (1 day)
+- Wire `wc_product_save` / `save_post_{type}` triggers per D-18.
+- New `JEDB_Reverse_Flattener` runs at priority ≥ 20 on those hooks.
+- Implement `auto_create_target_when_unlinked` flag (default off per D-17) — when a post saves and has no matching JE relation row, optionally create a CCT row via `JEDB_Target_CCT::create()` and attach via `JEDB_Relation_Attacher`.
+- Pull-direction transformer chain + condition evaluator.
+- Cycle prevention via `Sync_Guard` origin tagging — log `skipped_locked` when a forward-pushed value would loop back.
+- ✅ **Exit criterion**: editing a product directly in WC (not through any CCT flow) pushes mapped fields onto the linked CCT row OR auto-creates a CCT row when the bridge is configured to do so. No infinite sync loops.
 
 ### Phase 4 — Woo target & bridge meta box (3 days) — *the new code*
 - Implement `Target_Woo_Product` in full, with HPOS-safe writes.
@@ -989,9 +1012,59 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 
 ---
 
-## 11. Next Action
+## 11. Tooling — JetEngine MCP for live verification
 
-All decisions in §8 are locked. We proceed in this order:
+The plugin's parent workspace has the JetEngine MCP wired at
+`https://bbhq.legworklabs.com/wp-json/jet-engine/v1/mcp/` (config in
+`.cursor/mcp.json` at the workspace root, with Basic Auth credentials).
+When connected and exposed in the agent's tool list, the MCP supports
+direct introspection of the live JE site without uploading the plugin
+or running phpMyAdmin queries by hand.
+
+**Use the MCP for:**
+
+- Cross-checking discovery output against the actual JE state
+  (CCTs, CPTs, Relations, Glossaries, field schemas).
+- Reading `wp_jet_post_types` rows to verify CCT field config
+  (the L-007 storage layer).
+- Inspecting JE Relation auto-create configs per relation ID (L-016).
+- Sanity-checking new plugin features against actual JE behavior
+  before implementing.
+
+**When the MCP is unavailable**, the user can still run direct SQL
+via phpMyAdmin (the workflow used to crack L-007 and verify L-014).
+The MCP is a convenience that speeds up verification; it doesn't
+replace any architectural pattern.
+
+**MCP discoveries should still land in `LESSONS-LEARNED.md`** if
+they correct an assumption — it's the persistent memory for the
+plugin, not a transient session log.
+
+## 12. Next Action
+
+Phases 0, 1, 2, and 2.5 are complete (see `CHANGELOG.md` and the
+roadmap in §7). Phase 3 (forward-direction flatten engine + field-
+mapping admin tab) is the next implementation phase. Per §7's Phase
+3 spec:
+
+1. Build `JEDB_Flatten_Config_Manager` (CRUD on
+   `wp_jedb_flatten_configs`).
+2. Build `JEDB_Flattener` registered at priority ≥ 20 on JE CCT
+   save hooks (per D-19 / L-018).
+3. Build the Flatten admin tab UI (per D-12 / D-15 / D-16).
+4. Wire `Sync_Guard` so PUSH writes never recurse.
+5. Test end-to-end on Brick Builder HQ's `available_sets_data` →
+   product bridge.
+
+All architectural decisions Phase 3 needs are locked
+(D-1 through D-19). All known JE caveats are documented
+(L-001 through L-020). The picker bug from Phase 2 is fixed in
+v0.3.1 (L-017). No outstanding architectural questions block
+implementation.
+
+## 13. Historical reference: original "Next Action" notes from §8 lock-in
+
+(Kept for audit purposes — the work has been done.)
 
 1. **I scaffold Phase 0** — bootstrap, constants, empty class graph, all four custom tables (`wp_jedb_relation_configs`, `wp_jedb_flatten_configs`, `wp_jedb_sync_log`, `wp_jedb_snippets`), `Snippet_Installer` writes `uploads/jedb-snippets/.htaccess` + `index.php`, blank admin tab. Result is committable in one sitting and visible in WP admin. Lives in a new repo `legworkmedia/je-data-bridge-cc`.
 2. **You install on a staging copy** of bbhq.legworklabs.com and confirm it activates clean.
