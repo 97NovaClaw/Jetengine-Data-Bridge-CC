@@ -32,3 +32,10 @@ uploads/
 
 # Plan documents are kept; legacy reference plugins from the workspace are not
 # (this plugin lives in its own repo; the parent workspace folder is unrelated).
+
+# Temp files used by the AI agent to feed multi-line commit messages to git
+# (PowerShell doesn't support bash heredocs, so the agent writes the message
+# to disk, calls git commit -F, then deletes — but it should be ignored in
+# case a stray copy ever lands).
+.git_commit_msg.tmp
+*.git_commit_msg.tmp
