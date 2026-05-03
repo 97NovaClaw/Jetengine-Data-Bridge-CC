@@ -56,9 +56,11 @@ class JEDB_Flatten_Config_Manager {
 				'args' => array(),
 			),
 			'link_via'           => array(
-				'type'        => 'je_relation',
-				'relation_id' => '',
-				'side'        => 'auto',
+				'type'                    => 'je_relation',
+				'relation_id'             => '',
+				'side'                    => 'auto',
+				'fallback_to_single_page' => true,
+				'auto_attach_relation'    => true,
 			),
 			'required_overrides' => array(
 				'add'    => array(),
@@ -172,14 +174,21 @@ class JEDB_Flatten_Config_Manager {
 		}
 		unset( $m );
 
+		$defaults = self::default_config_json();
+
 		if ( ! is_array( $config['link_via'] ) ) {
-			$config['link_via'] = self::default_config_json()['link_via'];
+			$config['link_via'] = $defaults['link_via'];
+		} else {
+			// Deep-merge so existing bridge configs that were saved before
+			// fallback_to_single_page / auto_attach_relation existed still
+			// get sensible defaults applied on read (per L-021 self-heal).
+			$config['link_via'] = wp_parse_args( $config['link_via'], $defaults['link_via'] );
 		}
 		if ( ! is_array( $config['trigger'] ) ) {
-			$config['trigger'] = self::default_config_json()['trigger'];
+			$config['trigger'] = $defaults['trigger'];
 		}
 		if ( ! is_array( $config['required_overrides'] ) ) {
-			$config['required_overrides'] = self::default_config_json()['required_overrides'];
+			$config['required_overrides'] = $defaults['required_overrides'];
 		}
 
 		return $config;

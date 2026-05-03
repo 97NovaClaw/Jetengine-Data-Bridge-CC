@@ -1229,3 +1229,129 @@ spec them separately and only tie them together at the conceptual
 "bridge" level.
 
 ---
+
+## L-021: JetEngine "auto-create on CCT save" creates the linked POST (via Has-Single-Page), NOT the relation row
+
+**Discovered:** 2026-05-03 (Phase 3 / version 0.4.1)
+**Severity:** Critical
+**Category:** Wrong assumption / Architecture
+
+### Context
+End-to-end test on Brick Builder HQ staging: user created a Mosaic
+CCT, set `display_price_publicly = "no"`, saved. Expected behavior:
+forward-flatten engine resolves the linked Woo product, evaluates the
+condition (`{cct.display_price_publicly} == "yes"`), logs
+`skipped_condition`, and stops. Actual behavior: every recent
+mosaic save logged `skipped_no_target` instead — the engine never
+even reached the condition check.
+
+### Wrong
+L-016 and D-17 stated, in part, that "JE Relations auto-creates the
+related post on CCT save in one direction only". That phrasing was
+true *in spirit* but conflated two distinct JetEngine mechanisms,
+which led to a real bug in the flattener's link resolution.
+
+### Evidence
+
+**`wp_jet_rel_9` (Mosaic → Product relation table)** — exactly ONE row:
+
+| _ID | rel_id | parent_object_id | child_object_id |
+|---|---|---|---|
+| 1 | 9 | 1 (mosaic) | 395 (product) |
+
+Mosaic CCT rows `_ID = 2, 3, 4` have **no relation row at all** — yet
+their linked products clearly exist (the user confirmed "Single Page
+button works and the fields are synced", implying `cct_single_post_id`
+on each CCT row points to a real product post).
+
+**Sync log for source `cct::mosaics_data`** — every recent row:
+```
+status: skipped_no_target
+message: "no linked target — Phase 3.5 will optionally auto-create"
+context: {"link_via":{"type":"je_relation","relation_id":"9","side":"auto"}, ...}
+```
+
+The user's saved bridge config is correct (`condition` is set,
+`link_via.relation_id = "9"`), but the engine bailed at step 1
+because the relation table lookup returned 0.
+
+### Reality
+JetEngine has **two distinct auto-creation features** and they fire
+on different triggers:
+
+| Feature | What it auto-creates on CCT save | When |
+|---|---|---|
+| **"Has Single Page"** on the CCT | A linked post (CPT or Woo product, configurable) whose ID is stored in the CCT row's `cct_single_post_id` column | Always, when Has-Single-Page is enabled |
+| **JE Relation row** in `{prefix}jet_rel_{id}` | Nothing automatic | Only written when the user explicitly attaches via the picker UI (`Allow to create new children from parent` button), or when `JEDB_Relation_Attacher::attach()` is called from our own code |
+
+Earlier docs implied JE wrote the relation row "for free" when
+Has-Single-Page is on. **It does not.** The two systems are
+independent — Has-Single-Page populates `cct_single_post_id`; the
+relation table stays empty unless something explicitly inserts.
+
+This is why the user's mosaics 2/3/4 had products linked via
+`cct_single_post_id` (so the field-sync looked like it worked when
+testing earlier) but had no rows in `wp_jet_rel_9` (so JE Smart
+Filters / Listing Grids that traverse the relation see nothing). And
+in this 0.4.0 test, the engine — which tries the relation table
+first — found no row and gave up.
+
+### Fix shipped in
+v0.4.1 (commit pending, this release).
+
+`JEDB_Flattener::resolve_target_id()` reworked to a 3-step resolution
+chain:
+
+1. **JE Relation row lookup** (fast path, when present).
+2. **Fallback to `cct_single_post_id`** when the relation row is
+   missing AND `link_via.fallback_to_single_page` is true (default).
+   The fallback verifies the linked post's type matches the relation's
+   other endpoint, so we don't accidentally bridge a `story_bricks`
+   post into a `mosaics_data → product` relation.
+3. **Auto-attach** the missing relation row via the existing
+   `JEDB_Relation_Attacher::attach()` (idempotent) when
+   `link_via.auto_attach_relation` is true (default). After the first
+   sync, the relation table has the row, JE Smart Filters work, and
+   future syncs use the fast path. Self-heal.
+
+Sync log `context_json` now records `resolution: 'relation_row' |
+'fallback_single_page' | 'cct_single_post_id' | 'none'` and
+`auto_attached: true|false` so the user can see at a glance whether a
+particular sync used the fallback.
+
+The two new flags are exposed in the Flatten admin tab's "Self-heal
+options" fieldset under the link-via picker.
+
+### Affected code
+- `includes/flatten/class-flattener.php`
+  - `resolve_target_id()` — full rewrite, returns `[id, method, attached]` tuple
+  - new private `verify_single_post_matches_relation()`
+  - `apply_bridge()` — destructures the tuple, threads metadata into sync log context
+- `includes/flatten/class-flatten-config-manager.php`
+  - `default_config_json()` adds the two new flags
+  - `merge_with_defaults()` deep-merges `link_via` so existing bridge configs get the new keys on read
+- `templates/admin/tab-flatten.php` — new fieldset with two checkboxes
+- `assets/js/flatten-admin.js` — wires the checkboxes into config_json
+- `BUILD-PLAN.md` §4.5 + decisions log — updated wording
+- This file (L-021)
+
+### Prevention
+1. **Verify auto-create behavior empirically per JE feature, never
+   conflate them in docs.** Has-Single-Page and Relations are
+   different subsystems; treat them as such.
+2. **Always cross-reference the relation table directly when
+   debugging "no target" errors.** A missing relation row is much
+   more common than we assumed and won't show up in any JE admin
+   screen.
+3. **The plugin must self-heal whenever a verifiable link exists.**
+   Editors should never need to click a picker button to make a
+   bridge work; that defeats the purpose of having a bridge engine.
+4. **Document JE auto-create features as a TABLE, not prose.** Prose
+   conflates; tables make the distinction unambiguous.
+5. **When a sync logs `skipped_no_target`, the context_json must
+   carry enough info to diagnose without re-running.** v0.4.1 adds
+   `has_single_page` and `resolution` to the no-target log entry —
+   so anyone reading the sync log can immediately see "the link
+   exists via single-page but was rejected for X reason."
+
+---

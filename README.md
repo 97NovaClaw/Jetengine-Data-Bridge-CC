@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.4.0 — Phase 3 complete. Forward-direction flatten engine ships: editing a CCT row pushes mapped fields onto the linked WooCommerce / CPT record automatically, gated by per-bridge conditions and a per-direction transformer chain. Phase 3.5 (reverse direction, post → CCT) is the next implementation phase.
+**Status:** v0.4.1 — Phase 3 complete + self-heal hotfix. Forward-direction flatten engine ships: editing a CCT row pushes mapped fields onto the linked WooCommerce / CPT record automatically, gated by per-bridge conditions and a per-direction transformer chain. Per L-021, the engine self-heals missing JE Relation rows by falling back to `cct_single_post_id` and auto-attaching the relation — JE Smart Filters / Listing Grids work natively after the first sync, no manual picker click needed. Phase 3.5 (reverse direction, post → CCT) is the next implementation phase.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -41,7 +41,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.4.0)
+## What's actually shipped right now (v0.4.1)
 
 **Functional capabilities (cumulative through Phase 3):**
 
@@ -54,6 +54,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 - ✅ **Picker UI on CCT edit screens** — appears above the save button when a config is enabled. Modal-based search with 300ms debounce. Uses `WP_Query` directly so it sees products created by JE's auto-create (L-017).
 - ✅ **Direct-SQL relation writes per L-014 verified contract** — idempotent duplicate-check, type-aware clearing for 1:1 / 1:M, append for M:M.
 - ✅ **Forward-direction flatten engine** (Phase 3, v0.4.0) — editing a CCT row pushes mapped values onto its linked Woo / CPT record. Hooks at priority 20 per D-19 / L-018.
+- ✅ **JE Relation row self-heal** (v0.4.1) — when the relation row is missing, the engine falls back to `cct_single_post_id` and auto-attaches the relation row so JE Smart Filters / Listings work natively from the first sync. Per L-021. Two opt-out flags exposed in the Flatten admin tab.
 - ✅ **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 - ✅ **Sync Log** — every bridge invocation writes a row to `wp_jedb_sync_log` with status from the BUILD-PLAN §4.9 taxonomy (`success`, `partial`, `errored`, `skipped_condition`, `skipped_error`, `skipped_locked`, `skipped_no_target`, `noop`).
 - ✅ **Transformer registry** — 9 built-in transformers (`passthrough`, `yes_no_to_bool`, `regex_replace`, `format_number`, `lookup_table`, `name_builder`, `truncate_words`, `strip_html`, `year_expander`). Per D-11 / L-010 each transformer defines push and pull explicitly.
@@ -73,7 +74,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## Current file tree (v0.4.0)
+## Current file tree (v0.4.1)
 
 ```
 je-data-bridge-cc/
@@ -212,7 +213,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 1  | Discovery + Targets (CCT, CPT, Woo Product, Woo Variation) | **✅ Complete** (v0.2.x) |
 | 2  | Relation Injector port (picker on CCT edit screens) | **✅ Complete** (v0.3.0) |
 | 2.5 | Bidirectional architecture lock + picker visibility fix (L-016 → L-020, D-17 → D-19) | **✅ Complete** (v0.3.1) |
-| 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers | **✅ Complete** (v0.4.0) |
+| 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers + L-021 self-heal | **✅ Complete** (v0.4.0 → v0.4.1) |
 | 3.5 | Reverse-direction flatten (post → CCT) per BUILD-PLAN §4.10 | **▶ Next up** |
 | 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | Pending |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |

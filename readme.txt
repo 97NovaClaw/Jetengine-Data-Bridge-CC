@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.4.0
+Stable tag: 0.4.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.4.0) ==
+== Current Capability (v0.4.1) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -35,6 +35,7 @@ This is an in-progress port consolidating three earlier private plugins. Functio
 * Picker UI on CCT edit screens with modal-based search via WP_Query (sees all products, including those auto-created by JE Relations).
 * Direct-SQL relation writes per a verified contract (idempotent duplicate-check, type-aware clearing for 1:1 / 1:M).
 * **Forward-direction flatten engine** (Phase 3, v0.4.0) — editing a CCT row pushes mapped fields onto its linked Woo / CPT record. Hooks at priority 20 so JE's own auto-create finishes first.
+* **JE Relation row self-heal** (v0.4.1) — when a CCT row's relation row is missing but `cct_single_post_id` resolves to a valid linked post, the engine auto-attaches the relation row so JE Smart Filters / Listings work natively from the first sync. Per L-021.
 * **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 * **Sync Log** — every bridge invocation writes a row with status from the `success / partial / errored / skipped_condition / skipped_error / skipped_locked / skipped_no_target / noop` taxonomy.
 * **Transformer registry** — 9 built-ins (passthrough, yes_no_to_bool, regex_replace, format_number, lookup_table, name_builder, truncate_words, strip_html, year_expander). Each defines push and pull explicitly.
@@ -86,6 +87,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.4.1 =
+* Phase 3 hotfix — JE Relation row self-heal. End-to-end testing surfaced that JetEngine's "Has-Single-Page" creates the linked post (`cct_single_post_id`) but does NOT write a row to `{prefix}jet_rel_{id}`. The flattener now falls back to `cct_single_post_id` when the relation table is empty and auto-attaches the missing relation row (idempotent), so JE Smart Filters / Listings work from the first sync without a manual picker click. Both behaviors are opt-out flags. Sync log gains `resolution` and `auto_attached` context. Documented as L-021.
+
 = 0.4.0 =
 * Phase 3 — forward-direction flatten engine. Editing a CCT row now pushes mapped fields onto the linked Woo / CPT record automatically, gated by per-bridge conditions and serialized through a per-direction transformer chain. Adds: Sync Guard, Sync Log, Transformer Registry (9 built-ins), Condition Evaluator (v1 DSL), Flatten Config Manager, Flattener engine, and the Flatten admin tab UI. New `JEDB_FLATTEN_HOOK_PRIORITY` constant (= 20). New `get_required_fields()` / `is_natively_rendered()` methods on the data-target interface (D-15 / D-16) implemented across all four adapters.
 
@@ -103,6 +107,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.4.1 =
+Fixes a Phase 3 link-resolution bug discovered in staging. Bridges using `link_via.type = je_relation` now self-heal missing relation rows via `cct_single_post_id` fallback + idempotent auto-attach. No schema change. Backwards-compatible — existing 0.4.0 bridges get the new behavior on by default.
 
 = 0.4.0 =
 First release that actually moves data between sources and targets. Phase 3 flatten engine plus admin tab. No schema migration required.

@@ -2,6 +2,97 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] — 2026-05-03
+
+**Phase 3 hotfix — JE Relation row self-heal.**
+
+End-to-end testing on Brick Builder HQ staging surfaced a critical
+gap in the original L-016 / D-17 documentation: I had stated JE
+"auto-creates the related post on CCT save" without distinguishing
+between **two separate** JE auto-create features. The reality, now
+locked as L-021:
+
+| JE feature | What it auto-creates on CCT save |
+|---|---|
+| Has-Single-Page | A linked post (CPT or Woo product), ID stored in `cct_single_post_id` |
+| JE Relation row in `{prefix}jet_rel_{id}` | **Nothing** — only writes when the user attaches via picker |
+
+So a fresh CCT row with Has-Single-Page enabled gets a real linked
+post BUT no relation row, and the v0.4.0 flattener (which only
+checked the relation table) logged `skipped_no_target` even though
+the link was discoverable via `cct_single_post_id`.
+
+### Fixed
+
+- **`JEDB_Flattener::resolve_target_id()` self-heals missing relation rows.**
+  Resolution now follows a 3-step chain when `link_via.type = 'je_relation'`:
+  1. JE Relation row lookup (fast path).
+  2. Fallback to `cct_single_post_id` when no relation row exists,
+     `link_via.fallback_to_single_page` is on (default), and the
+     linked post's type matches the relation's other endpoint.
+  3. Auto-attach the missing relation row via the existing idempotent
+     `JEDB_Relation_Attacher::attach()` when `link_via.auto_attach_relation`
+     is on (default). After the first sync, JE Smart Filters /
+     Listing Grids / Query Builder traversals work natively, and
+     subsequent syncs use the fast path. **Self-heal.**
+
+  Verified: the fallback rejects type-mismatched candidates (e.g.
+  won't bridge a `story_bricks` post into a `mosaics_data → product`
+  relation) via a new private `verify_single_post_matches_relation()`
+  helper.
+
+### Added
+
+- **Two new bridge-config flags** (both default true to make the
+  sensible behavior the default):
+  - `link_via.fallback_to_single_page`
+  - `link_via.auto_attach_relation`
+
+  Exposed in the Flatten admin tab's "Self-heal options" fieldset
+  with explanatory help text. The Flatten config manager's
+  `merge_with_defaults()` now deep-merges the `link_via` subtree so
+  bridges saved before 0.4.1 get the new keys filled in on read
+  (no migration needed).
+
+- **Sync log context now records resolution metadata.** Every
+  `success` / `partial` / `errored` row's `context_json` carries:
+  - `resolution`: `'relation_row'` | `'fallback_single_page'` |
+    `'cct_single_post_id'` | `'none'`
+  - `auto_attached`: `bool` — true when the fallback wrote a relation row
+
+  And every `skipped_no_target` row carries:
+  - `has_single_page`: `bool` — whether the source had a non-zero
+    `cct_single_post_id`
+  - `resolution`: which step the resolver gave up at
+
+  This makes diagnosing future link-resolution bugs trivial without
+  re-running the sync.
+
+### Documentation
+
+- **`LESSONS-LEARNED.md` L-021** added — the most architecturally
+  important entry to date. Distinguishes JE's two auto-create
+  features in a verifiable table, captures the user's empirical
+  evidence (relation table inspection + sync log SQL), and links
+  to every code change.
+- **`BUILD-PLAN.md` §4.5** rewritten — adds the "Self-heal:
+  auto-attach when JE Relation row is missing" subsection.
+- **D-13 / D-17 refined** in the Decisions Log to reflect the
+  separation between relation *definitions* (manual / preset-only)
+  and relation *rows* (self-heal automatic).
+
+### Notes for upgraders
+
+- **No schema migration needed.** Bridges saved in 0.4.0 work as-is
+  with the self-heal behavior turned ON by default (the new flags
+  default to true when missing from saved JSON).
+- **If you want strict explicit-attach behavior**, edit each bridge
+  in the Flatten tab and uncheck "Fall back to cct_single_post_id"
+  and/or "Auto-attach the missing relation row".
+- **Existing relation rows are never overwritten.** The auto-attach
+  uses the existing idempotent `attach()` method which checks for
+  duplicates first.
+
 ## [0.4.0] — 2026-05-02
 
 **Phase 3 — forward-direction (CCT → post) flatten engine + admin tab.**

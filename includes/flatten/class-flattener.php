@@ -209,11 +209,13 @@ class JEDB_Flattener {
 			return JEDB_Sync_Log::STATUS_ERRORED;
 		}
 
-		$target_id = $this->resolve_target_id( $config, $source_target, $source_id, $source_data );
+		list( $target_id, $resolution_method, $auto_attached ) = $this->resolve_target_id( $config, $source_target, $source_id, $source_data );
 
 		if ( ! $target_id ) {
 			$this->log_status( $bridge, $source_id, '', JEDB_Sync_Log::STATUS_SKIPPED_NO_TARGET, $origin_tag, 'no linked target — Phase 3.5 will optionally auto-create', array(
-				'link_via' => isset( $config['link_via'] ) ? $config['link_via'] : null,
+				'link_via'         => isset( $config['link_via'] ) ? $config['link_via'] : null,
+				'resolution'       => $resolution_method,
+				'has_single_page'  => isset( $source_data['cct_single_post_id'] ) && (int) $source_data['cct_single_post_id'] > 0,
 			) );
 			return JEDB_Sync_Log::STATUS_SKIPPED_NO_TARGET;
 		}
@@ -313,9 +315,11 @@ class JEDB_Flattener {
 			$message = $ok ? sprintf( 'wrote %d field(s)', count( $payload ) ) : 'target adapter update returned false';
 
 			$this->log_status( $bridge, $source_id, $target_id, $status, $origin_tag, $message, array(
-				'fields'      => array_keys( $payload ),
-				'noop_fields' => $noop_count,
-				'per_field'   => $per_field,
+				'fields'        => array_keys( $payload ),
+				'noop_fields'   => $noop_count,
+				'per_field'     => $per_field,
+				'resolution'    => $resolution_method,
+				'auto_attached' => $auto_attached,
 			) );
 
 			return $status;
@@ -323,8 +327,10 @@ class JEDB_Flattener {
 		} catch ( \Throwable $e ) {
 
 			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_ERRORED, $origin_tag, $e->getMessage(), array(
-				'file' => $e->getFile(),
-				'line' => $e->getLine(),
+				'file'          => $e->getFile(),
+				'line'          => $e->getLine(),
+				'resolution'    => $resolution_method,
+				'auto_attached' => $auto_attached,
 			) );
 			return JEDB_Sync_Log::STATUS_ERRORED;
 
@@ -344,7 +350,31 @@ class JEDB_Flattener {
 	 * "skipped_no_target" rather than a hard error (Phase 3.5's auto-create
 	 * flag turns it into a create instead).
 	 *
-	 * @return int
+	 * Resolution order for `link_via.type = 'je_relation'`:
+	 *   1. JE Relation row in `{prefix}jet_rel_{id}` — fast path.
+	 *   2. **Fallback** to `cct_single_post_id` when (a) no relation row
+	 *      exists, (b) `link_via.fallback_to_single_page` is on (default
+	 *      true), (c) the source CCT row has Has-Single-Page enabled with
+	 *      `cct_single_post_id` populated, (d) the linked post's type
+	 *      matches the relation's other endpoint.
+	 *   3. **Auto-attach**: when fallback resolves successfully and
+	 *      `link_via.auto_attach_relation` is on (default true), write
+	 *      a relation row so JE Smart Filters / Listing Grids see the link
+	 *      from this point forward. The next sync uses the fast path.
+	 *
+	 * Background (L-021): JE's "auto-create" on CCT save creates the linked
+	 * post via Has-Single-Page (`cct_single_post_id`); it does NOT write a
+	 * relation row. Without this fallback, a fresh CCT row that has its
+	 * single-page post but no picker-driven attach would log
+	 * `skipped_no_target` forever and frontend filters would never see the
+	 * link. The auto-attach makes the bridge self-heal on the first sync.
+	 *
+	 * The third return value of the array signals to the caller whether an
+	 * auto-attach happened, for sync-log context.
+	 *
+	 * @return array{int, string, bool}  [target_id, resolution_method, auto_attached]
+	 *                                   resolution_method ∈ 'relation_row' | 'cct_single_post_id'
+	 *                                                       | 'fallback_single_page' | 'none'
 	 */
 	public function resolve_target_id( array $config, $source_target, $source_id, array $source_data ) {
 
@@ -352,23 +382,24 @@ class JEDB_Flattener {
 		$type = isset( $link['type'] ) ? (string) $link['type'] : 'je_relation';
 
 		if ( 'cct_single_post_id' === $type ) {
-			return isset( $source_data['cct_single_post_id'] ) ? absint( $source_data['cct_single_post_id'] ) : 0;
+			$id = isset( $source_data['cct_single_post_id'] ) ? absint( $source_data['cct_single_post_id'] ) : 0;
+			return array( $id, $id ? 'cct_single_post_id' : 'none', false );
 		}
 
 		$relation_id = isset( $link['relation_id'] ) ? (string) $link['relation_id'] : '';
 		if ( '' === $relation_id ) {
-			return 0;
+			return array( 0, 'none', false );
 		}
 
 		$attacher = new JEDB_Relation_Attacher();
 		$relation = $attacher->get_relation_object( $relation_id );
 		if ( ! $relation ) {
-			return 0;
+			return array( 0, 'none', false );
 		}
 
 		$cct_slug = 0 === strpos( $source_target, 'cct::' ) ? substr( $source_target, 5 ) : '';
 		if ( '' === $cct_slug ) {
-			return 0;
+			return array( 0, 'none', false );
 		}
 
 		$declared_side = isset( $link['side'] ) ? (string) $link['side'] : 'auto';
@@ -379,7 +410,7 @@ class JEDB_Flattener {
 		}
 
 		if ( 'none' === $source_side ) {
-			return 0;
+			return array( 0, 'none', false );
 		}
 
 		global $wpdb;
@@ -387,7 +418,7 @@ class JEDB_Flattener {
 
 		$exists = $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
 		if ( ! $exists ) {
-			return 0;
+			return array( 0, 'none', false );
 		}
 
 		if ( 'parent' === $source_side ) {
@@ -396,7 +427,90 @@ class JEDB_Flattener {
 			$row = $wpdb->get_var( $wpdb->prepare( "SELECT parent_object_id FROM `{$table}` WHERE child_object_id = %d ORDER BY _ID DESC LIMIT 1", absint( $source_id ) ) ); // phpcs:ignore WordPress.DB.PreparedSQL,WordPress.DB.DirectDatabaseQuery
 		}
 
-		return $row ? absint( $row ) : 0;
+		if ( $row ) {
+			return array( absint( $row ), 'relation_row', false );
+		}
+
+		$fallback_enabled = ! isset( $link['fallback_to_single_page'] ) || ! empty( $link['fallback_to_single_page'] );
+		if ( ! $fallback_enabled ) {
+			return array( 0, 'none', false );
+		}
+
+		$single_post_id = isset( $source_data['cct_single_post_id'] ) ? absint( $source_data['cct_single_post_id'] ) : 0;
+		if ( ! $single_post_id ) {
+			return array( 0, 'none', false );
+		}
+
+		if ( ! $this->verify_single_post_matches_relation( $relation, $source_side, $single_post_id ) ) {
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( '[Flattener] cct_single_post_id fallback rejected — post type mismatch', 'warning', array(
+					'relation_id'   => $relation_id,
+					'source_id'     => $source_id,
+					'single_post_id' => $single_post_id,
+				) );
+			}
+			return array( 0, 'none', false );
+		}
+
+		$auto_attach = ! isset( $link['auto_attach_relation'] ) || ! empty( $link['auto_attach_relation'] );
+		$attached    = false;
+
+		if ( $auto_attach ) {
+			$parent_id = ( 'parent' === $source_side ) ? absint( $source_id )    : $single_post_id;
+			$child_id  = ( 'parent' === $source_side ) ? $single_post_id          : absint( $source_id );
+
+			$result = $attacher->attach( $relation_id, $parent_id, $child_id );
+			$attached = ( true === $result || 'exists' === $result );
+
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( '[Flattener] auto-attached JE relation via cct_single_post_id fallback (L-021 self-heal)', 'info', array(
+					'relation_id' => $relation_id,
+					'cct_slug'    => $cct_slug,
+					'side'        => $source_side,
+					'parent_id'   => $parent_id,
+					'child_id'    => $child_id,
+					'result'      => $result,
+				) );
+			}
+		}
+
+		return array( $single_post_id, 'fallback_single_page', $attached );
+	}
+
+	/**
+	 * Verify a candidate `cct_single_post_id` value points to a post whose
+	 * type matches the relation's other endpoint (i.e. NOT the source CCT's
+	 * side). Prevents the fallback from incorrectly attaching, e.g., a
+	 * `story_bricks` post to a `mosaics_data → product` relation.
+	 *
+	 * @param object $relation     JE relation instance.
+	 * @param string $source_side  'parent' | 'child' — which side the source CCT is on.
+	 * @param int    $post_id
+	 * @return bool
+	 */
+	private function verify_single_post_matches_relation( $relation, $source_side, $post_id ) {
+
+		if ( ! $relation || ! method_exists( $relation, 'get_args' ) ) {
+			return false;
+		}
+
+		$args  = $relation->get_args();
+		$other = ( 'parent' === $source_side )
+			? ( isset( $args['child_object'] )  ? (string) $args['child_object']  : '' )
+			: ( isset( $args['parent_object'] ) ? (string) $args['parent_object'] : '' );
+
+		if ( '' === $other ) {
+			return false;
+		}
+
+		$parsed = JEDB_Discovery::instance()->parse_relation_object( $other );
+
+		if ( 'posts' !== $parsed['type'] ) {
+			return false;
+		}
+
+		$post = get_post( absint( $post_id ) );
+		return $post && $post->post_type === $parsed['slug'];
 	}
 
 	/* -----------------------------------------------------------------------

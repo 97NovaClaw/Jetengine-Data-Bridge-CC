@@ -222,6 +222,28 @@ endif;
 						<?php endforeach; ?>
 					</select>
 					<p class="description"><?php esc_html_e( 'Only relations whose endpoints involve both the chosen source and target are listed. (Re-pick source/target then save once for this list to refresh.)', 'je-data-bridge-cc' ); ?></p>
+
+					<fieldset style="margin-top:12px;padding:10px 14px;background:#f6f7f7;border:1px solid #dcdcde;border-radius:4px;">
+						<legend style="font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:0.04em;color:#50575e;padding:0 6px;">
+							<?php esc_html_e( 'Self-heal options (when JE Relation is the link type)', 'je-data-bridge-cc' ); ?>
+						</legend>
+						<label style="display:block;margin:6px 0;">
+							<input type="checkbox" name="link_via_fallback_to_single_page" value="1" <?php checked( ! isset( $config['link_via']['fallback_to_single_page'] ) || ! empty( $config['link_via']['fallback_to_single_page'] ) ); ?> />
+							<?php esc_html_e( 'Fall back to cct_single_post_id when no relation row exists', 'je-data-bridge-cc' ); ?>
+							<br>
+							<small style="color:#646970;display:block;margin-left:24px;">
+								<?php esc_html_e( 'JetEngine Has-Single-Page creates the linked post on CCT save but does NOT write a relation row. Per L-021, this fallback resolves the target via the single-page link when the relation row is missing — so the bridge works on the very first sync without a manual picker click.', 'je-data-bridge-cc' ); ?>
+							</small>
+						</label>
+						<label style="display:block;margin:6px 0;">
+							<input type="checkbox" name="link_via_auto_attach_relation" value="1" <?php checked( ! isset( $config['link_via']['auto_attach_relation'] ) || ! empty( $config['link_via']['auto_attach_relation'] ) ); ?> />
+							<?php esc_html_e( 'Auto-attach the missing relation row when the fallback fires', 'je-data-bridge-cc' ); ?>
+							<br>
+							<small style="color:#646970;display:block;margin-left:24px;">
+								<?php esc_html_e( 'After the first sync, the relation row exists in the JE relation table. JE Smart Filters / Listing Grids / Query Builder traversals work natively from then on. Subsequent syncs use the fast path. Idempotent — never duplicates rows.', 'je-data-bridge-cc' ); ?>
+							</small>
+						</label>
+					</fieldset>
 				</td>
 			</tr>
 			<tr>

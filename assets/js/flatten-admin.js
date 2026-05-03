@@ -249,9 +249,11 @@
 		if ( isNaN( cfg.priority ) ) { cfg.priority = 100; }
 
 		cfg.link_via = $.extend( {}, cfg.link_via || {}, {
-			type:        $linkRadios.filter( ':checked' ).val() || 'je_relation',
-			relation_id: $relationSel.val() || '',
-			side:        ( cfg.link_via && cfg.link_via.side ) || 'auto'
+			type:                    $linkRadios.filter( ':checked' ).val() || 'je_relation',
+			relation_id:             $relationSel.val() || '',
+			side:                    ( cfg.link_via && cfg.link_via.side ) || 'auto',
+			fallback_to_single_page: $form.find( 'input[name="link_via_fallback_to_single_page"]' ).is( ':checked' ),
+			auto_attach_relation:    $form.find( 'input[name="link_via_auto_attach_relation"]' ).is( ':checked' )
 		} );
 
 		if ( ! cfg.trigger ) {
@@ -286,7 +288,7 @@
 
 	$tbody.on( 'change', 'select, input, textarea', syncJSON );
 
-	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority', syncJSON );
+	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"]', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_condition', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 
