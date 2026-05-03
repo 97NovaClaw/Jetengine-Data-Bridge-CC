@@ -234,6 +234,29 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 		return JEDB_Discovery::instance()->get_woo_variation_count();
 	}
 
+	/**
+	 * A variation MUST belong to a parent product and must declare its
+	 * variation attributes — without those, Woo treats it as orphaned.
+	 * Per D-15 we surface that in the Phase 3 mandatory-coverage panel.
+	 */
+	public function get_required_fields() {
+		return array( 'parent_id', 'attributes' );
+	}
+
+	/**
+	 * Variations are rendered natively by Woo's variations panel inside the
+	 * variable parent product's edit screen. Every typed-setter field is
+	 * thus natively rendered; arbitrary meta is not.
+	 */
+	public function is_natively_rendered( $field_name ) {
+
+		if ( isset( self::$typed_setters[ $field_name ] ) ) {
+			return true;
+		}
+
+		return in_array( $field_name, array( 'id', 'date_created', 'date_modified' ), true );
+	}
+
 	public function list_records( array $args = array() ) {
 
 		if ( ! function_exists( 'wc_get_products' ) ) {

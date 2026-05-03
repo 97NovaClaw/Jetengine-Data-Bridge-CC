@@ -87,9 +87,22 @@ class JEDB_Plugin {
 		require_once JEDB_PLUGIN_DIR . 'includes/relations/class-runtime-loader.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/relations/class-transaction-processor.php';
 
+		require_once JEDB_PLUGIN_DIR . 'includes/class-sync-guard.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/class-sync-log.php';
+
+		require_once JEDB_PLUGIN_DIR . 'includes/flatten/transformers/interface-transformer.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/flatten/transformers/class-transformer-registry.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-condition-evaluator.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flatten-config-manager.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flattener.php';
+
 		JEDB_Relation_Data_Broker::instance();
 		JEDB_Relation_Runtime_Loader::instance();
 		JEDB_Relation_Transaction_Processor::instance();
+
+		JEDB_Sync_Guard::instance();
+		JEDB_Sync_Log::instance();
+		JEDB_Flattener::instance();
 	}
 
 	/**

@@ -248,3 +248,125 @@
 .jedb-deep-probe table {
 	background: #fff;
 }
+
+/* Flatten tab */
+
+.jedb-flatten-list {
+	margin-top: 8px;
+}
+
+.jedb-flatten-list code {
+	font-size: 11px;
+	color: #50575e;
+}
+
+.jedb-flatten-mappings {
+	background: #fff;
+	margin-top: 6px;
+}
+
+.jedb-flatten-mappings th {
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: #50575e;
+}
+
+.jedb-flatten-mappings td {
+	vertical-align: top;
+	padding: 8px 10px;
+}
+
+.jedb-flatten-mappings select.jedb-field-select {
+	width: 100%;
+	min-width: 180px;
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+	font-size: 12px;
+}
+
+.jedb-flatten-mappings .jedb-chain {
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+
+.jedb-flatten-mappings .jedb-chain-step {
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+	padding: 6px 8px;
+}
+
+.jedb-flatten-mappings .jedb-chain-step select.jedb-chain-name {
+	width: calc(100% - 40px);
+	font-size: 12px;
+}
+
+.jedb-flatten-mappings .jedb-chain-step .jedb-chain-remove {
+	float: right;
+	color: #b32d2e;
+	border-color: #f0b3b3;
+}
+
+.jedb-flatten-mappings .jedb-chain-args {
+	margin-top: 6px;
+	display: flex;
+	flex-direction: column;
+	gap: 4px;
+}
+
+.jedb-flatten-mappings .jedb-chain-arg {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	font-size: 11px;
+	color: #50575e;
+}
+
+.jedb-flatten-mappings .jedb-chain-arg input,
+.jedb-flatten-mappings .jedb-chain-arg select,
+.jedb-flatten-mappings .jedb-chain-arg textarea {
+	font-size: 12px;
+	padding: 3px 6px;
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+}
+
+.jedb-flatten-mappings .jedb-chain-add {
+	align-self: flex-start;
+	font-size: 11px;
+}
+
+.jedb-flatten-required {
+	background: #fff8e1;
+	border: 1px solid #f0d77a;
+	border-radius: 6px;
+	padding: 12px 16px;
+	margin-bottom: 12px;
+}
+
+.jedb-flatten-required.jedb-required-empty {
+	background: #f6f7f7;
+	border-color: #dcdcde;
+}
+
+.jedb-required-list {
+	margin: 6px 0 0 16px;
+	padding: 0;
+}
+
+.jedb-required-list li {
+	margin: 2px 0;
+}
+
+.jedb-flatten-manual-sync {
+	background: #f0f6fc;
+	border: 1px solid #c3d6ec;
+	border-radius: 6px;
+	padding: 12px 16px;
+	display: inline-block;
+	margin-top: 8px;
+}
+
+.jedb-flatten-manual-sync label {
+	margin-right: 12px;
+}

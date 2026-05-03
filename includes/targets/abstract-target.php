@@ -50,6 +50,27 @@ abstract class JEDB_Target_Abstract implements JEDB_Data_Target {
 	}
 
 	/**
+	 * Default: nothing is required. Concrete adapters override.
+	 *
+	 * @return array<int,string>
+	 */
+	public function get_required_fields() {
+		return array();
+	}
+
+	/**
+	 * Default: nothing is natively rendered (safe choice — over-rendering
+	 * by the bridge meta box is preferable to under-rendering). Concrete
+	 * adapters override.
+	 *
+	 * @param string $field_name
+	 * @return bool
+	 */
+	public function is_natively_rendered( $field_name ) {
+		return false;
+	}
+
+	/**
 	 * Helper: parse our composite slug into ['kind' => ..., 'object' => ...].
 	 */
 	public static function parse_slug( $slug ) {

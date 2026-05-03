@@ -90,4 +90,36 @@ interface JEDB_Data_Target {
 	 * @return array<int,array{id:mixed,label:string}>
 	 */
 	public function list_records( array $args = array() );
+
+	/**
+	 * Field names this adapter considers REQUIRED on a write — i.e. names
+	 * that must appear in the payload (as keys; any non-empty value is OK)
+	 * for `create()` / `update()` to be considered valid.
+	 *
+	 * Used by the Phase 3 mandatory-coverage panel (see D-15) to warn when
+	 * a flatten config's mappings don't cover every required field on the
+	 * target side. Adapters may return an empty array if there is no
+	 * inherent requirement (CCT, generic CPT with no must-haves).
+	 *
+	 * @return array<int,string>
+	 */
+	public function get_required_fields();
+
+	/**
+	 * Whether the named field is rendered NATIVELY by the host system on its
+	 * own edit screen (e.g. WooCommerce renders `name`, `regular_price`
+	 * itself; arbitrary post-meta keys are NOT natively rendered).
+	 *
+	 * Phase 4's "Bridge to CCT" meta box uses this to decide which fields it
+	 * needs to render itself; for Phase 3 the admin UI uses it to flag
+	 * "this field is editable in the host UI" hints next to each mapping.
+	 *
+	 * Defaults are safe: adapters that don't override return `false`, which
+	 * means the meta box will end up rendering everything (over-rendering is
+	 * less harmful than under-rendering).
+	 *
+	 * @param string $field_name
+	 * @return bool
+	 */
+	public function is_natively_rendered( $field_name );
 }

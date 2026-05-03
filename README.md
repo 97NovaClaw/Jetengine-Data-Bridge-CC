@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.3.1 — Phase 2.5 complete. Relation picker on CCT edit screens works end-to-end, including for products created by JetEngine's own auto-create. Bidirectional-sync architecture is locked in BUILD-PLAN; Phase 3 (flatten engine + field-mapping UI) is the next implementation phase.
+**Status:** v0.4.0 — Phase 3 complete. Forward-direction flatten engine ships: editing a CCT row pushes mapped fields onto the linked WooCommerce / CPT record automatically, gated by per-bridge conditions and a per-direction transformer chain. Phase 3.5 (reverse direction, post → CCT) is the next implementation phase.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -41,25 +41,30 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.3.1)
+## What's actually shipped right now (v0.4.0)
 
-**Functional capabilities:**
+**Functional capabilities (cumulative through Phase 3):**
 
 - ✅ **Custom plugin tables created on activation** (`wp_jedb_relation_configs`, `wp_jedb_flatten_configs`, `wp_jedb_sync_log`, `wp_jedb_snippets`).
 - ✅ **Snippets uploads folder** (`wp-content/uploads/jedb-snippets/`) with `.htaccess` (`deny from all`) + silent `index.php`.
 - ✅ **Discovery layer** — finds every CCT, public CPT, JE Relation, JE Glossary, Woo product type, Woo variation, and Woo taxonomy on the site. JE 3.8+ field-schema resolution via `wp_jet_post_types` (channel #1 in resolver chain — see L-007).
-- ✅ **Four target adapters** (CCT, CPT, Woo Product, Woo Variation) with HPOS-safe writes. Each with `get_field_schema()`, `get`, `update`, `create`, `list_records`, `count`, etc.
+- ✅ **Four target adapters** (CCT, CPT, Woo Product, Woo Variation) with HPOS-safe writes. Each with `get_field_schema()`, `get`, `update`, `create`, `list_records`, `count`, `get_required_fields()` (D-15), `is_natively_rendered()` (D-16).
 - ✅ **Targets admin tab** — read-only inventory of every discovered record store, with field counts split into `<user-fields> / +<system-fields>`.
 - ✅ **Relations admin tab** — configure which JE Relations the picker UI exposes per CCT. **Relations themselves are still authored in JetEngine → Relations** (D-13).
-- ✅ **Picker UI on CCT edit screens** — appears above the save button when a config is enabled. Modal-based search with 300ms debounce. **As of 0.3.1, picker uses `WP_Query` directly** (not `wc_get_products()`) so it sees products created by JE's auto-create (L-017).
+- ✅ **Picker UI on CCT edit screens** — appears above the save button when a config is enabled. Modal-based search with 300ms debounce. Uses `WP_Query` directly so it sees products created by JE's auto-create (L-017).
 - ✅ **Direct-SQL relation writes per L-014 verified contract** — idempotent duplicate-check, type-aware clearing for 1:1 / 1:M, append for M:M.
+- ✅ **Forward-direction flatten engine** (Phase 3, v0.4.0) — editing a CCT row pushes mapped values onto its linked Woo / CPT record. Hooks at priority 20 per D-19 / L-018.
+- ✅ **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
+- ✅ **Sync Log** — every bridge invocation writes a row to `wp_jedb_sync_log` with status from the BUILD-PLAN §4.9 taxonomy (`success`, `partial`, `errored`, `skipped_condition`, `skipped_error`, `skipped_locked`, `skipped_no_target`, `noop`).
+- ✅ **Transformer registry** — 9 built-in transformers (`passthrough`, `yes_no_to_bool`, `regex_replace`, `format_number`, `lookup_table`, `name_builder`, `truncate_words`, `strip_html`, `year_expander`). Per D-11 / L-010 each transformer defines push and pull explicitly.
+- ✅ **Condition Evaluator** — v1 declarative DSL parser per BUILD-PLAN §3.5. Operators: `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `not_contains`, `starts_with`, `ends_with`, `in`, `not_in`. Logical: `AND`, `OR`, `NOT`.
+- ✅ **Flatten admin tab** — bridge list + add/edit form with: source/target picker, link-via picker (JE Relation or `cct_single_post_id`), priority, condition DSL with live "Validate" button, mandatory-coverage panel (D-15), explicit two-column field-mapping table with per-direction transformer chain pickers (D-11), native-rendered hint per target field (D-16), manual "Sync now" button, raw-JSON `<details>` editor.
 - ✅ **Debug tab** — log viewer (last 500 lines tailing), enable/disable toggle, clear/download buttons, deep-probe diagnostic for JE field storage and per-CCT internals.
 
-**What's NOT shipped yet (Phase 3+):**
+**What's NOT shipped yet (Phase 3.5+):**
 
-- ❌ Field-mapping UI — picker is select-only; can't push CCT fields onto the related post yet.
-- ❌ PUSH/PULL flatten engine — write `wp_jedb_flatten_configs` exists but no engine reads it.
-- ❌ Reverse-direction sync (post → CCT) — locked in BUILD-PLAN §4.10, not implemented.
+- ❌ Reverse-direction sync (post → CCT) — locked in BUILD-PLAN §4.10, ships in Phase 3.5. Editing a Woo product directly does not yet propagate back to its bridged CCT row.
+- ❌ Snippet-mode for `condition_snippet` — bridges that set it log `skipped_error` until Phase 5b ships the snippet runtime. Declarative DSL conditions work fully.
 - ❌ Bridge meta box on Woo product edit screen — Phase 4.
 - ❌ Variation reconciliation engine — Phase 4b.
 - ❌ Custom Code Snippets runtime — Phase 5b. Settings table reserved.
@@ -68,7 +73,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## Current file tree (v0.3.1)
+## Current file tree (v0.4.0)
 
 ```
 je-data-bridge-cc/
@@ -84,14 +89,16 @@ je-data-bridge-cc/
 │   ├── class-plugin.php                     Singleton, schema upgrade dispatcher
 │   ├── class-config-db.php                  4 custom tables via dbDelta
 │   ├── class-discovery.php                  CCTs / Relations / CPTs / Woo / Glossaries / wp_jet_post_types
+│   ├── class-sync-guard.php                 Per-request + transient locks; origin-tagged
+│   ├── class-sync-log.php                   wp_jedb_sync_log writer + reader
 │   │
 │   ├── helpers/
 │   │   ├── debug.php                        jedb_log() with file rotation
 │   │   └── dependencies.php                 jedb_is_jet_engine_active() + version detection (L-001)
 │   │
 │   ├── targets/
-│   │   ├── interface-data-target.php        JEDB_Data_Target contract
-│   │   ├── abstract-target.php              Shared base (slug parsing, log helper)
+│   │   ├── interface-data-target.php        JEDB_Data_Target contract (incl. D-15/D-16 methods)
+│   │   ├── abstract-target.php              Shared base (slug parsing, log helper, default impls)
 │   │   ├── class-target-cct.php             CCT items via $inst->db API + direct SQL (L-003, L-004)
 │   │   ├── class-target-cpt.php             Standard posts / post-meta via WP API
 │   │   ├── class-target-woo-product.php     HPOS-safe via WC_Product->save() — WP_Query for picker (L-017)
@@ -103,7 +110,24 @@ je-data-bridge-cc/
 │   │   ├── class-relation-attacher.php         Direct-SQL writer per L-014 contract
 │   │   ├── class-data-broker.php               wp_ajax_jedb_relation_search_items endpoint
 │   │   ├── class-runtime-loader.php            Detect CCT edit page, enqueue picker assets
-│   │   └── class-transaction-processor.php     CCT save hooks (priority 10 for picker; Phase 3 will use 20)
+│   │   └── class-transaction-processor.php     CCT save hooks (priority 10 for picker)
+│   │
+│   ├── flatten/
+│   │   ├── class-condition-evaluator.php       v1 DSL parser + evaluator (BUILD-PLAN §3.5)
+│   │   ├── class-flatten-config-manager.php    wp_jedb_flatten_configs CRUD
+│   │   ├── class-flattener.php                 Forward push engine (priority 20)
+│   │   └── transformers/
+│   │       ├── interface-transformer.php
+│   │       ├── class-transformer-registry.php
+│   │       ├── class-transformer-passthrough.php
+│   │       ├── class-transformer-yes-no-bool.php
+│   │       ├── class-transformer-regex-replace.php
+│   │       ├── class-transformer-format-number.php
+│   │       ├── class-transformer-lookup-table.php
+│   │       ├── class-transformer-name-builder.php
+│   │       ├── class-transformer-truncate-words.php
+│   │       ├── class-transformer-strip-html.php
+│   │       └── class-transformer-year-expander.php
 │   │
 │   ├── snippets/
 │   │   └── class-snippet-installer.php      Creates uploads/jedb-snippets/ + guards
@@ -112,6 +136,7 @@ je-data-bridge-cc/
 │       ├── class-admin-shell.php            Top-level menu + tab router
 │       ├── class-tab-targets.php            Targets inventory tab
 │       ├── class-tab-relations.php          Relations picker config tab
+│       ├── class-tab-flatten.php            Forward-flatten bridge editor (Phase 3)
 │       └── class-tab-debug.php              Debug log viewer + diagnostics
 │
 ├── templates/admin/
@@ -119,15 +144,17 @@ je-data-bridge-cc/
 │   ├── tab-hello.php                        Status tab
 │   ├── tab-targets.php                      Targets inventory
 │   ├── tab-relations.php                    Relations config + per-CCT cards
+│   ├── tab-flatten.php                      Flatten bridge list + add/edit form
 │   ├── relation-config-card.php             Single CCT's relation config
 │   └── tab-debug.php                        Log viewer + Discovery / CCT diagnostics
 │
 └── assets/
     ├── css/
-    │   ├── admin.css                        Admin-shell + tab styling
+    │   ├── admin.css                        Admin-shell + tab styling (incl. Flatten)
     │   └── relation-injector.css            Picker block + modal + relation cards
     └── js/
-        └── relation-injector.js             Picker UI on CCT edit screens
+        ├── relation-injector.js             Picker UI on CCT edit screens
+        └── flatten-admin.js                 Mapping editor + transformer args + condition validate
 ```
 
 ### Custom tables created on activation
@@ -185,8 +212,8 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 1  | Discovery + Targets (CCT, CPT, Woo Product, Woo Variation) | **✅ Complete** (v0.2.x) |
 | 2  | Relation Injector port (picker on CCT edit screens) | **✅ Complete** (v0.3.0) |
 | 2.5 | Bidirectional architecture lock + picker visibility fix (L-016 → L-020, D-17 → D-19) | **✅ Complete** (v0.3.1) |
-| 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers | **▶ Next up** |
-| 3.5 | Reverse-direction flatten (post → CCT) per BUILD-PLAN §4.10 | Pending |
+| 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers | **✅ Complete** (v0.4.0) |
+| 3.5 | Reverse-direction flatten (post → CCT) per BUILD-PLAN §4.10 | **▶ Next up** |
 | 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | Pending |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
 | 5  | Settings API + debug log viewer enhancements + utilities export/import | Pending |

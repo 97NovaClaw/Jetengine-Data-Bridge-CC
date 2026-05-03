@@ -41,9 +41,11 @@ class JEDB_Admin_Shell {
 	private function load_tabs() {
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-targets.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-relations.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-flatten.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-debug.php';
 		JEDB_Tab_Targets::instance();
 		JEDB_Tab_Relations::instance();
+		JEDB_Tab_Flatten::instance();
 		JEDB_Tab_Debug::instance();
 	}
 
@@ -72,6 +74,18 @@ class JEDB_Admin_Shell {
 			array(),
 			JEDB_VERSION
 		);
+
+		$current_tab = isset( $_GET['tab'] ) ? sanitize_key( wp_unslash( $_GET['tab'] ) ) : 'hello'; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+
+		if ( 'flatten' === $current_tab ) {
+			wp_enqueue_script(
+				'jedb-flatten-admin',
+				JEDB_PLUGIN_URL . 'assets/js/flatten-admin.js',
+				array( 'jquery' ),
+				JEDB_VERSION,
+				true
+			);
+		}
 	}
 
 	public function render_page() {

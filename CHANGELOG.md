@@ -2,6 +2,170 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] — 2026-05-02
+
+**Phase 3 — forward-direction (CCT → post) flatten engine + admin tab.**
+
+This is the first release that actually moves data between sources and
+targets. Editing a CCT row now pushes mapped values onto its bridged
+WooCommerce / CPT record automatically, gated by per-bridge conditions
+and serialized through a per-direction transformer chain.
+
+### Added — runtime engine
+
+- **`JEDB_Sync_Guard`** (`includes/class-sync-guard.php`)
+  Per-request static-lock + transient-backed cross-request lock keyed on
+  `(direction, source, source_id, target, target_id)` with origin tagging.
+  Catches recursive saves before they happen. Phase 3.5's reverse
+  engine reuses this verbatim. Public hooks: `jedb/sync/lock_acquired`,
+  `jedb/sync/lock_released`.
+
+- **`JEDB_Sync_Log`** (`includes/class-sync-log.php`)
+  Append-only writer for `wp_jedb_sync_log`. One row per bridge
+  invocation regardless of outcome. Status taxonomy from BUILD-PLAN
+  §4.9: `success`, `partial`, `errored`, `skipped_condition`,
+  `skipped_error`, `skipped_locked`, `skipped_no_target`, `noop`.
+  Includes `recent()` reader for the Phase 5 viewer + `purge_older_than()`
+  for the Phase 5 retention cron.
+
+- **`JEDB_Transformer_Registry` + `JEDB_Transformer` interface**
+  (`includes/flatten/transformers/`). Per D-11 / L-010 every transformer
+  defines push and pull as separate methods; built-ins ship as paired
+  inverses where well-defined. Snippet-backed transformers (Phase 5b)
+  register themselves via `jedb/transformer/register` action.
+
+  Built-ins shipped this release:
+  - `passthrough` — return value unchanged (default for new mappings)
+  - `yes_no_to_bool` — bidirectional inverse pair
+  - `regex_replace` — independent push/pull patterns
+  - `format_number` — round / cast / decimal-cap, both directions
+  - `lookup_table` — JSON dictionary; push key→value, pull value→key
+  - `name_builder` — template like `{set_name} ({set_number})`; push only
+  - `truncate_words` — word cap; push only (no inverse)
+  - `strip_html` — push HTML→plain; pull no-op (cannot recover)
+  - `year_expander` — PAC VDM port; "2018-2022" ↔ [2018,2019,…,2022]
+
+- **`JEDB_Condition_Evaluator`**
+  (`includes/flatten/class-condition-evaluator.php`)
+  Hand-rolled tokenizer + recursive-descent parser + evaluator for the
+  v1 declarative DSL from BUILD-PLAN §3.5. Operators: `==`, `!=`, `>`,
+  `<`, `>=`, `<=`, `contains`, `not_contains`, `starts_with`,
+  `ends_with`, `in`, `not_in`. Logical connectives: `AND`, `OR`, `NOT`.
+  Path scopes: `source` / `cct` resolve to source data; `target` /
+  `product` / `variation` resolve to target data. Validate-only mode
+  (`validate()`) used by the admin tab's "Validate" button. Failure
+  mode per D-2 / Q4: any parse or eval error returns `false` with a
+  warning log so the bridge is skipped, not wrongly applied.
+
+- **`JEDB_Flatten_Config_Manager`**
+  (`includes/flatten/class-flatten-config-manager.php`)
+  CRUD wrapper for `wp_jedb_flatten_configs`. One row per bridge.
+  Column-level fields stay in sync with the matching keys in
+  `config_json` so simple WHERE filters still work without decoding
+  every row. `config_slug` auto-derived + uniqueness-suffixed (lets
+  conditional bridges per D-14 share the same source/target/direction
+  triple). Defaults factory + mapping defaults documented inline.
+
+- **`JEDB_Flattener`** (`includes/flatten/class-flattener.php`)
+  The forward-push engine. Wires hooks at `JEDB_FLATTEN_HOOK_PRIORITY`
+  (= 20, per D-19 / L-018) on `created-item/{slug}` and
+  `updated-item/{slug}` for every CCT that has at least one enabled
+  push bridge. Per bridge:
+  1. Resolves the linked target via `link_via.type` (JE relation
+     lookup or `cct_single_post_id`).
+  2. Builds the `$context` shape from BUILD-PLAN §4.9.
+  3. Evaluates the condition (DSL or snippet — snippet path stubs to
+     a "skipped_error" log entry until Phase 5b ships the runtime).
+  4. For each enabled mapping: reads source value → runs
+     `push_transform` chain → diffs against current target value →
+     writes through the target adapter (which goes through
+     `WC_Product->save()` for HPOS-safe lookup-table refresh, per
+     L-017).
+  5. Acquires `Sync_Guard` for the duration of the write so the
+     resulting target-side save event can't recurse back into us.
+  6. Records every outcome to `wp_jedb_sync_log`.
+
+  Bridges sort by `priority` (default 100; lower runs first), tie-broken
+  by id ASC for deterministic ordering.
+
+### Added — admin UI
+
+- **Flatten tab** (`includes/admin/class-tab-flatten.php` +
+  `templates/admin/tab-flatten.php` + `assets/js/flatten-admin.js`).
+  - Lists every flatten config with status pills + edit/enable/delete
+    actions.
+  - Add/edit form with source-target picker (CCT in v1 — CPT/Woo
+    sources land in Phase 3.5 reverse direction), target-target picker
+    (CPT / Woo Product / Woo Variation), link-via picker (JE Relation or
+    `cct_single_post_id`), enabled toggle, condition DSL textarea +
+    "Validate" button (calls AJAX into `JEDB_Condition_Evaluator::validate`),
+    priority field.
+  - **Mandatory coverage panel** (D-15) — surfaces every required field
+    declared by the chosen target adapter so the editor knows what
+    they're obliged to map.
+  - **Field-mapping table** (D-12 explicit-only). Two-column source /
+    target picker per row. Each row has TWO transformer chains side by
+    side (`→ Push transformer`, `← Pull transformer`) per D-11. Each
+    chain step has a transformer dropdown + dynamic args form
+    (text/number/checkbox/select/textarea inputs) reflected from the
+    transformer's `get_args_schema()`. Add / remove / chain-step
+    buttons live in the table.
+  - **Native-rendered hint** (D-16) appears in target-field labels:
+    fields where `is_natively_rendered()` returns true display a
+    "· native" suffix so editors know Phase 4's bridge meta box won't
+    duplicate them. Required fields show a `★` prefix.
+  - **Manual sync** form on the edit page lets the editor punch a
+    source `_ID` and run the bridge once on demand. Result lands in
+    `wp_jedb_sync_log`; URL surfaces the status code.
+  - Raw-JSON `<details>` editor under the table for advanced edits.
+
+- **AJAX endpoints**:
+  - `jedb_flatten_get_target_schema` — returns target field schema +
+    required-fields + per-field `natively_rendered` flag.
+  - `jedb_flatten_validate_condition` — DSL syntax check.
+
+### Added — data-target adapter contract
+
+Per D-15 / D-16, two new methods on the `JEDB_Data_Target` interface
+(implemented on the abstract base with safe defaults; overridden per
+adapter):
+
+| Method | Defaults |
+|---|---|
+| `get_required_fields()` | Abstract returns `[]`. CCT `[]`, CPT `['post_title']`, Woo Product `['name','status']`, Woo Variation `['parent_id','attributes']`. |
+| `is_natively_rendered($field)` | Abstract returns `false`. CCT returns `true` for everything (JE renders all fields). CPT returns `true` for standard post columns. Woo Product / Variation return `true` for every typed-setter field. |
+
+These ship now (Phase 3) rather than being deferred to Phase 4 because
+the Flatten admin UI's mandatory-coverage panel and native-rendered hint
+both need them.
+
+### Added — bootstrap constants
+
+- `JEDB_FLATTEN_HOOK_PRIORITY` (= 20) — single source of truth for the
+  hook-priority contract (per D-19). Every flatten / reverse-flatten
+  engine references this constant.
+
+### Plumbing
+
+- `class-plugin.php` `load_core()` now also loads + instantiates
+  `JEDB_Sync_Guard`, `JEDB_Sync_Log`, and `JEDB_Flattener`. Transformer
+  registry + Flatten config manager + Condition evaluator are loaded
+  but lazy-instantiated on first call (no boot cost when no bridges
+  exist).
+- `class-admin-shell.php` registers the Flatten tab and conditionally
+  enqueues `flatten-admin.js` only on its own screen.
+
+### Notes for upgraders
+
+- **No schema migration needed.** `wp_jedb_flatten_configs` and
+  `wp_jedb_sync_log` were already created in Phase 0; this release
+  starts using them.
+- **Existing relation configs are untouched.** Phase 2's relation-
+  picker behavior is unchanged.
+- **Forward direction only.** Reverse-direction (post → CCT) is Phase
+  3.5. Editing a Woo product directly does not yet propagate back to
+  the CCT.
+
 ## [0.3.1] — 2026-05-01
 
 ### Fixed

@@ -290,6 +290,40 @@ class JEDB_Target_Woo_Product extends JEDB_Target_Abstract {
 	}
 
 	/**
+	 * Per D-15: WooCommerce parent products require `name` and `status` to
+	 * be a usable product on the storefront. SKU is recommended but not
+	 * truly required (Woo allows empty SKU). Pricing is type-specific (a
+	 * variable parent has no price of its own; the variations carry it),
+	 * so we don't list it here — bridge configs can opt in via
+	 * `required_overrides.add`.
+	 */
+	public function get_required_fields() {
+		return array( 'name', 'status' );
+	}
+
+	/**
+	 * Every typed-setter field maps 1:1 to a native input on the WC product
+	 * edit screen, so the bridge meta box should NOT re-render those.
+	 * Standard taxonomies (`category_ids`, `tag_ids`) are also natively
+	 * rendered via the Categories / Tags meta boxes.
+	 *
+	 * Anything else (custom meta, third-party plugin fields) returns false
+	 * → Phase 4's Bridge meta box will render an input for it.
+	 */
+	public function is_natively_rendered( $field_name ) {
+
+		if ( isset( self::$typed_setters[ $field_name ] ) ) {
+			return true;
+		}
+
+		$natively_rendered_extra = array(
+			'id', 'date_created', 'date_modified', 'parent_id',
+		);
+
+		return in_array( $field_name, $natively_rendered_extra, true );
+	}
+
+	/**
 	 * List candidate products for the picker. Uses WP_Query directly (NOT
 	 * `wc_get_products()`) per L-017 — `wc_get_products()` filters by
 	 * `_visibility` meta and the `wc_product_meta_lookup` table, both of

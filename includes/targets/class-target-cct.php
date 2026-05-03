@@ -429,6 +429,26 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 		return null === $count ? 0 : (int) $count;
 	}
 
+	/**
+	 * CCTs have no inherent required fields at the storage layer — every
+	 * column is nullable except `_ID` which is auto-assigned. Bridge configs
+	 * can layer their own requirements on top via `required_overrides.add`.
+	 */
+	public function get_required_fields() {
+		return array();
+	}
+
+	/**
+	 * Every user-defined field on a CCT IS rendered natively by JetEngine's
+	 * own CCT edit screen (`admin.php?page=jet-cct-{slug}`). System columns
+	 * are also rendered there but are read-only. From the bridge's
+	 * perspective: don't ever show our own input for a CCT field — JE
+	 * already does it.
+	 */
+	public function is_natively_rendered( $field_name ) {
+		return true;
+	}
+
 	public function list_records( array $args = array() ) {
 
 		$per_page = isset( $args['per_page'] ) ? absint( $args['per_page'] ) : 25;

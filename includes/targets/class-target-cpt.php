@@ -169,6 +169,33 @@ class JEDB_Target_CPT extends JEDB_Target_Abstract {
 		return isset( $counts->publish ) ? (int) $counts->publish : 0;
 	}
 
+	/**
+	 * `post_title` is the only field WP refuses to silently accept as empty
+	 * on a CPT insert (technically it allows empty, but the resulting post
+	 * is virtually unusable). Phase 3's mandatory-coverage panel surfaces a
+	 * warning when a bridge config doesn't map something into `post_title`.
+	 */
+	public function get_required_fields() {
+		return array( 'post_title' );
+	}
+
+	/**
+	 * Standard post columns ARE rendered natively by the WordPress post-edit
+	 * screen; arbitrary post-meta keys are NOT (custom-meta UIs typically
+	 * come from Advanced Custom Fields, JetEngine meta boxes, or our own
+	 * Phase 4 Bridge meta box).
+	 */
+	public function is_natively_rendered( $field_name ) {
+
+		$natively_rendered = array(
+			'ID', 'post_title', 'post_content', 'post_excerpt',
+			'post_status', 'post_name', 'post_date', 'post_author',
+			'post_parent', 'menu_order',
+		);
+
+		return in_array( $field_name, $natively_rendered, true );
+	}
+
 	public function list_records( array $args = array() ) {
 
 		$per_page = isset( $args['per_page'] ) ? absint( $args['per_page'] ) : 25;

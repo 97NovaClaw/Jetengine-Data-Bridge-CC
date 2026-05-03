@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.3.1
+Stable tag: 0.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,21 +25,27 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.3.1) ==
+== Current Capability (v0.4.0) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
-* Four target adapters (CCT, CPT, Woo Product, Woo Variation) — HPOS-safe.
+* Four target adapters (CCT, CPT, Woo Product, Woo Variation) — HPOS-safe — with required-fields and native-rendering hints (D-15 / D-16).
 * Targets admin tab — read-only inventory.
 * Relations admin tab — configure which JE Relations the picker exposes per CCT (relations themselves are still authored in JetEngine → Relations).
 * Picker UI on CCT edit screens with modal-based search via WP_Query (sees all products, including those auto-created by JE Relations).
 * Direct-SQL relation writes per a verified contract (idempotent duplicate-check, type-aware clearing for 1:1 / 1:M).
+* **Forward-direction flatten engine** (Phase 3, v0.4.0) — editing a CCT row pushes mapped fields onto its linked Woo / CPT record. Hooks at priority 20 so JE's own auto-create finishes first.
+* **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
+* **Sync Log** — every bridge invocation writes a row with status from the `success / partial / errored / skipped_condition / skipped_error / skipped_locked / skipped_no_target / noop` taxonomy.
+* **Transformer registry** — 9 built-ins (passthrough, yes_no_to_bool, regex_replace, format_number, lookup_table, name_builder, truncate_words, strip_html, year_expander). Each defines push and pull explicitly.
+* **Condition Evaluator** — v1 declarative DSL parser supporting `==`, `!=`, `>`, `<`, `>=`, `<=`, `contains`, `not_contains`, `starts_with`, `ends_with`, `in`, `not_in`, combined with `AND`, `OR`, `NOT`, with `{source.field}` / `{target.field}` path references.
+* **Flatten admin tab** — bridge editor with explicit two-column field-mapping picker, per-direction transformer chains (D-11), mandatory-coverage panel (D-15), native-rendered hint (D-16), live condition validator, and manual "Sync now" button.
 * Debug tab with log viewer and discovery diagnostics.
 
 == Not Yet Shipped ==
 
-* Field-mapping UI and PUSH/PULL flatten engine — Phase 3.
-* Reverse-direction sync (post → CCT auto-link) — Phase 3.5 / Phase 4.
+* Reverse-direction sync (post → CCT) — Phase 3.5.
+* Snippet-mode `condition_snippet` evaluation — Phase 5b. Declarative DSL conditions work fully today.
 * Bridge meta box on Woo product edit screen — Phase 4.
 * Variation reconciliation engine — Phase 4b.
 * Custom Code Snippets runtime — Phase 5b.
@@ -80,6 +86,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.4.0 =
+* Phase 3 — forward-direction flatten engine. Editing a CCT row now pushes mapped fields onto the linked Woo / CPT record automatically, gated by per-bridge conditions and serialized through a per-direction transformer chain. Adds: Sync Guard, Sync Log, Transformer Registry (9 built-ins), Condition Evaluator (v1 DSL), Flatten Config Manager, Flattener engine, and the Flatten admin tab UI. New `JEDB_FLATTEN_HOOK_PRIORITY` constant (= 20). New `get_required_fields()` / `is_natively_rendered()` methods on the data-target interface (D-15 / D-16) implemented across all four adapters.
+
 = 0.3.1 =
 * Fix: Picker on CCT edit screen now sees JetEngine-auto-created products (switched from `wc_get_products()` to `WP_Query` — `wc_get_products()` filters by `_visibility` meta and the lookup table, both populated only by `WC_Product->save()`).
 * Architecture: Locked the bidirectional sync model (forward direction = JE handles auto-create + we extend; reverse direction = ours entirely). Added L-016 through L-020 to LESSONS-LEARNED, D-17 through D-19 to BUILD-PLAN's Decisions Log. Added §4.10 (reverse-direction sync) and §4.9 trigger taxonomy.
@@ -94,6 +103,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.4.0 =
+First release that actually moves data between sources and targets. Phase 3 flatten engine plus admin tab. No schema migration required.
 
 = 0.3.1 =
 Picker visibility fix for JE-auto-created products + bidirectional architecture documentation locked. No schema changes.
