@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.4.1 — Phase 3 complete + self-heal hotfix. Forward-direction flatten engine ships: editing a CCT row pushes mapped fields onto the linked WooCommerce / CPT record automatically, gated by per-bridge conditions and a per-direction transformer chain. Per L-021, the engine self-heals missing JE Relation rows by falling back to `cct_single_post_id` and auto-attaching the relation — JE Smart Filters / Listing Grids work natively after the first sync, no manual picker click needed. Phase 3.5 (reverse direction, post → CCT) is the next implementation phase.
+**Status:** v0.5.0 — Phases 3 + 3.5 complete. Bidirectional sync works end-to-end: editing a CCT pushes mapped fields onto the linked Woo / CPT record, AND editing the post propagates back to the CCT via the per-mapping `pull_transform` chain. Per-direction triggers, mutual cascade prevention via `Sync_Guard::is_locked()` cross-checks, optional auto-create of CCT rows for unlinked posts (D-17 opt-in), and L-021 self-heal in both directions. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -41,7 +41,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.4.1)
+## What's actually shipped right now (v0.5.0)
 
 **Functional capabilities (cumulative through Phase 3):**
 
@@ -55,6 +55,9 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 - ✅ **Direct-SQL relation writes per L-014 verified contract** — idempotent duplicate-check, type-aware clearing for 1:1 / 1:M, append for M:M.
 - ✅ **Forward-direction flatten engine** (Phase 3, v0.4.0) — editing a CCT row pushes mapped values onto its linked Woo / CPT record. Hooks at priority 20 per D-19 / L-018.
 - ✅ **JE Relation row self-heal** (v0.4.1) — when the relation row is missing, the engine falls back to `cct_single_post_id` and auto-attaches the relation row so JE Smart Filters / Listings work natively from the first sync. Per L-021. Two opt-out flags exposed in the Flatten admin tab.
+- ✅ **Reverse-direction flatten engine** (Phase 3.5, v0.5.0) — editing a Woo product / CPT propagates mapped fields back to the linked CCT row via the per-mapping `pull_transform` chain. Hooks: `woocommerce_update_product` (+ variations) and `save_post_{type}` for non-Woo CPTs, both at priority 20.
+- ✅ **Bidirectional bridges** (v0.5.0) — `direction = bidirectional` registers both engines for one bridge. Mutual cascade prevention via cross-direction `Sync_Guard::is_locked()` checks at the top of each engine's `apply_bridge()`.
+- ✅ **Auto-create CCT row** (v0.5.0, D-17 opt-in) — when a post saves with no linked CCT row, the reverse engine can optionally create a fresh CCT row in the bridge's source target and auto-attach the relation. Default OFF; opt-in per bridge via `auto_create_target_when_unlinked` checkbox.
 - ✅ **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 - ✅ **Sync Log** — every bridge invocation writes a row to `wp_jedb_sync_log` with status from the BUILD-PLAN §4.9 taxonomy (`success`, `partial`, `errored`, `skipped_condition`, `skipped_error`, `skipped_locked`, `skipped_no_target`, `noop`).
 - ✅ **Transformer registry** — 9 built-in transformers (`passthrough`, `yes_no_to_bool`, `regex_replace`, `format_number`, `lookup_table`, `name_builder`, `truncate_words`, `strip_html`, `year_expander`). Per D-11 / L-010 each transformer defines push and pull explicitly.
@@ -62,9 +65,8 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 - ✅ **Flatten admin tab** — bridge list + add/edit form with: source/target picker, link-via picker (JE Relation or `cct_single_post_id`), priority, condition DSL with live "Validate" button, mandatory-coverage panel (D-15), explicit two-column field-mapping table with per-direction transformer chain pickers (D-11), native-rendered hint per target field (D-16), manual "Sync now" button, raw-JSON `<details>` editor.
 - ✅ **Debug tab** — log viewer (last 500 lines tailing), enable/disable toggle, clear/download buttons, deep-probe diagnostic for JE field storage and per-CCT internals.
 
-**What's NOT shipped yet (Phase 3.5+):**
+**What's NOT shipped yet (Phase 4+):**
 
-- ❌ Reverse-direction sync (post → CCT) — locked in BUILD-PLAN §4.10, ships in Phase 3.5. Editing a Woo product directly does not yet propagate back to its bridged CCT row.
 - ❌ Snippet-mode for `condition_snippet` — bridges that set it log `skipped_error` until Phase 5b ships the snippet runtime. Declarative DSL conditions work fully.
 - ❌ Bridge meta box on Woo product edit screen — Phase 4.
 - ❌ Variation reconciliation engine — Phase 4b.
@@ -74,7 +76,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## Current file tree (v0.4.1)
+## Current file tree (v0.5.0)
 
 ```
 je-data-bridge-cc/
@@ -117,6 +119,7 @@ je-data-bridge-cc/
 │   │   ├── class-condition-evaluator.php       v1 DSL parser + evaluator (BUILD-PLAN §3.5)
 │   │   ├── class-flatten-config-manager.php    wp_jedb_flatten_configs CRUD
 │   │   ├── class-flattener.php                 Forward push engine (priority 20)
+│   │   ├── class-reverse-flattener.php         Reverse pull engine (priority 20)
 │   │   └── transformers/
 │   │       ├── interface-transformer.php
 │   │       ├── class-transformer-registry.php
@@ -214,8 +217,8 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 2  | Relation Injector port (picker on CCT edit screens) | **✅ Complete** (v0.3.0) |
 | 2.5 | Bidirectional architecture lock + picker visibility fix (L-016 → L-020, D-17 → D-19) | **✅ Complete** (v0.3.1) |
 | 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers + L-021 self-heal | **✅ Complete** (v0.4.0 → v0.4.1) |
-| 3.5 | Reverse-direction flatten (post → CCT) per BUILD-PLAN §4.10 | **▶ Next up** |
-| 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | Pending |
+| 3.5 | Reverse-direction flatten (post → CCT) + bidirectional bridges + auto-create CCT (D-17) per BUILD-PLAN §4.10 | **✅ Complete** (v0.5.0) |
+| 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | **▶ Next up** |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
 | 5  | Settings API + debug log viewer enhancements + utilities export/import | Pending |
 | 5b | Custom Code Snippets subsystem | Pending |

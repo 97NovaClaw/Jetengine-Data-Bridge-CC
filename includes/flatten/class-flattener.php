@@ -76,10 +76,20 @@ class JEDB_Flattener {
 		}
 		$this->hooks_registered = true;
 
-		$bridges = JEDB_Flatten_Config_Manager::instance()->get_all( array(
-			'enabled'   => 1,
-			'direction' => 'push',
+		$bridges_all = JEDB_Flatten_Config_Manager::instance()->get_all( array(
+			'enabled' => 1,
 		) );
+
+		// Forward (push) flattener fires for `push` AND `bidirectional`
+		// bridges. The reverse (pull) flattener (Phase 3.5) handles `pull`
+		// AND `bidirectional` from the post-side hooks. A bidirectional
+		// bridge therefore registers BOTH hook sets and relies on the
+		// cross-direction Sync_Guard cascade check in apply_bridge() to
+		// prevent infinite loops.
+		$bridges = array_values( array_filter( $bridges_all, static function ( $b ) {
+			$dir = isset( $b['direction'] ) ? (string) $b['direction'] : '';
+			return 'push' === $dir || 'bidirectional' === $dir;
+		} ) );
 
 		if ( empty( $bridges ) ) {
 			return;
@@ -237,30 +247,56 @@ class JEDB_Flattener {
 			'trigger'       => $origin_tag,
 		);
 
+		$guard = JEDB_Sync_Guard::instance();
+
+		// Cross-direction cascade check (Phase 3.5): if the reverse pull
+		// engine is currently writing to this CCT row from the bridged
+		// post, that's a cascade event — bail rather than push the same
+		// values back. Both engines do this symmetric check before
+		// acquiring their own direction's lock; together they prevent
+		// infinite ping-pong on bidirectional bridges.
+		if ( $guard->is_locked( 'pull', $source_target, $source_id, $target_target, $target_id ) ) {
+			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_LOCKED, $origin_tag, 'reverse-pull cascade detected — push suppressed', array(
+				'cascade'    => 'pull_in_flight',
+				'resolution' => $resolution_method,
+			) );
+			return JEDB_Sync_Log::STATUS_SKIPPED_LOCKED;
+		}
+
 		$dsl = isset( $config['condition'] ) ? (string) $config['condition'] : '';
 		if ( '' !== trim( $dsl ) ) {
 			$ok = JEDB_Condition_Evaluator::instance()->evaluate( $dsl, $context );
 			if ( ! $ok ) {
-				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_CONDITION, $origin_tag, 'condition returned false', array( 'dsl' => $dsl ) );
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_CONDITION, $origin_tag, 'condition returned false', array(
+					'dsl'           => $dsl,
+					'resolution'    => $resolution_method,
+					'auto_attached' => $auto_attached,
+				) );
 				return JEDB_Sync_Log::STATUS_SKIPPED_CONDITION;
 			}
 		}
 
 		$snippet_slug = isset( $config['condition_snippet'] ) ? (string) $config['condition_snippet'] : '';
 		if ( '' !== $snippet_slug ) {
-			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_ERROR, $origin_tag, 'condition_snippet ignored — Snippet runtime ships in Phase 5b', array( 'snippet' => $snippet_slug ) );
+			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_ERROR, $origin_tag, 'condition_snippet ignored — Snippet runtime ships in Phase 5b', array(
+				'snippet'    => $snippet_slug,
+				'resolution' => $resolution_method,
+			) );
 			return JEDB_Sync_Log::STATUS_SKIPPED_ERROR;
 		}
 
 		$mappings = isset( $config['mappings'] ) && is_array( $config['mappings'] ) ? $config['mappings'] : array();
 		if ( empty( $mappings ) ) {
-			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'bridge has no mappings', array() );
+			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'bridge has no mappings', array(
+				'resolution' => $resolution_method,
+			) );
 			return JEDB_Sync_Log::STATUS_NOOP;
 		}
 
-		$guard = JEDB_Sync_Guard::instance();
 		if ( ! $guard->acquire( 'push', $source_target, $source_id, $target_target, $target_id, $origin_tag ) ) {
-			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_LOCKED, $origin_tag, 'sync_guard already locked — cycle detected', array() );
+			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_LOCKED, $origin_tag, 'sync_guard already locked — same-direction cycle detected', array(
+				'resolution' => $resolution_method,
+			) );
 			return JEDB_Sync_Log::STATUS_SKIPPED_LOCKED;
 		}
 

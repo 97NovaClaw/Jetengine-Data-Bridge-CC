@@ -256,6 +256,8 @@
 			auto_attach_relation:    $form.find( 'input[name="link_via_auto_attach_relation"]' ).is( ':checked' )
 		} );
 
+		cfg.auto_create_target_when_unlinked = $form.find( 'input[name="auto_create_target_when_unlinked"]' ).is( ':checked' );
+
 		if ( ! cfg.trigger ) {
 			cfg.trigger = { type: 'cct_save', args: {} };
 		}
@@ -288,7 +290,7 @@
 
 	$tbody.on( 'change', 'select, input, textarea', syncJSON );
 
-	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"]', syncJSON );
+	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="direction"]', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_condition', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 

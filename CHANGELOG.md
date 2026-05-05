@@ -2,6 +2,133 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] — 2026-05-06
+
+**Phase 3.5 — reverse-direction (post → CCT) flatten engine + bidirectional bridges.**
+
+End-to-end bidirectional sync now works on a real site. Editing a Woo
+product (or any bridged CPT) directly propagates back to the linked
+CCT row, gated by per-bridge conditions and a dedicated
+`pull_transform` chain. Bridges can declare `direction = pull` for
+reverse-only, or `direction = bidirectional` for both directions in
+one bridge with mutual cascade prevention.
+
+### Added — runtime engine
+
+- **`JEDB_Reverse_Flattener`** (`includes/flatten/class-reverse-flattener.php`)
+  Mirror of `JEDB_Flattener`. Hooks at priority
+  `JEDB_FLATTEN_HOOK_PRIORITY` (= 20):
+  - `woocommerce_update_product` + `woocommerce_new_product` for
+    `posts::product` targets.
+  - `woocommerce_update_product_variation` + `woocommerce_new_product_variation`
+    for `posts::product_variation` targets.
+  - `save_post_{post_type}` for any other CPT target, with explicit
+    auto-save / revision filtering so we don't fire on every minor
+    draft churn.
+
+  For each registered bridge, on hook fire:
+  1. Resolves the source CCT row's `_ID` given the post id (see
+     `resolve_source_id()` below).
+  2. Cross-direction cascade check: if the forward push lock is held
+     for these exact coords, this is a forward-engine side-effect —
+     bail with `skipped_locked`.
+  3. Evaluates the bridge's condition (DSL or snippet) against the
+     same `$context` shape as the forward engine, just with
+     `direction = 'pull'`.
+  4. For each enabled mapping, reads the target (post) field, runs
+     it through `pull_transform`, diffs against current source field,
+     writes only the differences.
+  5. Acquires its own pull-direction Sync_Guard lock for the duration
+     of the write. The CCT save it triggers fires JE's
+     `updated-item/{slug}` hook — the forward engine's
+     cross-direction check sees our pull lock and bails. **No infinite
+     loop.**
+  6. Records every outcome to `wp_jedb_sync_log` with `resolution`,
+     `auto_attached`, `auto_created` flags so the user can see
+     exactly how the link was found.
+
+- **`resolve_source_id()`** — the reverse-direction analog of L-021's
+  forward resolver:
+  - Path A (`link_via.type = 'cct_single_post_id'`) — direct lookup
+    of the CCT row whose `cct_single_post_id` column equals the post
+    id, with auto-create fallback.
+  - Path B (`link_via.type = 'je_relation'`) — relation-table lookup
+    first (post on the side opposite the source CCT), fallback to
+    `cct_single_post_id`-by-post lookup with optional relation
+    auto-attach (mirrors L-021), and finally optional auto-create of
+    a fresh CCT row when nothing else resolves.
+
+- **Auto-create CCT row** (D-17 opt-in, default OFF) — when a bridge
+  has `auto_create_target_when_unlinked = true`, saving an unlinked
+  post creates an empty CCT row in the bridge's source target via
+  `JEDB_Target_CCT::create([])`, optionally auto-attaches the
+  relation row, then lets the normal apply pipeline populate the new
+  row through the `pull_transform` chain. **The user's transformer
+  config is the single source of truth for what gets written** — the
+  resolver doesn't seed any fields itself.
+
+### Added — direction model expansion
+
+- Bridge config `direction` field now accepts three values:
+  - `push` — forward only (Phase 3 default)
+  - `pull` — reverse only
+  - `bidirectional` — both engines register hooks; mutual cascade
+    prevention via cross-direction `Sync_Guard::is_locked()` checks
+    at the top of each engine's `apply_bridge()`.
+
+- **Forward `JEDB_Flattener` updated:**
+  - Registration filter now matches `direction in (push, bidirectional)`.
+  - New cross-direction cascade check at the top of `apply_bridge()`:
+    if the reverse-pull lock is currently held for these coords, the
+    forward push is a side-effect of a reverse pull — bail with
+    `skipped_locked` and `cascade: pull_in_flight`.
+
+### Added — admin UI
+
+- **Direction radio** (`tab-flatten.php`):
+  - "Push (source → target) — fires on CCT save"
+  - "Pull (target → source) — fires on post save" *(was disabled in 0.4.x)*
+  - "Bidirectional — registers both hooks, mutual cascade prevention"
+
+- **Reverse-direction options** fieldset:
+  - "Auto-create the source CCT row when an unlinked post saves"
+    checkbox — wired to `auto_create_target_when_unlinked` config flag.
+
+- JS (`flatten-admin.js`) wires the new radios + checkbox into the
+  hidden `config_json` payload so the form survives roundtrips.
+
+### Improved (was the v0.4.1 papercut)
+
+- Forward flattener's `skipped_condition` log row now includes
+  `resolution` and `auto_attached` in `context_json`. The 0.4.1
+  test session noted these were missing; closed in this release. The
+  `skipped_error`, `noop`, and `skipped_locked` rows also gain
+  `resolution` for symmetric debuggability.
+
+### Plumbing
+
+- `class-plugin.php` `load_core()` requires + instantiates
+  `JEDB_Reverse_Flattener::instance()`.
+- `class-flatten-config-manager.php` `default_config_json()` adds
+  the `auto_create_target_when_unlinked` key (default `false`).
+  `wp_parse_args` top-level merge already backfills this on existing
+  bridges saved before 0.5.0.
+
+### Notes for upgraders
+
+- **No schema migration needed.** The `direction` column already
+  accepts varchar(20); 'pull' and 'bidirectional' fit. Existing
+  push-only bridges work unchanged.
+- **Existing 0.4.x bridges are upgraded transparently** — the
+  flatten config manager's deep-merge fills in the new
+  `auto_create_target_when_unlinked: false` default the first time
+  the config is read.
+- **Bidirectional bridges are safe by default.** The cross-direction
+  cascade check is automatic; no opt-in flag needed. The only way to
+  trigger an actual loop would be to write transformer chains that
+  intentionally produce different values on each pass — and even then
+  the `Sync_Guard` per-request statics catch the second iteration.
+
 ## [0.4.1] — 2026-05-03
 
 **Phase 3 hotfix — JE Relation row self-heal.**

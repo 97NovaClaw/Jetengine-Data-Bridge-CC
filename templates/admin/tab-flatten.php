@@ -194,9 +194,35 @@ endif;
 			<tr>
 				<th><?php esc_html_e( 'Direction', 'je-data-bridge-cc' ); ?></th>
 				<td>
-					<label><input type="radio" name="direction" value="push" <?php checked( ( $editing['direction'] ?? 'push' ), 'push' ); ?> /> <?php esc_html_e( 'Push (source → target)', 'je-data-bridge-cc' ); ?></label>
+					<label>
+						<input type="radio" name="direction" value="push" <?php checked( ( $editing['direction'] ?? 'push' ), 'push' ); ?> />
+						<?php esc_html_e( 'Push (source → target) — fires on CCT save', 'je-data-bridge-cc' ); ?>
+					</label>
 					<br>
-					<label><input type="radio" name="direction" value="pull" disabled /> <?php esc_html_e( 'Pull (target → source) — Phase 3.5', 'je-data-bridge-cc' ); ?></label>
+					<label>
+						<input type="radio" name="direction" value="pull" <?php checked( ( $editing['direction'] ?? '' ), 'pull' ); ?> />
+						<?php esc_html_e( 'Pull (target → source) — fires on post save', 'je-data-bridge-cc' ); ?>
+					</label>
+					<br>
+					<label>
+						<input type="radio" name="direction" value="bidirectional" <?php checked( ( $editing['direction'] ?? '' ), 'bidirectional' ); ?> />
+						<?php esc_html_e( 'Bidirectional — registers both hooks, mutual cascade prevention', 'je-data-bridge-cc' ); ?>
+					</label>
+					<p class="description" style="margin-top:6px;">
+						<?php esc_html_e( 'Push uses each mapping\'s push_transform chain. Pull uses pull_transform. Bidirectional uses both — the Sync Guard\'s cross-direction check prevents the two hooks from ping-ponging the same data.', 'je-data-bridge-cc' ); ?>
+					</p>
+				</td>
+			</tr>
+			<tr>
+				<th><?php esc_html_e( 'Reverse-direction options', 'je-data-bridge-cc' ); ?></th>
+				<td>
+					<label>
+						<input type="checkbox" name="auto_create_target_when_unlinked" value="1" <?php checked( ! empty( $config['auto_create_target_when_unlinked'] ) ); ?> />
+						<?php esc_html_e( 'Auto-create the source CCT row when an unlinked post saves', 'je-data-bridge-cc' ); ?>
+					</label>
+					<p class="description" style="margin-left:24px;margin-top:4px;color:#646970;">
+						<?php esc_html_e( 'Only relevant for Pull / Bidirectional bridges. When ON, saving a post that has no matching JE relation row AND no CCT row pointing at it via cct_single_post_id will create a fresh CCT row from scratch. Default OFF (per D-17) because the action creates data.', 'je-data-bridge-cc' ); ?>
+					</p>
 				</td>
 			</tr>
 			<tr>

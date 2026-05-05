@@ -884,7 +884,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-02:** Phases 0, 1, 2, 2.5, and 3 are complete (v0.4.0 on `main`). Phase 3.5 (reverse-direction flatten) is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, and 3.5 are complete (v0.5.0 on `main`). Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
@@ -926,15 +926,17 @@ Each phase ends with the plugin being **installable, activatable, and useful** �
 - Snippet-mode for `condition_snippet` is **stubbed** for v1 — bridges that set it log `skipped_error` until Phase 5b ships the snippet runtime. Declarative DSL conditions work fully.
 - ✅ **Exit criterion**: when an editor saves a CCT row, mapped fields PUSH onto the related JE-auto-created post correctly. Flatten config UI lets editors add mappings, set per-direction transformer chains, and see mandatory coverage. Sync log records every push.
 
-### Phase 3.5 — Reverse-direction flatten (1 day) ▶ **NEXT UP**
-- Wire `wc_product_save` / `save_post_{type}` triggers per D-18.
-- New `JEDB_Reverse_Flattener` runs at priority ≥ 20 on those hooks.
-- Implement `auto_create_target_when_unlinked` flag (default off per D-17) — when a post saves and has no matching JE relation row, optionally create a CCT row via `JEDB_Target_CCT::create()` and attach via `JEDB_Relation_Attacher`.
-- Pull-direction transformer chain + condition evaluator.
-- Cycle prevention via `Sync_Guard` origin tagging — log `skipped_locked` when a forward-pushed value would loop back.
-- ✅ **Exit criterion**: editing a product directly in WC (not through any CCT flow) pushes mapped fields onto the linked CCT row OR auto-creates a CCT row when the bridge is configured to do so. No infinite sync loops.
+### Phase 3.5 — Reverse-direction flatten (1 day) ✅
+- Wired `woocommerce_update_product` (+ variations) and `save_post_{type}` triggers per D-18.
+- `JEDB_Reverse_Flattener` runs at `JEDB_FLATTEN_HOOK_PRIORITY` (= 20) on those hooks.
+- `auto_create_target_when_unlinked` flag (default off per D-17) — when a post saves and has no matching JE relation row AND no `cct_single_post_id` link AND the flag is on, creates a fresh CCT row via `JEDB_Target_CCT::create([])` (empty seed; the user's `pull_transform` chain populates it via the normal apply pipeline). Auto-attaches the relation row when `link_via.auto_attach_relation` is also on.
+- Pull-direction transformer chain + condition evaluator (same `JEDB_Condition_Evaluator` as forward, with `direction = 'pull'` in the context).
+- **Cross-direction cascade prevention.** Both engines call `JEDB_Sync_Guard::is_locked()` against the OPPOSITE direction at the top of their `apply_bridge()`. Forward push checks the pull lock; reverse pull checks the push lock. When either is held for the same `(source, target)` pair, the engine bails with `skipped_locked` and a `cascade: pull_in_flight` / `push_in_flight` marker in the sync log context. The cross-check is what makes bidirectional bridges safe by default.
+- Bidirectional support: `direction = bidirectional` registers BOTH engines for the same bridge.
+- L-021 self-heal mirrored on the reverse side: when no relation row is found, fallback to a CCT row whose `cct_single_post_id` equals the saved post id, with the same auto-attach behavior.
+- ✅ **Exit criterion**: editing a product directly in WC (not through any CCT flow) propagates mapped fields onto the linked CCT row via the per-mapping `pull_transform` chain. With `auto_create_target_when_unlinked` on, an unlinked post-save creates a fresh CCT row + relation. No infinite sync loops, ever.
 
-### Phase 4 — Woo target & bridge meta box (3 days) — *the new code*
+### Phase 4 — Woo target & bridge meta box (3 days) — *the new code* ▶ **NEXT UP**
 - Implement `Target_Woo_Product` in full, with HPOS-safe writes.
 - Build the `Woo_Product_Meta_Box` with type select + linked-CCT picker + direction toggle.
 - Build the **Bridges admin tab** (`class-tab-bridges.php`) for managing the `jedb_bridge_types` JSON via UI.
@@ -1073,32 +1075,34 @@ plugin, not a transient session log.
 
 ## 12. Next Action
 
-Phases 0, 1, 2, 2.5, and 3 are complete (see `CHANGELOG.md` and the
-roadmap in §7). Phase 3.5 (reverse-direction flatten — post → CCT) is
-the next implementation phase. Per §7's Phase 3.5 spec:
+Phases 0, 1, 2, 2.5, 3, and 3.5 are complete (see `CHANGELOG.md` and
+the roadmap in §7). Phase 4 (the Bridge meta box on the WooCommerce
+product edit screen + the Bridges admin tab managing
+`jedb_bridge_types` JSON) is the next implementation phase.
 
-1. Wire `wc_product_save` and `save_post_{type}` triggers per D-18,
-   registered at priority `JEDB_FLATTEN_HOOK_PRIORITY` (= 20).
-2. Build `JEDB_Reverse_Flattener` that finds (or optionally creates)
-   the linked CCT row and runs the `pull_transform` chain through
-   `JEDB_Target_CCT::update`.
-3. Implement the `auto_create_target_when_unlinked` flag (default off
-   per D-17) — when a post saves and has no matching JE relation row,
-   optionally create a CCT row + attach the relation via
-   `JEDB_Relation_Attacher`.
-4. Cycle prevention: rely on `JEDB_Sync_Guard`'s origin tagging — the
-   forward push writes set the lock, the reverse engine bails when it
-   sees that lock active for the same `(source, target)` pair.
-5. Test end-to-end: editing a Woo product directly should propagate
-   into its bridged Mosaic CCT row, AND a fresh
-   `wp_insert_post('product')` (no CCT yet) should optionally
-   auto-create the matching CCT.
+Per §7's Phase 4 spec:
 
-All architectural decisions Phase 3.5 needs are locked
-(D-1 through D-19, especially D-17 / D-18). All known JE caveats are
-documented (L-001 through L-020). Phase 3's engine + sync guard +
-sync log + transformer registry + condition evaluator are all
-in place and reusable for the reverse direction.
+1. Build `class-tab-bridges.php` admin tab — UI to manage the
+   `jedb_bridge_types` setting (Available Set, Mosaic, Mosaic
+   Instructions PDF, etc.). Each bridge type declares: slug, label,
+   linked CCT, link_via, default direction, optional variations
+   block (Phase 4b).
+2. Build `class-woo-product-meta-box.php` — appears on `product`
+   edit screens. Surfaces a Bridge Type select + linked-CCT picker +
+   direction toggle, populated from `jedb_bridge_types`. Per L-012
+   the meta box only renders fields where the target adapter's
+   `is_natively_rendered($field)` returns false (D-16); native
+   fields stay in their native Woo boxes.
+3. Implement the CCT-single → Woo-product redirect shim (§4.6).
+4. Verify loop-safe CCT↔Woo sync end-to-end through the Phase 3 +
+   3.5 engines, using a real bridge type definition.
+
+All architectural decisions Phase 4 needs are locked (D-1 through
+D-19, with L-021 refinement to D-13 / D-17). All known JE caveats
+are documented (L-001 through L-021). The forward + reverse
+flatteners, sync guard, sync log, transformer registry, condition
+evaluator, and adapter-owned `is_natively_rendered` / `get_required_fields`
+methods are all in place and ready for the meta box to consume.
 
 ## 13. Historical reference: original "Next Action" notes from §8 lock-in
 

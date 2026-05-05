@@ -47,26 +47,32 @@ class JEDB_Flatten_Config_Manager {
 	 */
 	public static function default_config_json() {
 		return array(
-			'mappings'           => array(),
-			'condition'          => '',
-			'condition_snippet'  => '',
-			'priority'           => 100,
-			'trigger'            => array(
+			'mappings'                          => array(),
+			'condition'                         => '',
+			'condition_snippet'                 => '',
+			'priority'                          => 100,
+			'trigger'                           => array(
 				'type' => 'cct_save',
 				'args' => array(),
 			),
-			'link_via'           => array(
+			'link_via'                          => array(
 				'type'                    => 'je_relation',
 				'relation_id'             => '',
 				'side'                    => 'auto',
 				'fallback_to_single_page' => true,
 				'auto_attach_relation'    => true,
 			),
-			'required_overrides' => array(
+			// Phase 3.5 reverse-direction opt-in (D-17 default OFF). When ON,
+			// the reverse pull engine will create a fresh CCT row in the
+			// source target if a post saves and no linked CCT row exists.
+			// Defaults to false because the action is destructive (creates
+			// data); editors must explicitly opt in per bridge.
+			'auto_create_target_when_unlinked'  => false,
+			'required_overrides'                => array(
 				'add'    => array(),
 				'remove' => array(),
 			),
-			'origin_tag'         => 'flatten_push',
+			'origin_tag'                        => 'flatten',
 		);
 	}
 
