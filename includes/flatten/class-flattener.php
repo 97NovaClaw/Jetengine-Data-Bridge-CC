@@ -285,9 +285,14 @@ class JEDB_Flattener {
 			return JEDB_Sync_Log::STATUS_SKIPPED_ERROR;
 		}
 
-		$mappings = isset( $config['mappings'] ) && is_array( $config['mappings'] ) ? $config['mappings'] : array();
-		if ( empty( $mappings ) ) {
-			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'bridge has no mappings', array(
+		$mappings   = isset( $config['mappings'] )   && is_array( $config['mappings'] )   ? $config['mappings']   : array();
+		$taxonomies = isset( $config['taxonomies'] ) && is_array( $config['taxonomies'] ) ? $config['taxonomies'] : array();
+
+		// Phase 3.6 / D-20: a bridge with ONLY taxonomies (no mappings)
+		// is still a valid bridge that can do meaningful work on push.
+		// Only short-circuit when BOTH arrays are empty.
+		if ( empty( $mappings ) && empty( $taxonomies ) ) {
+			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'bridge has no mappings or taxonomy rules', array(
 				'resolution' => $resolution_method,
 			) );
 			return JEDB_Sync_Log::STATUS_NOOP;
@@ -301,6 +306,29 @@ class JEDB_Flattener {
 		}
 
 		try {
+
+			// Phase 3.6 / D-20-D-24: apply taxonomy rules BEFORE field
+			// mappings. The categorization decision ("which storefront
+			// taxonomy slot does this product live in?") is conceptually
+			// upstream of the field-level copy-paste of names / prices,
+			// and editors expect the category to be set before any
+			// taxonomy-aware transformer in the mappings chain runs.
+			$taxonomy_summary = array(
+				'rules_processed' => 0,
+				'rules_applied'   => 0,
+				'terms_added'     => 0,
+				'terms_removed'   => 0,
+				'terms_created'   => 0,
+				'rules'           => array(),
+			);
+
+			if ( ! empty( $taxonomies ) ) {
+				$taxonomy_summary = JEDB_Taxonomy_Applier::instance()->apply_for_bridge(
+					$taxonomies,
+					$target_id,
+					$context
+				);
+			}
 
 			$registry_t = JEDB_Transformer_Registry::instance();
 			$payload    = array();
@@ -339,13 +367,34 @@ class JEDB_Flattener {
 			}
 
 			if ( ! $any_change ) {
-				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'every mapped value already matched target — nothing to write', array(
-					'fields_examined' => count( $per_field ),
-					'per_field'       => $per_field,
-					'resolution'      => $resolution_method,
-					'auto_attached'   => $auto_attached,
+				// Even if no mappings wrote, taxonomies may have changed —
+				// reflect that in status. If both are noops, log noop;
+				// if taxonomies actually moved terms, log success with a
+				// `taxonomies_only` marker so editors can audit.
+				$taxonomies_changed = ( $taxonomy_summary['terms_added'] > 0
+					|| $taxonomy_summary['terms_removed'] > 0
+					|| $taxonomy_summary['terms_created'] > 0 );
+
+				if ( ! $taxonomies_changed ) {
+					$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'every mapped value already matched target — nothing to write', array(
+						'fields_examined'  => count( $per_field ),
+						'per_field'        => $per_field,
+						'resolution'       => $resolution_method,
+						'auto_attached'    => $auto_attached,
+						'taxonomies'       => $taxonomy_summary,
+					) );
+					return JEDB_Sync_Log::STATUS_NOOP;
+				}
+
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SUCCESS, $origin_tag, sprintf( 'fields all noop, but %d taxonomy term(s) changed', $taxonomy_summary['terms_added'] + $taxonomy_summary['terms_removed'] ), array(
+					'fields_examined'   => count( $per_field ),
+					'per_field'         => $per_field,
+					'resolution'        => $resolution_method,
+					'auto_attached'     => $auto_attached,
+					'taxonomies'        => $taxonomy_summary,
+					'taxonomies_only'   => true,
 				) );
-				return JEDB_Sync_Log::STATUS_NOOP;
+				return JEDB_Sync_Log::STATUS_SUCCESS;
 			}
 
 			$ok = $target_adapter->update( $target_id, $payload );
@@ -359,6 +408,7 @@ class JEDB_Flattener {
 				'per_field'     => $per_field,
 				'resolution'    => $resolution_method,
 				'auto_attached' => $auto_attached,
+				'taxonomies'    => $taxonomy_summary,
 			) );
 
 			return $status;
@@ -370,6 +420,7 @@ class JEDB_Flattener {
 				'line'          => $e->getLine(),
 				'resolution'    => $resolution_method,
 				'auto_attached' => $auto_attached,
+				'taxonomies'    => isset( $taxonomy_summary ) ? $taxonomy_summary : null,
 			) );
 			return JEDB_Sync_Log::STATUS_ERRORED;
 

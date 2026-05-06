@@ -45,8 +45,9 @@ class JEDB_Tab_Flatten {
 		add_action( 'admin_post_jedb_flatten_delete',        array( $this, 'handle_delete' ) );
 		add_action( 'admin_post_jedb_flatten_sync_now',      array( $this, 'handle_sync_now' ) );
 
-		add_action( 'wp_ajax_jedb_flatten_get_target_schema', array( $this, 'ajax_get_target_schema' ) );
-		add_action( 'wp_ajax_jedb_flatten_validate_condition', array( $this, 'ajax_validate_condition' ) );
+		add_action( 'wp_ajax_jedb_flatten_get_target_schema',          array( $this, 'ajax_get_target_schema' ) );
+		add_action( 'wp_ajax_jedb_flatten_validate_condition',         array( $this, 'ajax_validate_condition' ) );
+		add_action( 'wp_ajax_jedb_flatten_get_post_type_taxonomies',   array( $this, 'ajax_get_post_type_taxonomies' ) );
 	}
 
 	public function register_tab( $tabs ) {
@@ -201,6 +202,109 @@ class JEDB_Tab_Flatten {
 		$result = JEDB_Condition_Evaluator::instance()->validate( $dsl );
 
 		wp_send_json_success( $result );
+	}
+
+	/**
+	 * Phase 3.6 / D-24 — return the registered taxonomies + their first
+	 * page of terms for a given post type. Used by the Flatten admin
+	 * tab's Taxonomies section so editors can pick from dropdowns
+	 * instead of typing slugs.
+	 *
+	 * Input (POST): `target` = full target slug like `posts::product`,
+	 * or `post_type` = bare post type. Either is accepted.
+	 *
+	 * Output:
+	 *   {
+	 *     post_type: 'product',
+	 *     taxonomies: [
+	 *       {
+	 *         slug: 'product_cat',
+	 *         label: 'Categories',
+	 *         hierarchical: true,
+	 *         terms_count: 14,
+	 *         terms: [{ id: 15, name: 'Mosaics', slug: 'mosaics' }, ...]
+	 *       },
+	 *       ...
+	 *     ]
+	 *   }
+	 *
+	 * Performance note: returns at most JEDB_TAX_TERMS_LIMIT terms per
+	 * taxonomy (default 100). For larger taxonomies the editor types a
+	 * slug manually — search/autocomplete is a Phase 4+ enhancement
+	 * since v1's typical use case is small enum-like taxonomies.
+	 */
+	public function ajax_get_post_type_taxonomies() {
+
+		check_ajax_referer( 'jedb_flatten_admin', 'nonce' );
+
+		if ( ! current_user_can( JEDB_CAPABILITY ) ) {
+			wp_send_json_error( array( 'message' => 'forbidden' ), 403 );
+		}
+
+		$post_type = '';
+		if ( ! empty( $_POST['target'] ) ) {
+			$target_slug = sanitize_text_field( wp_unslash( $_POST['target'] ) );
+			if ( 0 === strpos( $target_slug, 'posts::' ) ) {
+				$post_type = substr( $target_slug, 7 );
+			}
+		}
+		if ( '' === $post_type && ! empty( $_POST['post_type'] ) ) {
+			$post_type = sanitize_key( wp_unslash( $_POST['post_type'] ) );
+		}
+
+		if ( '' === $post_type || ! post_type_exists( $post_type ) ) {
+			wp_send_json_error( array( 'message' => sprintf( 'unknown or unregistered post type "%s"', $post_type ) ), 404 );
+		}
+
+		$max_terms = defined( 'JEDB_TAX_TERMS_LIMIT' ) ? (int) JEDB_TAX_TERMS_LIMIT : 100;
+
+		$taxonomy_objects = get_object_taxonomies( $post_type, 'objects' );
+		$out = array();
+
+		foreach ( $taxonomy_objects as $tax_slug => $tax_obj ) {
+
+			$terms = get_terms( array(
+				'taxonomy'   => $tax_slug,
+				'hide_empty' => false,
+				'number'     => $max_terms,
+				'orderby'    => 'name',
+				'order'      => 'ASC',
+			) );
+
+			$terms_out = array();
+			if ( is_array( $terms ) ) {
+				foreach ( $terms as $term ) {
+					if ( ! is_object( $term ) || empty( $term->term_id ) ) {
+						continue;
+					}
+					$terms_out[] = array(
+						'id'    => (int) $term->term_id,
+						'name'  => $term->name,
+						'slug'  => $term->slug,
+					);
+				}
+			}
+
+			$total_terms = (int) wp_count_terms( array(
+				'taxonomy'   => $tax_slug,
+				'hide_empty' => false,
+			) );
+
+			$out[] = array(
+				'slug'         => $tax_slug,
+				'label'        => isset( $tax_obj->labels->name ) ? $tax_obj->labels->name : $tax_slug,
+				'hierarchical' => ! empty( $tax_obj->hierarchical ),
+				'public'       => ! empty( $tax_obj->public ),
+				'terms_count'  => $total_terms,
+				'truncated'    => $total_terms > count( $terms_out ),
+				'terms'        => $terms_out,
+			);
+		}
+
+		wp_send_json_success( array(
+			'post_type'  => $post_type,
+			'taxonomies' => $out,
+		) );
 	}
 
 	/* -----------------------------------------------------------------------

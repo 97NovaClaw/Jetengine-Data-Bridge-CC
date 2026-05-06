@@ -2,6 +2,106 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.2] — 2026-05-06
+
+**Phase 3.6 — categorization layer.**
+
+End-to-end taxonomy support per D-20 → D-24 / L-023 / BUILD-PLAN
+§4.11. Bridges can now categorize posts on push via two complementary
+mechanisms: a new `term_lookup` transformer for per-row dynamic
+categorization, and a new `taxonomies[]` array on flatten configs
+for static-per-bridge multi-taxonomy assignment. Push-only semantics
+in v1 (D-21) — pull never modifies taxonomies.
+
+### Added — runtime engine
+
+- **`JEDB_Transformer_Term_Lookup`** (`includes/flatten/transformers/class-transformer-term-lookup.php`)
+  — new built-in transformer registered alongside the existing nine.
+  Push: names/slugs/IDs → term IDs (array). Pull: term IDs →
+  names/slugs (string or array, configurable via `output` arg).
+  Composes naturally with `mappings[]` entries that target Woo's
+  `category_ids` / `tag_ids` typed-setter fields.
+
+- **`taxonomies[]` array** on `wp_jedb_flatten_configs.config_json`.
+  Each entry is one taxonomy rule with `taxonomy`, `apply_terms`,
+  `apply_terms_inverse`, `match_by`, `merge_strategy`,
+  `create_if_missing`, and a forward-compat `snippet` slot
+  (Phase 5b). Defaults per `JEDB_Flatten_Config_Manager::default_taxonomy_rule()`:
+  `merge_strategy='append'`, `create_if_missing=false`, `match_by='slug'`
+  per D-22.
+
+- **`JEDB_Taxonomy_Applier`** (`includes/flatten/class-taxonomy-applier.php`)
+  — applies the rules during forward push between the condition check
+  and field mappings. Per rule: validates the taxonomy is registered
+  + applicable to the target post type, resolves apply/inverse term
+  refs (with optional `wp_insert_term()` for `create_if_missing`),
+  calls `wp_set_object_terms()` and `wp_remove_object_terms()`,
+  returns a structured per-rule outcome.
+
+- **Forward `JEDB_Flattener` integration** — calls the applier between
+  condition check and mappings. Sync log `context_json` now carries a
+  `taxonomies` summary with `rules_processed`, `rules_applied`,
+  `terms_added`, `terms_removed`, `terms_created`, plus per-rule
+  outcome arrays. **A bridge with no mappings but with taxonomy
+  rules is now a valid bridge** — the engine no longer short-circuits
+  on empty `mappings`. When mappings are all-noop but taxonomies
+  changed terms, the row logs `success` with a `taxonomies_only`
+  marker.
+
+- **Reverse `JEDB_Reverse_Flattener` skips taxonomies entirely**
+  (D-21 push-only semantics). Pull only writes mapped CCT fields.
+
+### Added — admin UI
+
+- **Flatten admin tab gains a "Taxonomies (push only)" collapsible
+  section** between the Mandatory Coverage panel and the Field
+  Mappings table. Visible only when `target_target` is `posts::*`.
+  Per rule: taxonomy dropdown (live-queried), apply-terms multi-
+  select, inverse-terms multi-select, match-by select, strategy
+  select, `create_if_missing` checkbox, remove button. "Add taxonomy
+  rule" + "Refresh from site" buttons in the table footer.
+  Status pill in the section header shows "no rules" / "N rule(s)".
+
+- **AJAX endpoint `wp_ajax_jedb_flatten_get_post_type_taxonomies`** —
+  returns `{post_type, taxonomies: [{slug, label, hierarchical,
+  public, terms_count, truncated, terms: [...]}]}` for a given post
+  type. Powers the dropdowns. Truncates to `JEDB_TAX_TERMS_LIMIT`
+  (default 100, override via `define`) — taxonomies with more terms
+  show the editor a "showing first 100 of N" notice.
+
+- **JS rebuilds the apply/inverse multi-selects whenever the
+  taxonomy or `match_by` value changes**, preserving the previous
+  selection where possible. The multi-select stores values per the
+  current `match_by` (slugs by default, names or IDs as configured).
+
+### Added — bootstrap
+
+- **`JEDB_TAX_TERMS_LIMIT` constant** (default 100) — configurable
+  ceiling on the AJAX endpoint's per-taxonomy term return count.
+
+### Plumbing
+
+- `class-plugin.php` `load_core()` requires + instantiates
+  `JEDB_Taxonomy_Applier::instance()` between Sync_Log and
+  Flattener.
+- `class-flatten-config-manager.php` `default_config_json()` adds
+  `taxonomies` (default `[]`); new `default_taxonomy_rule()` factory;
+  `merge_with_defaults()` deep-merges `taxonomies[]` so existing
+  0.5.x bridges get well-formed defaults on read.
+
+### Notes for upgraders
+
+- **No schema migration needed.** `taxonomies[]` is a new top-level
+  key on the JSON-encoded `config_json` column; bridges saved before
+  0.5.2 get an empty array filled in on read.
+- **Existing 0.5.x push and pull bridges are unaffected** — they
+  simply have an empty `taxonomies[]` and the engine skips that
+  step. Add rules from the Flatten admin tab when ready.
+- **Reverse pull bridges ignore `taxonomies[]` entirely** — push-only
+  per D-21. Editors who want post categorization to gate or trigger
+  reverse syncs should wait for Phase 4.5's `term_assigned` trigger
+  per D-18.
+
 ## [0.5.1] — 2026-05-06
 
 **Documentation + small cleanups; no behavior change.**

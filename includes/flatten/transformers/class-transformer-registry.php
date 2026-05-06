@@ -138,6 +138,7 @@ class JEDB_Transformer_Registry {
 		require_once $dir . 'class-transformer-truncate-words.php';
 		require_once $dir . 'class-transformer-strip-html.php';
 		require_once $dir . 'class-transformer-year-expander.php';
+		require_once $dir . 'class-transformer-term-lookup.php';
 
 		$this->register( new JEDB_Transformer_Passthrough() );
 		$this->register( new JEDB_Transformer_Yes_No_Bool() );
@@ -148,6 +149,7 @@ class JEDB_Transformer_Registry {
 		$this->register( new JEDB_Transformer_Truncate_Words() );
 		$this->register( new JEDB_Transformer_Strip_HTML() );
 		$this->register( new JEDB_Transformer_Year_Expander() );
+		$this->register( new JEDB_Transformer_Term_Lookup() );
 
 		do_action( 'jedb/transformer/register', $this );
 	}

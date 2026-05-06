@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.5.1 — Phases 3 + 3.5 complete and verified on staging. Bidirectional sync works end-to-end: editing a CCT pushes mapped fields onto the linked Woo / CPT record, AND editing the post propagates back to the CCT via the per-mapping `pull_transform` chain. Per-direction triggers, mutual cascade prevention via `Sync_Guard::is_locked()` cross-checks, optional auto-create of CCT rows for unlinked posts (D-17 opt-in), and L-021 self-heal in both directions. v0.5.1 documents L-022 (JE `$db->update()` hook bypass) and L-023 (the categorization architecture). **Phase 3.6 — the categorization layer (`term_lookup` transformer + `taxonomies[]` array, push-only) — design locked per D-20 → D-24 and ships as v0.5.2.** Phase 4 (Bridge meta box on Woo product edit screen) follows.
+**Status:** v0.5.2 — Phases 3, 3.5, and 3.6 complete. Bidirectional sync + categorization layer work end-to-end. Editing a CCT pushes mapped fields onto the linked Woo / CPT record AND assigns configured taxonomies on push; editing the post propagates fields back to the CCT (taxonomies are push-only per D-21). v0.5.2 ships the `term_lookup` transformer for per-row dynamic categorization, the `taxonomies[]` array on flatten configs for static-per-bridge multi-taxonomy assignment with per-rule merge strategy, inverse-removal, and create-if-missing controls, plus a live-queried Taxonomies section in the Flatten admin tab. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -41,7 +41,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.5.1)
+## What's actually shipped right now (v0.5.2)
 
 **Functional capabilities (cumulative through Phase 3):**
 
@@ -58,6 +58,9 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 - ✅ **Reverse-direction flatten engine** (Phase 3.5, v0.5.0) — editing a Woo product / CPT propagates mapped fields back to the linked CCT row via the per-mapping `pull_transform` chain. Hooks: `woocommerce_update_product` (+ variations) and `save_post_{type}` for non-Woo CPTs, both at priority 20.
 - ✅ **Bidirectional bridges** (v0.5.0) — `direction = bidirectional` registers both engines for one bridge. Mutual cascade prevention via cross-direction `Sync_Guard::is_locked()` checks at the top of each engine's `apply_bridge()`.
 - ✅ **Auto-create CCT row** (v0.5.0, D-17 opt-in) — when a post saves with no linked CCT row, the reverse engine can optionally create a fresh CCT row in the bridge's source target and auto-attach the relation. Default OFF; opt-in per bridge via `auto_create_target_when_unlinked` checkbox.
+- ✅ **`term_lookup` transformer** (Phase 3.6, v0.5.2) — push: names/slugs/IDs → term IDs (array); pull: term IDs → names/slugs. Use to map a CCT string field onto a Woo taxonomy field like `category_ids` via the existing per-mapping transformer chain. Composes with the `taxonomies[]` array.
+- ✅ **`taxonomies[]` array on flatten configs** (Phase 3.6, v0.5.2) — bridge configs carry per-bridge taxonomy rules with per-rule merge strategy (append/replace), explicit term removal via `apply_terms_inverse`, optional `create_if_missing`, and a forward-compat `snippet` slot for Phase 5b. Push-only semantics in v1 per D-21.
+- ✅ **Live taxonomy UI** (Phase 3.6, v0.5.2) — Flatten admin tab gains a Taxonomies section visible only when `target_target` is `posts::*`. Dropdowns are populated via the new `wp_ajax_jedb_flatten_get_post_type_taxonomies` endpoint; editors pick from registered taxonomies + existing terms instead of typing slugs by hand. `JEDB_TAX_TERMS_LIMIT` (default 100) caps the per-taxonomy term return count.
 - ✅ **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 - ✅ **Sync Log** — every bridge invocation writes a row to `wp_jedb_sync_log` with status from the BUILD-PLAN §4.9 taxonomy (`success`, `partial`, `errored`, `skipped_condition`, `skipped_error`, `skipped_locked`, `skipped_no_target`, `noop`).
 - ✅ **Transformer registry** — 9 built-in transformers (`passthrough`, `yes_no_to_bool`, `regex_replace`, `format_number`, `lookup_table`, `name_builder`, `truncate_words`, `strip_html`, `year_expander`). Per D-11 / L-010 each transformer defines push and pull explicitly.
@@ -76,7 +79,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## Current file tree (v0.5.1)
+## Current file tree (v0.5.2)
 
 ```
 je-data-bridge-cc/
@@ -117,9 +120,10 @@ je-data-bridge-cc/
 │   │
 │   ├── flatten/
 │   │   ├── class-condition-evaluator.php       v1 DSL parser + evaluator (BUILD-PLAN §3.5)
-│   │   ├── class-flatten-config-manager.php    wp_jedb_flatten_configs CRUD
+│   │   ├── class-flatten-config-manager.php    wp_jedb_flatten_configs CRUD (incl. taxonomies[])
 │   │   ├── class-flattener.php                 Forward push engine (priority 20)
 │   │   ├── class-reverse-flattener.php         Reverse pull engine (priority 20)
+│   │   ├── class-taxonomy-applier.php          Phase 3.6 push-only taxonomy rule applier
 │   │   └── transformers/
 │   │       ├── interface-transformer.php
 │   │       ├── class-transformer-registry.php
@@ -131,7 +135,8 @@ je-data-bridge-cc/
 │   │       ├── class-transformer-name-builder.php
 │   │       ├── class-transformer-truncate-words.php
 │   │       ├── class-transformer-strip-html.php
-│   │       └── class-transformer-year-expander.php
+│   │       ├── class-transformer-year-expander.php
+│   │       └── class-transformer-term-lookup.php
 │   │
 │   ├── snippets/
 │   │   └── class-snippet-installer.php      Creates uploads/jedb-snippets/ + guards
@@ -218,8 +223,8 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 2.5 | Bidirectional architecture lock + picker visibility fix (L-016 → L-020, D-17 → D-19) | **✅ Complete** (v0.3.1) |
 | 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers + L-021 self-heal | **✅ Complete** (v0.4.0 → v0.4.1) |
 | 3.5 | Reverse-direction flatten (post → CCT) + bidirectional bridges + auto-create CCT (D-17) per BUILD-PLAN §4.10 + L-022 cascade-asymmetry doc | **✅ Complete** (v0.5.0 → v0.5.1, verified on staging) |
-| 3.6 | Categorization layer: `term_lookup` transformer + `taxonomies[]` array + post-only push semantics (D-20 → D-24, L-023, BUILD-PLAN §4.11). Architecture locked; implementation in progress | **▶ In progress** (ships as v0.5.2) |
-| 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | Pending |
+| 3.6 | Categorization layer: `term_lookup` transformer + `taxonomies[]` array + post-only push semantics (D-20 → D-24, L-023, BUILD-PLAN §4.11) | **✅ Complete** (v0.5.2) |
+| 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | **▶ Next up** |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
 | 4.5 | `term_assigned` trigger (term changes as wakeup events for reverse engine; D-18 trigger taxonomy implementation) | Pending |
 | 5  | Settings API + debug log viewer enhancements + utilities export/import | Pending |

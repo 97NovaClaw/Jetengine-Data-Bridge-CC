@@ -370,3 +370,76 @@
 .jedb-flatten-manual-sync label {
 	margin-right: 12px;
 }
+
+/* Phase 3.6: Taxonomies section */
+
+.jedb-flatten-taxonomies-section {
+	margin-top: 28px;
+	padding: 14px 18px;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-radius: 6px;
+}
+
+.jedb-flatten-taxonomies-section > summary {
+	cursor: pointer;
+	user-select: none;
+	padding: 6px 0;
+	list-style: none;
+}
+
+.jedb-flatten-taxonomies-section > summary::-webkit-details-marker {
+	display: none;
+}
+
+.jedb-flatten-taxonomies-section[open] > summary {
+	margin-bottom: 12px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid #dcdcde;
+}
+
+.jedb-tax-summary-pill:empty {
+	display: none;
+}
+
+.jedb-flatten-taxonomies {
+	background: #fff;
+	margin-top: 6px;
+}
+
+.jedb-flatten-taxonomies th {
+	font-size: 11px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: #50575e;
+}
+
+.jedb-flatten-taxonomies td {
+	vertical-align: top;
+	padding: 8px 8px;
+}
+
+.jedb-flatten-taxonomies select.jedb-tax-slug {
+	width: 100%;
+	font-size: 12px;
+}
+
+.jedb-flatten-taxonomies select[data-tax-control] {
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+	font-size: 12px;
+}
+
+.jedb-flatten-taxonomies select[data-tax-control] option:disabled {
+	color: #a0a3a8;
+	font-style: italic;
+}
+
+.jedb-flatten-taxonomies select.jedb-tax-match-by,
+.jedb-flatten-taxonomies select.jedb-tax-merge-strategy {
+	width: 100%;
+	font-size: 12px;
+}
+
+.jedb-flatten-taxonomies input.jedb-tax-create-if-missing {
+	margin-top: 4px;
+}

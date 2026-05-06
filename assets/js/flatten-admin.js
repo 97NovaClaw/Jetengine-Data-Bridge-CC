@@ -231,6 +231,284 @@
 		return out;
 	}
 
+	/* -----------------------------------------------------------------------
+	 * Phase 3.6 / D-20-D-24: Taxonomy rules section.
+	 *
+	 * In-memory model:
+	 *   - taxonomyCatalog: array fetched from the AJAX endpoint, shape per
+	 *     class-tab-flatten.php::ajax_get_post_type_taxonomies.
+	 *   - currentPostType: parsed from the target_target dropdown.
+	 *   - The DOM rows are the source of truth for taxonomyRules between
+	 *     renders (same pattern as mappings). syncJSON reads them.
+	 * -------------------------------------------------------------------- */
+
+	var $taxSection      = $( '#jedb_flatten_taxonomies_section' );
+	var $taxTbody        = $( '#jedb_flatten_taxonomies tbody' );
+	var $taxStatus       = $( '#jedb_flatten_taxonomies_status' );
+	var $taxSummaryPill  = $taxSection.find( '.jedb-tax-summary-pill' );
+
+	var taxonomyCatalog  = [];
+	var currentPostType  = bootstrap.initial_post_type || '';
+	var taxonomyRules    = ( bootstrap.initial_taxonomies || [] ).slice();
+	var taxonomyDefault  = bootstrap.taxonomy_default_rule || {
+		taxonomy: '', apply_terms: [], apply_terms_inverse: [],
+		match_by: 'slug', merge_strategy: 'append',
+		create_if_missing: false, snippet: null, enabled: true, note: ''
+	};
+
+	function findTaxonomyInCatalog( slug ) {
+		for ( var i = 0; i < taxonomyCatalog.length; i++ ) {
+			if ( taxonomyCatalog[ i ].slug === slug ) { return taxonomyCatalog[ i ]; }
+		}
+		return null;
+	}
+
+	function fetchTaxonomies( postType, done ) {
+		if ( ! postType ) {
+			taxonomyCatalog = [];
+			if ( done ) { done(); }
+			return;
+		}
+		$taxStatus.text( '… loading taxonomies for ' + postType );
+		$.post( bootstrap.ajax_url, {
+			action:    'jedb_flatten_get_post_type_taxonomies',
+			nonce:     bootstrap.nonce,
+			post_type: postType
+		} ).done( function ( resp ) {
+			if ( resp && resp.success && resp.data ) {
+				taxonomyCatalog = resp.data.taxonomies || [];
+				$taxStatus.text( taxonomyCatalog.length + ' taxonomies registered for ' + postType );
+			} else {
+				taxonomyCatalog = [];
+				$taxStatus.text( 'Failed to load taxonomies' );
+			}
+			if ( done ) { done(); }
+		} ).fail( function () {
+			taxonomyCatalog = [];
+			$taxStatus.text( 'AJAX error loading taxonomies' );
+			if ( done ) { done(); }
+		} );
+	}
+
+	function makeTermsSelect( taxonomySlug, selectedRefs, matchBy, name ) {
+
+		var $sel = $( '<select multiple size="4" />' )
+			.attr( 'data-tax-control', name )
+			.css( { width: '100%', minHeight: '90px' } );
+
+		var taxData  = findTaxonomyInCatalog( taxonomySlug );
+		var selected = ( selectedRefs || [] ).map( String );
+
+		if ( ! taxData || ! taxData.terms || ! taxData.terms.length ) {
+			$sel.append( $( '<option/>' ).attr( 'disabled', true ).text( taxData ? '— no terms registered —' : '— select a taxonomy first —' ) );
+			return $sel;
+		}
+
+		taxData.terms.forEach( function ( term ) {
+			var optValue;
+			if ( 'name' === matchBy ) {
+				optValue = String( term.name );
+			} else if ( 'id' === matchBy ) {
+				optValue = String( term.id );
+			} else {
+				optValue = String( term.slug );
+			}
+			var $opt = $( '<option/>' ).val( optValue ).text( term.name + ' [' + term.slug + ']' );
+			if ( selected.indexOf( optValue ) !== -1 ) {
+				$opt.prop( 'selected', true );
+			}
+			$sel.append( $opt );
+		} );
+
+		if ( taxData.truncated ) {
+			$sel.append( $( '<option/>' ).attr( 'disabled', true ).text( '… showing first 100 of ' + taxData.terms_count + ' — edit raw JSON for the rest' ) );
+		}
+
+		return $sel;
+	}
+
+	function readMultiSelectValues( $sel ) {
+		var out = $sel.val();
+		if ( ! out ) { return []; }
+		if ( ! Array.isArray( out ) ) { out = [ out ]; }
+		return out.filter( function ( v ) { return v !== null && v !== ''; } );
+	}
+
+	function makeTaxonomyRow( rule ) {
+
+		rule = $.extend( true, {}, taxonomyDefault, rule || {} );
+
+		var $tr = $( '<tr class="jedb-taxonomy-row"/>' );
+
+		// Taxonomy slug select
+		var $taxSel = $( '<select class="jedb-tax-slug"/>' );
+		$taxSel.append( $( '<option/>' ).val( '' ).text( '— select —' ) );
+		taxonomyCatalog.forEach( function ( tax ) {
+			var label = tax.label + ' (' + tax.slug + ')';
+			if ( tax.hierarchical ) { label += ' · hierarchical'; }
+			label += ' · ' + tax.terms_count + ' terms';
+			$taxSel.append( $( '<option/>' ).val( tax.slug ).text( label ).prop( 'selected', tax.slug === rule.taxonomy ) );
+		} );
+		if ( rule.taxonomy && ! findTaxonomyInCatalog( rule.taxonomy ) ) {
+			// Saved taxonomy that's no longer registered — keep visible so editor sees it.
+			$taxSel.append( $( '<option/>' ).val( rule.taxonomy ).text( rule.taxonomy + ' (NOT REGISTERED)' ).prop( 'selected', true ) );
+		}
+
+		var $applySel   = makeTermsSelect( rule.taxonomy, rule.apply_terms,         rule.match_by, 'apply' );
+		var $inverseSel = makeTermsSelect( rule.taxonomy, rule.apply_terms_inverse, rule.match_by, 'inverse' );
+
+		var $matchBy = $( '<select class="jedb-tax-match-by"/>' );
+		[ 'slug', 'name', 'id' ].forEach( function ( v ) {
+			$matchBy.append( $( '<option/>' ).val( v ).text( v ).prop( 'selected', v === rule.match_by ) );
+		} );
+
+		var $strategy = $( '<select class="jedb-tax-merge-strategy"/>' );
+		[ 'append', 'replace' ].forEach( function ( v ) {
+			$strategy.append( $( '<option/>' ).val( v ).text( v ).prop( 'selected', v === rule.merge_strategy ) );
+		} );
+
+		var $createCb = $( '<input type="checkbox" class="jedb-tax-create-if-missing" />' )
+			.prop( 'checked', !! rule.create_if_missing );
+
+		var $rm = $( '<button type="button" class="button button-small button-link-delete" title="Remove">×</button>' )
+			.on( 'click', function () {
+				$tr.remove();
+				updateTaxonomySummary();
+				syncJSON();
+			} );
+
+		$tr.append( $( '<td/>' ).append( $taxSel ) )
+		   .append( $( '<td/>' ).append( $applySel ) )
+		   .append( $( '<td/>' ).append( $inverseSel ) )
+		   .append( $( '<td/>' ).append( $matchBy ) )
+		   .append( $( '<td/>' ).append( $strategy ) )
+		   .append( $( '<td/>' ).append( $createCb ) )
+		   .append( $( '<td/>' ).append( $rm ) );
+
+		// Re-render apply/inverse selects when taxonomy or match_by changes,
+		// preserving as much of the current selection as possible.
+		var rebuildTermSelects = function () {
+			var newTax     = $taxSel.val();
+			var newMatchBy = $matchBy.val();
+			var keptApply  = readMultiSelectValues( $tr.find( 'select[data-tax-control="apply"]' ) );
+			var keptInv    = readMultiSelectValues( $tr.find( 'select[data-tax-control="inverse"]' ) );
+
+			$tr.find( 'select[data-tax-control="apply"]' ).replaceWith(
+				makeTermsSelect( newTax, keptApply, newMatchBy, 'apply' )
+			);
+			$tr.find( 'select[data-tax-control="inverse"]' ).replaceWith(
+				makeTermsSelect( newTax, keptInv, newMatchBy, 'inverse' )
+			);
+			syncJSON();
+		};
+
+		$taxSel.on( 'change',  rebuildTermSelects );
+		$matchBy.on( 'change', rebuildTermSelects );
+		$applySel.on( 'change', syncJSON );
+		$inverseSel.on( 'change', syncJSON );
+		$strategy.on( 'change', syncJSON );
+		$createCb.on( 'change', syncJSON );
+
+		return $tr;
+	}
+
+	function readTaxonomyRulesFromDom() {
+
+		var out = [];
+
+		$taxTbody.children( 'tr' ).each( function () {
+
+			var $tr      = $( this );
+			var taxonomy = $tr.find( 'select.jedb-tax-slug' ).val() || '';
+			var matchBy  = $tr.find( 'select.jedb-tax-match-by' ).val() || 'slug';
+			var strategy = $tr.find( 'select.jedb-tax-merge-strategy' ).val() || 'append';
+			var apply    = readMultiSelectValues( $tr.find( 'select[data-tax-control="apply"]' ) );
+			var inverse  = readMultiSelectValues( $tr.find( 'select[data-tax-control="inverse"]' ) );
+			var create   = $tr.find( 'input.jedb-tax-create-if-missing' ).is( ':checked' );
+
+			out.push( {
+				taxonomy:            taxonomy,
+				apply_terms:         apply,
+				apply_terms_inverse: inverse,
+				match_by:            matchBy,
+				merge_strategy:      strategy,
+				create_if_missing:   create,
+				snippet:             null,
+				enabled:             true,
+				note:                ''
+			} );
+		} );
+
+		return out;
+	}
+
+	function renderTaxonomyRules() {
+
+		// Read current DOM state into in-memory array first so a re-render
+		// (e.g. on target change) doesn't lose unsaved edits.
+		if ( $taxTbody.children( 'tr' ).length ) {
+			taxonomyRules = readTaxonomyRulesFromDom();
+		}
+
+		$taxTbody.empty();
+
+		taxonomyRules.forEach( function ( rule ) {
+			$taxTbody.append( makeTaxonomyRow( rule ) );
+		} );
+
+		updateTaxonomySummary();
+		syncJSON();
+	}
+
+	function updateTaxonomySummary() {
+		var n = $taxTbody.children( 'tr' ).length;
+		$taxSummaryPill.removeClass( 'jedb-pill-ok jedb-pill-warn' );
+		if ( n === 0 ) {
+			$taxSummaryPill.addClass( 'jedb-pill-warn' ).text( 'no rules' ).show();
+		} else {
+			$taxSummaryPill.addClass( 'jedb-pill-ok' ).text( n + ' rule' + ( n === 1 ? '' : 's' ) ).show();
+		}
+	}
+
+	function refreshTaxonomySectionVisibility() {
+
+		var targetVal     = $targetSel.val() || '';
+		var isPostsTarget = targetVal.indexOf( 'posts::' ) === 0;
+
+		if ( ! isPostsTarget ) {
+			$taxSection.hide().attr( 'data-visible', '0' );
+			currentPostType = '';
+			taxonomyCatalog = [];
+			return;
+		}
+
+		$taxSection.show().attr( 'data-visible', '1' );
+
+		var newPostType = targetVal.substring( 7 );
+		if ( newPostType === currentPostType && taxonomyCatalog.length ) {
+			return;
+		}
+
+		currentPostType = newPostType;
+		fetchTaxonomies( currentPostType, renderTaxonomyRules );
+	}
+
+	$( '#jedb_flatten_add_taxonomy_rule' ).on( 'click', function () {
+		// Push a fresh row both into in-memory state and DOM so the next
+		// renderTaxonomyRules() call (which reads DOM first) doesn't drop it.
+		taxonomyRules = readTaxonomyRulesFromDom();
+		taxonomyRules.push( $.extend( true, {}, taxonomyDefault ) );
+		renderTaxonomyRules();
+	} );
+
+	$( '#jedb_flatten_refresh_taxonomies' ).on( 'click', function () {
+		fetchTaxonomies( currentPostType, renderTaxonomyRules );
+	} );
+
+	/* -----------------------------------------------------------------------
+	 * buildConfig + syncJSON + initial render
+	 * -------------------------------------------------------------------- */
+
 	function buildConfig() {
 
 		var fromRaw = null;
@@ -242,7 +520,8 @@
 
 		var cfg = $.extend( true, {}, fromRaw );
 
-		cfg.mappings = readMappingsFromDom();
+		cfg.mappings   = readMappingsFromDom();
+		cfg.taxonomies = readTaxonomyRulesFromDom();
 
 		cfg.condition = $condInput.val() || '';
 		cfg.priority  = parseInt( $form.find( '#jedb_flatten_priority' ).val(), 10 );
@@ -280,6 +559,17 @@
 			.forEach( function ( m ) {
 				$tbody.append( makeMappingRow( m ) );
 			} );
+
+		// Taxonomies — fetch the catalog if the form already has a posts target,
+		// then render whatever rules came in via bootstrap.
+		if ( currentPostType ) {
+			$taxSection.show().attr( 'data-visible', '1' );
+			fetchTaxonomies( currentPostType, renderTaxonomyRules );
+		} else {
+			$taxSection.hide().attr( 'data-visible', '0' );
+			updateTaxonomySummary();
+		}
+
 		syncJSON();
 	}
 
@@ -317,12 +607,9 @@
 		} );
 	} );
 
-	$( '#jedb_flatten_source, #jedb_flatten_target' ).on( 'change', function () {
-		// On source/target change we re-save the form once so the relations
-		// list and field schemas are re-rendered server-side. Simpler than
-		// re-fetching everything via AJAX for v1.
-		// (The user clicks "Save" — keep it explicit for now.)
-	} );
+	// Phase 3.6: target-target change re-fetches the taxonomy catalog so the
+	// dropdowns inside the Taxonomies section reflect the new post type.
+	$targetSel.on( 'change', refreshTaxonomySectionVisibility );
 
 	renderInitial();
 

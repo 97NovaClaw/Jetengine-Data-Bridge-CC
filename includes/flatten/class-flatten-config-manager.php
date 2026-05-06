@@ -48,6 +48,11 @@ class JEDB_Flatten_Config_Manager {
 	public static function default_config_json() {
 		return array(
 			'mappings'                          => array(),
+			// Phase 3.6 / D-20: dedicated taxonomy rules array, parallel
+			// to mappings[]. Push-only per D-21 — reverse pull engine
+			// skips this entirely. Each entry shape comes from
+			// default_taxonomy_rule(). Empty by default.
+			'taxonomies'                        => array(),
 			'condition'                         => '',
 			'condition_snippet'                 => '',
 			'priority'                          => 100,
@@ -73,6 +78,28 @@ class JEDB_Flatten_Config_Manager {
 				'remove' => array(),
 			),
 			'origin_tag'                        => 'flatten',
+		);
+	}
+
+	/**
+	 * Default shape for one entry in `taxonomies[]` (per BUILD-PLAN
+	 * §4.11 / D-22). Used as the merge target when reading existing
+	 * rules from saved config_json so editors who saved bridges
+	 * before fields existed get sensible defaults filled in.
+	 *
+	 * @return array
+	 */
+	public static function default_taxonomy_rule() {
+		return array(
+			'taxonomy'            => '',
+			'apply_terms'         => array(),
+			'apply_terms_inverse' => array(),
+			'match_by'            => 'slug',     // D-22: most stable identifier
+			'merge_strategy'      => 'append',   // D-22: editor-friendly default
+			'create_if_missing'   => false,      // D-22: editor opt-in
+			'snippet'             => null,       // forward-compat with Phase 5b
+			'enabled'             => true,
+			'note'                => '',
 		);
 	}
 
@@ -179,6 +206,25 @@ class JEDB_Flatten_Config_Manager {
 			if ( ! is_array( $m['pull_transform'] ) ) { $m['pull_transform'] = array(); }
 		}
 		unset( $m );
+
+		// Phase 3.6 / D-20: deep-merge taxonomies[] entries so existing
+		// 0.5.x bridges that were saved before the array existed get a
+		// well-formed empty array on read, and rules saved before any
+		// individual key existed get sensible defaults applied per
+		// default_taxonomy_rule().
+		if ( ! is_array( $config['taxonomies'] ) ) {
+			$config['taxonomies'] = array();
+		}
+		foreach ( $config['taxonomies'] as &$rule ) {
+			if ( ! is_array( $rule ) ) {
+				$rule = self::default_taxonomy_rule();
+				continue;
+			}
+			$rule = wp_parse_args( $rule, self::default_taxonomy_rule() );
+			if ( ! is_array( $rule['apply_terms'] ) )         { $rule['apply_terms']         = array(); }
+			if ( ! is_array( $rule['apply_terms_inverse'] ) ) { $rule['apply_terms_inverse'] = array(); }
+		}
+		unset( $rule );
 
 		$defaults = self::default_config_json();
 

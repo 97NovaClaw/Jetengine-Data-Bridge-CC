@@ -3,7 +3,7 @@
  * Plugin Name:       JetEngine Data Bridge CC
  * Plugin URI:        https://github.com/legworkmedia/je-data-bridge-cc
  * Description:       Bridges JetEngine CCTs, CPTs, and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
- * Version:           0.5.1
+ * Version:           0.5.2
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Legwork Media
@@ -24,7 +24,7 @@ if ( ! defined( 'WPINC' ) ) {
  * Plugin constants
  * -------------------------------------------------------------------------- */
 
-define( 'JEDB_VERSION',              '0.5.1' );
+define( 'JEDB_VERSION',              '0.5.2' );
 define( 'JEDB_DB_VERSION',           '1.1.0' );
 define( 'JEDB_PLUGIN_FILE',          __FILE__ );
 define( 'JEDB_PLUGIN_DIR',           plugin_dir_path( __FILE__ ) );
@@ -58,6 +58,17 @@ define( 'JEDB_DEBUG_LOG_NAME',       'jedb-debug.log' );
  * (priority 10) finish first.
  */
 define( 'JEDB_FLATTEN_HOOK_PRIORITY', 20 );
+
+/**
+ * Phase 3.6 / D-24: max number of terms per taxonomy returned by the
+ * Flatten admin tab's `jedb_flatten_get_post_type_taxonomies` AJAX
+ * endpoint. For larger taxonomies the editor edits via the raw JSON
+ * fallback or waits for a Phase 4 search/autocomplete enhancement.
+ * Override via define() in wp-config.php if your storefront has more.
+ */
+if ( ! defined( 'JEDB_TAX_TERMS_LIMIT' ) ) {
+	define( 'JEDB_TAX_TERMS_LIMIT', 100 );
+}
 
 /* -----------------------------------------------------------------------------
  * Activation: dependency checks before anything is created

@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.5.1
+Stable tag: 0.5.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.5.1) ==
+== Current Capability (v0.5.2) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -39,6 +39,8 @@ This is an in-progress port consolidating three earlier private plugins. Functio
 * **Reverse-direction flatten engine** (Phase 3.5, v0.5.0) — editing a Woo product / CPT propagates mapped fields back to the linked CCT row via the per-mapping `pull_transform` chain. Hooks at `woocommerce_update_product` (+ variations) and `save_post_{type}`.
 * **Bidirectional bridges** (v0.5.0) — `direction = bidirectional` registers both engines for one bridge with mutual cascade prevention.
 * **Auto-create CCT row** (v0.5.0, D-17 opt-in) — when a post saves with no linked CCT row, the reverse engine can optionally create a fresh CCT row in the bridge's source target and auto-attach the relation. Default OFF; opt-in per bridge.
+* **Categorization layer** (Phase 3.6, v0.5.2) — bridges can categorize posts on push via two complementary mechanisms: a new `term_lookup` transformer for per-row dynamic categorization (composes with the existing per-mapping transformer chain), and a new `taxonomies[]` array on flatten configs for static-per-bridge multi-taxonomy assignment with per-rule merge strategy (append/replace), explicit term removal via `apply_terms_inverse`, optional `create_if_missing`, and forward-compat with Phase 5b snippets. Push-only semantics in v1 (D-21).
+* **Live taxonomy UI** (Phase 3.6, v0.5.2) — Flatten admin tab gains a Taxonomies section visible only when `target_target` is `posts::*`. Editors pick from registered taxonomies + existing terms via dropdowns instead of typing slugs.
 * **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 * **Sync Log** — every bridge invocation writes a row with status from the `success / partial / errored / skipped_condition / skipped_error / skipped_locked / skipped_no_target / noop` taxonomy.
 * **Transformer registry** — 9 built-ins (passthrough, yes_no_to_bool, regex_replace, format_number, lookup_table, name_builder, truncate_words, strip_html, year_expander). Each defines push and pull explicitly.
@@ -89,6 +91,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.5.2 =
+* Phase 3.6 — categorization layer. New `term_lookup` transformer (push: names/slugs/IDs → term IDs; pull: term IDs → names/slugs) for per-row dynamic categorization via the existing per-mapping chain. New `taxonomies[]` array on bridge configs for static-per-bridge multi-taxonomy assignment with per-rule merge strategy, explicit term removal, optional create_if_missing, and forward-compat with Phase 5b snippets. New `JEDB_Taxonomy_Applier` engine class. Forward flattener invokes the applier between condition check and field mappings; reverse flattener skips taxonomies entirely (D-21 push-only semantics). New Flatten admin tab Taxonomies section with live-queried dropdowns via the new `wp_ajax_jedb_flatten_get_post_type_taxonomies` endpoint. Per D-20 → D-24 / L-023 / BUILD-PLAN §4.11.
+
 = 0.5.1 =
 * Documentation + small cleanups; no behavior change. Adds L-022 to LESSONS-LEARNED capturing the architectural finding that JetEngine's `$db->update()` doesn't fire the `updated-item/{slug}` hook — meaning the reverse pull → forward push cascade can't form on the JE side, and our defensive `is_locked()` check on that path is insurance for future JE versions / 3rd-party hook re-firers / Phase 4 manual-sync paths. BUILD-PLAN §4.10 cycle-prevention prose updated to reflect the asymmetry. Forward + reverse `noop` log rows now include `resolution`, `auto_attached`, and `auto_created` fields for symmetric debuggability with success/errored rows.
 
@@ -115,6 +120,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.5.2 =
+Phase 3.6 — taxonomy support shipped. Bridges can now categorize posts on push via the new `term_lookup` transformer (per-row dynamic) and the new `taxonomies[]` array (static-per-bridge). Push-only semantics in v1 — pull never modifies taxonomies. No schema migration; existing 0.5.x bridges work unchanged with an empty `taxonomies[]` filled in on read.
 
 = 0.5.1 =
 Documentation + small cleanups; no behavior change. Locks in the L-022 architectural finding from staging testing. Existing 0.5.0 bridges work unchanged.

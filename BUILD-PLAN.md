@@ -1061,7 +1061,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, and 3.5 are complete (v0.5.1 on `main`, verified end-to-end on Brick Builder HQ staging). Phase 3.6 (the categorization layer — `term_lookup` transformer + `taxonomies[]` array — design locked, ships as v0.5.2) is in progress. Phase 4 (Bridge meta box on Woo product edit screen) follows. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, 3.5, and 3.6 are complete (v0.5.2 on `main`). Bidirectional flatten + categorization layer all shipped. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
@@ -1113,7 +1113,7 @@ Each phase ends with the plugin being **installable, activatable, and useful** �
 - L-021 self-heal mirrored on the reverse side: when no relation row is found, fallback to a CCT row whose `cct_single_post_id` equals the saved post id, with the same auto-attach behavior.
 - ✅ **Exit criterion**: editing a product directly in WC (not through any CCT flow) propagates mapped fields onto the linked CCT row via the per-mapping `pull_transform` chain. With `auto_create_target_when_unlinked` on, an unlinked post-save creates a fresh CCT row + relation. No infinite sync loops, ever.
 
-### Phase 3.6 — Categorization layer (~1 day, ships as v0.5.2) ▶ **IN PROGRESS**
+### Phase 3.6 — Categorization layer (~1 day, ships as v0.5.2) ✅
 
 The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 
@@ -1148,7 +1148,7 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
   available taxonomies + terms via the new AJAX endpoint with no typed
   slugs.
 
-### Phase 4 — Woo target & bridge meta box (3 days) — *the new code*
+### Phase 4 — Woo target & bridge meta box (3 days) — *the new code* ▶ **NEXT UP**
 - Implement `Target_Woo_Product` in full, with HPOS-safe writes.
 - Build the `Woo_Product_Meta_Box` with type select + linked-CCT picker + direction toggle.
 - Build the **Bridges admin tab** (`class-tab-bridges.php`) for managing the `jedb_bridge_types` JSON via UI.

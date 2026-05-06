@@ -306,6 +306,65 @@ endif;
 			<?php endif; ?>
 		</div>
 
+		<?php
+		// Phase 3.6 / D-20-D-24: Taxonomies section. Visible only when
+		// target_target is `posts::*`. JS hides/shows based on the
+		// target dropdown's current value.
+		$tax_visible = ( $current_target && 0 === strpos( $current_target, 'posts::' ) );
+		?>
+		<details
+			class="jedb-flatten-taxonomies-section"
+			id="jedb_flatten_taxonomies_section"
+			data-visible="<?php echo $tax_visible ? '1' : '0'; ?>"
+			<?php echo $tax_visible ? 'open' : ''; ?>
+			<?php echo $tax_visible ? '' : 'style="display:none;"'; ?>
+		>
+			<summary>
+				<h3 style="display:inline-block;margin:0;"><?php esc_html_e( 'Taxonomies (push only)', 'je-data-bridge-cc' ); ?></h3>
+				<span class="jedb-tax-summary-pill jedb-pill" style="margin-left:8px;"></span>
+			</summary>
+
+			<p class="description" style="max-width:760px;">
+				<?php
+				printf(
+					/* translators: %1$s = D-20 label, %2$s = D-21 label */
+					esc_html__( 'Per BUILD-PLAN §4.11 (%1$s, %2$s): each rule below applies a set of terms in one taxonomy on every successful push. Pull never modifies taxonomies — editors can hand-tag products with extra terms and the bridge won\'t strip them. Multiple rules per bridge are first-class — use one rule per taxonomy.', 'je-data-bridge-cc' ),
+					'D-20',
+					'D-21'
+				);
+				?>
+			</p>
+
+			<table class="widefat jedb-flatten-taxonomies" id="jedb_flatten_taxonomies">
+				<thead>
+					<tr>
+						<th style="width:18%;"><?php esc_html_e( 'Taxonomy', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:24%;"><?php esc_html_e( 'Apply terms', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:22%;"><?php esc_html_e( 'Inverse (remove)', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:9%;"><?php esc_html_e( 'Match by', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:11%;"><?php esc_html_e( 'Strategy', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:10%;"><?php esc_html_e( 'Create?', 'je-data-bridge-cc' ); ?></th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody></tbody>
+				<tfoot>
+					<tr>
+						<td colspan="7">
+							<button type="button" class="button" id="jedb_flatten_add_taxonomy_rule"><?php esc_html_e( '+ Add taxonomy rule', 'je-data-bridge-cc' ); ?></button>
+							<button type="button" class="button" id="jedb_flatten_refresh_taxonomies" style="margin-left:8px;"><?php esc_html_e( 'Refresh taxonomies + terms from site', 'je-data-bridge-cc' ); ?></button>
+							<span id="jedb_flatten_taxonomies_status" class="description" style="margin-left:12px;"></span>
+						</td>
+					</tr>
+				</tfoot>
+			</table>
+
+			<p class="description" style="max-width:760px;">
+				<strong><?php esc_html_e( 'Snippet support (Phase 5b):', 'je-data-bridge-cc' ); ?></strong>
+				<?php esc_html_e( 'Each rule reserves a "snippet" slot for dynamic term computation (e.g., compute categories from CCT field values). Disabled until the Snippet runtime ships in Phase 5b. Rules with a snippet set today log skipped_invalid in sync_log.', 'je-data-bridge-cc' ); ?>
+			</p>
+		</details>
+
 		<h3><?php esc_html_e( 'Field mappings', 'je-data-bridge-cc' ); ?></h3>
 
 		<p class="description">
@@ -365,10 +424,15 @@ endif;
 
 <script type="application/json" id="jedb-flatten-bootstrap">
 <?php
+$initial_post_type = '';
+if ( $current_target && 0 === strpos( $current_target, 'posts::' ) ) {
+	$initial_post_type = substr( $current_target, 7 );
+}
+
 echo wp_json_encode( array(
-	'ajax_url'         => admin_url( 'admin-ajax.php' ),
-	'nonce'            => wp_create_nonce( 'jedb_flatten_admin' ),
-	'transformers'     => array_values( array_map(
+	'ajax_url'           => admin_url( 'admin-ajax.php' ),
+	'nonce'              => wp_create_nonce( 'jedb_flatten_admin' ),
+	'transformers'       => array_values( array_map(
 		static function ( $t ) {
 			return array(
 				'name'        => $t->get_name(),
@@ -379,9 +443,12 @@ echo wp_json_encode( array(
 		},
 		JEDB_Transformer_Registry::instance()->all()
 	) ),
-	'source_schema'    => $source_schema,
-	'target_schema'    => $target_schema,
-	'target_required'  => $target_required,
-	'initial_mappings' => isset( $config['mappings'] ) && is_array( $config['mappings'] ) ? $config['mappings'] : array(),
+	'source_schema'      => $source_schema,
+	'target_schema'      => $target_schema,
+	'target_required'    => $target_required,
+	'initial_mappings'   => isset( $config['mappings'] )   && is_array( $config['mappings'] )   ? $config['mappings']   : array(),
+	'initial_taxonomies' => isset( $config['taxonomies'] ) && is_array( $config['taxonomies'] ) ? $config['taxonomies'] : array(),
+	'initial_post_type'  => $initial_post_type,
+	'taxonomy_default_rule' => JEDB_Flatten_Config_Manager::default_taxonomy_rule(),
 ) ); ?>
 </script>
