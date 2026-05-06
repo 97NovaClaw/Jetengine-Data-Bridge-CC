@@ -91,11 +91,35 @@ class JEDB_Transformer_Term_Lookup implements JEDB_Transformer {
 
 		$candidates = $this->normalize_value_to_array( $value );
 		$ids        = array();
+		$missed     = array();
 
 		foreach ( $candidates as $candidate ) {
 			$id = $this->resolve_term_id( $candidate, $taxonomy, $match_by, $create_if_missing );
 			if ( $id ) {
 				$ids[] = $id;
+			} else {
+				$missed[] = is_scalar( $candidate ) ? (string) $candidate : '';
+			}
+		}
+
+		// Per L-024: when the editor fed real values but NONE of them
+		// resolved to a term, surface a warning. Most common cause is a
+		// match_by / value-shape mismatch (e.g., match_by='name' but the
+		// CCT field stores slug-style values like "available-sets" while
+		// the actual term name is "Available Sets"). Without this log
+		// line the engine silently writes [] to the target field, which
+		// often gets interpreted by typed setters as "clear all terms"
+		// and the editor sees no categories on the product with no
+		// indication of why.
+		if ( ! empty( $candidates ) && empty( $ids ) ) {
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( '[Transformer:term_lookup] resolved 0 term IDs from non-empty input — likely a match_by / value-shape mismatch', 'warning', array(
+					'taxonomy'         => $taxonomy,
+					'match_by'         => $match_by,
+					'create_if_missing'=> $create_if_missing,
+					'unmatched_values' => $missed,
+					'hint'             => 'try match_by="slug" if your CCT field stores slug-style values, or match_by="name" if it stores display names',
+				) );
 			}
 		}
 

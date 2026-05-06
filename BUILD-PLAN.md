@@ -892,11 +892,27 @@ Per-rule fields:
 
 #### Engine integration order on push
 
+> **Refined in v0.5.3 per L-024:** Mappings run BEFORE taxonomies, not
+> after. The earlier "taxonomies-then-mappings" ordering had a real
+> bug — a mapping that targeted a taxonomy field (e.g.
+> `theme_idea → category_ids` via `term_lookup`) would call
+> `WC_Product::set_category_ids()` which REPLACES the entire taxonomy
+> slot, clobbering anything the applier had just added.
+
 `JEDB_Flattener::apply_bridge()` runs the following sequence after
 the cross-direction cascade check and condition evaluation pass:
 
 1. **Resolve target post** (existing flow, L-021 self-heal).
-2. **For each `taxonomies[]` entry**, in declared order:
+2. **Run field mappings.** For each enabled mapping, run the
+   `push_transform` chain on the source value, diff against the
+   target, and append to the write payload.
+3. **If the payload is non-empty, write through the target adapter**
+   (e.g. `WC_Product->save()` for HPOS-safe lookup-table refresh,
+   per L-017). This step can call `set_category_ids()` /
+   `set_tag_ids()` etc., which REPLACE the entire taxonomy slot for
+   that taxonomy on the post.
+4. **For each `taxonomies[]` entry**, in declared order, AFTER the
+   mapping write:
    - Resolve `apply_terms` to term IDs via `get_term_by(match_by, taxonomy, value)`.
    - If `create_if_missing` AND a value didn't resolve, `wp_insert_term()`
      and use the new term ID. Log the new-term creation in sync_log
@@ -906,10 +922,19 @@ the cross-direction cascade check and condition evaluation pass:
    - Call `wp_set_object_terms($post_id, $resolved_apply_ids, $taxonomy, $append=true|false)`
      — `$append=true` for `'append'`, `$append=false` for `'replace'`.
    - Call `wp_remove_object_terms($post_id, $resolved_inverse_ids, $taxonomy)`.
-3. **Run field mappings** (existing flow with `term_lookup` transformer
-   available in chains).
-4. **Sync log** records `taxonomies_applied` count and per-rule outcome
-   (added / removed / created) in `context_json`.
+5. **Sync log** records mapping outcome + `taxonomies_applied` count and
+   per-rule outcome (added / removed / created) in `context_json`.
+
+This ordering means **taxonomy rules always get the final word**:
+- `merge_strategy='append'` rules pile on top of whatever the mapping
+  wrote (so a mapping writing `category_ids=[42]` followed by a rule
+  appending `mosaics` yields a product with both).
+- `merge_strategy='replace'` rules become canonical (the mapping wrote
+  whatever it wrote, then the replace rule overwrites the slot to be
+  exactly the rule's `apply_terms`).
+- A mapping with `term_lookup` that resolves to `[]` (e.g. nothing
+  matched) clears the slot, but the subsequent taxonomy rule re-applies
+  the editor's intent. **No more silent category disappearances.**
 
 #### Engine integration on pull
 **Skipped entirely.** Per D-21, the reverse pull engine doesn't read
@@ -1061,7 +1086,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, 3.5, and 3.6 are complete (v0.5.2 on `main`). Bidirectional flatten + categorization layer all shipped. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, 3.5, and 3.6 are complete (v0.5.3 on `main`, includes the L-024 engine-ordering hotfix). Bidirectional flatten + categorization layer all shipped, with mappings-then-taxonomies ordering verified to behave correctly. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).

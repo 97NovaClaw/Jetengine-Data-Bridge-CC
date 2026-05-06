@@ -2,6 +2,80 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.3] — 2026-05-06
+
+**Phase 3.6 hotfix — engine ordering bug + term_lookup zero-resolve warning.**
+
+End-to-end testing on Brick Builder HQ staging surfaced a real
+silent-data-loss bug in the v0.5.2 engine ordering. Bridges with
+both a `taxonomies[]` rule AND a field mapping that targets the
+SAME taxonomy slot (e.g. mapping `theme_idea → category_ids` via
+`term_lookup` plus a static rule applying `mosaics`) ended up with
+zero categories on the product even though the sync log reported
+success.
+
+### Fixed
+
+- **`JEDB_Flattener::apply_bridge()` now runs mappings BEFORE
+  taxonomies** (was: taxonomies before mappings). Per L-024:
+  field mappings that target taxonomy fields like `category_ids`
+  call `WC_Product::set_category_ids()`, a typed setter that
+  REPLACES the entire taxonomy slot. Running the taxonomy applier
+  before that meant the applier's `wp_set_object_terms()` calls
+  got clobbered. New ordering means rules ALWAYS get the final
+  word — append rules pile on top of whatever the mapping wrote;
+  replace rules become canonical. **No more silent category
+  disappearances.**
+
+- **`JEDB_Transformer_Term_Lookup::apply_push()` now logs a warning**
+  when input had non-empty candidate values but ALL of them failed
+  to resolve to term IDs. Most common cause is a `match_by` /
+  value-shape mismatch (e.g. `match_by='name'` but the CCT field
+  stores slug-style values like `"available-sets"`). Log line
+  includes the unmatched values + a hint suggesting the editor try
+  the other `match_by` variant.
+
+### Engine status determination — refactored
+
+The success/error/noop branching at the end of `apply_bridge()` is
+now structured into four explicit paths that read top-to-bottom:
+
+1. Mappings produced a payload AND adapter write failed → `errored`.
+2. Mappings produced a payload AND adapter write succeeded
+   (regardless of taxonomies) → `success`. Message includes both
+   field count and any taxonomy term changes.
+3. Mappings noop'd but taxonomies changed terms → `success` with
+   `taxonomies_only: true` marker.
+4. Nothing changed anywhere → `noop`.
+
+This is cleaner than the v0.5.2 nested-conditional version and makes
+the audit trail in `wp_jedb_sync_log` more predictable.
+
+### Documentation
+
+- **L-024** added to `LESSONS-LEARNED.md` — full root-cause analysis
+  with the user's actual sync log row showing the lying-success
+  output, the trace of what happened in the broken order, the new
+  ordering, and five prevention rules.
+- **BUILD-PLAN.md §4.11 "Engine integration order on push"**
+  rewritten with the new ordering and a callout explaining why
+  taxonomies-after-mappings is correct despite the original design's
+  intuition.
+
+### Notes for upgraders
+
+- **No schema migration.** Behavior fix only. Existing 0.5.2 bridges
+  that were affected by the bug will start working correctly on the
+  next save.
+- **No config changes required.** Bridges with both `taxonomies[]`
+  rules AND `category_ids` mappings will now both take effect.
+  Mappings write first, taxonomies enforce final state.
+- **If you saw "ghost successes" in your sync log on 0.5.2** (rows
+  with `terms_added: N` but the product showed no terms), those
+  were instances of L-024. The data hasn't been retroactively fixed
+  — re-save the affected CCT rows on 0.5.3 and the engine will do
+  the right thing this time.
+
 ## [0.5.2] — 2026-05-06
 
 **Phase 3.6 — categorization layer.**

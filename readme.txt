@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.5.2
+Stable tag: 0.5.3
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.5.2) ==
+== Current Capability (v0.5.3) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -91,6 +91,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.5.3 =
+* Phase 3.6 hotfix — engine ordering bug + term_lookup zero-resolve warning. Per L-024: field mappings now run BEFORE taxonomies in JEDB_Flattener::apply_bridge(), so taxonomy rules always get the final word. Was causing silent data loss when a `taxonomies[]` rule and a `term_lookup` mapping both targeted the same taxonomy slot — sync log reported success but the product had zero categories because the mapping's typed setter cleared the slot AFTER the applier added terms. New sync log status determination has four explicit paths (errored / mappings-wrote / taxonomies-only / noop). The `term_lookup` transformer now logs a warning when non-empty input resolved to zero term IDs, with a hint about the match_by / value-shape mismatch.
+
 = 0.5.2 =
 * Phase 3.6 — categorization layer. New `term_lookup` transformer (push: names/slugs/IDs → term IDs; pull: term IDs → names/slugs) for per-row dynamic categorization via the existing per-mapping chain. New `taxonomies[]` array on bridge configs for static-per-bridge multi-taxonomy assignment with per-rule merge strategy, explicit term removal, optional create_if_missing, and forward-compat with Phase 5b snippets. New `JEDB_Taxonomy_Applier` engine class. Forward flattener invokes the applier between condition check and field mappings; reverse flattener skips taxonomies entirely (D-21 push-only semantics). New Flatten admin tab Taxonomies section with live-queried dropdowns via the new `wp_ajax_jedb_flatten_get_post_type_taxonomies` endpoint. Per D-20 → D-24 / L-023 / BUILD-PLAN §4.11.
 
@@ -120,6 +123,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.5.3 =
+Hotfix for L-024 ordering bug. If you saw "ghost successes" in your sync log on 0.5.2 (rows with `terms_added: N` but the product showed no terms), upgrade and re-save the affected CCT rows. No schema change; no config change required.
 
 = 0.5.2 =
 Phase 3.6 — taxonomy support shipped. Bridges can now categorize posts on push via the new `term_lookup` transformer (per-row dynamic) and the new `taxonomies[]` array (static-per-bridge). Push-only semantics in v1 — pull never modifies taxonomies. No schema migration; existing 0.5.x bridges work unchanged with an empty `taxonomies[]` filled in on read.

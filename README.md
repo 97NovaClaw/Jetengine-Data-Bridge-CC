@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.5.2 — Phases 3, 3.5, and 3.6 complete. Bidirectional sync + categorization layer work end-to-end. Editing a CCT pushes mapped fields onto the linked Woo / CPT record AND assigns configured taxonomies on push; editing the post propagates fields back to the CCT (taxonomies are push-only per D-21). v0.5.2 ships the `term_lookup` transformer for per-row dynamic categorization, the `taxonomies[]` array on flatten configs for static-per-bridge multi-taxonomy assignment with per-rule merge strategy, inverse-removal, and create-if-missing controls, plus a live-queried Taxonomies section in the Flatten admin tab. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase.
+**Status:** v0.5.3 — Phases 3, 3.5, and 3.6 complete. Bidirectional sync + categorization layer work end-to-end. Editing a CCT pushes mapped fields onto the linked Woo / CPT record AND assigns configured taxonomies on push; editing the post propagates fields back to the CCT (taxonomies are push-only per D-21). v0.5.3 fixes the L-024 engine-ordering bug where a `taxonomies[]` rule and a `term_lookup` mapping both targeting the same taxonomy slot could silently clobber each other; mappings now run BEFORE taxonomies so taxonomy rules get the final word. `term_lookup` now logs a warning when input non-empty but resolves to zero IDs (catches the `match_by` / value-shape mismatch that's the #1 misconfig). Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -41,7 +41,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.5.2)
+## What's actually shipped right now (v0.5.3)
 
 **Functional capabilities (cumulative through Phase 3):**
 
@@ -79,7 +79,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## Current file tree (v0.5.2)
+## Current file tree (v0.5.3)
 
 ```
 je-data-bridge-cc/
@@ -223,7 +223,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 2.5 | Bidirectional architecture lock + picker visibility fix (L-016 → L-020, D-17 → D-19) | **✅ Complete** (v0.3.1) |
 | 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers + L-021 self-heal | **✅ Complete** (v0.4.0 → v0.4.1) |
 | 3.5 | Reverse-direction flatten (post → CCT) + bidirectional bridges + auto-create CCT (D-17) per BUILD-PLAN §4.10 + L-022 cascade-asymmetry doc | **✅ Complete** (v0.5.0 → v0.5.1, verified on staging) |
-| 3.6 | Categorization layer: `term_lookup` transformer + `taxonomies[]` array + post-only push semantics (D-20 → D-24, L-023, BUILD-PLAN §4.11) | **✅ Complete** (v0.5.2) |
+| 3.6 | Categorization layer: `term_lookup` transformer + `taxonomies[]` array + post-only push semantics (D-20 → D-24, L-023, BUILD-PLAN §4.11) | **✅ Complete** (v0.5.2 → v0.5.3, L-024 ordering fix) |
 | 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | **▶ Next up** |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
 | 4.5 | `term_assigned` trigger (term changes as wakeup events for reverse engine; D-18 trigger taxonomy implementation) | Pending |

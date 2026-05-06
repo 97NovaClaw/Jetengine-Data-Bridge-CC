@@ -305,31 +305,27 @@ class JEDB_Flattener {
 			return JEDB_Sync_Log::STATUS_SKIPPED_LOCKED;
 		}
 
+		$taxonomy_summary = array(
+			'rules_processed' => 0,
+			'rules_applied'   => 0,
+			'terms_added'     => 0,
+			'terms_removed'   => 0,
+			'terms_created'   => 0,
+			'rules'           => array(),
+		);
+
 		try {
 
-			// Phase 3.6 / D-20-D-24: apply taxonomy rules BEFORE field
-			// mappings. The categorization decision ("which storefront
-			// taxonomy slot does this product live in?") is conceptually
-			// upstream of the field-level copy-paste of names / prices,
-			// and editors expect the category to be set before any
-			// taxonomy-aware transformer in the mappings chain runs.
-			$taxonomy_summary = array(
-				'rules_processed' => 0,
-				'rules_applied'   => 0,
-				'terms_added'     => 0,
-				'terms_removed'   => 0,
-				'terms_created'   => 0,
-				'rules'           => array(),
-			);
-
-			if ( ! empty( $taxonomies ) ) {
-				$taxonomy_summary = JEDB_Taxonomy_Applier::instance()->apply_for_bridge(
-					$taxonomies,
-					$target_id,
-					$context
-				);
-			}
-
+			// Phase 3.6 / D-20-D-24 (re-ordered in v0.5.3 per L-024):
+			// MAPPINGS run FIRST, then TAXONOMIES. Earlier ordering
+			// (taxonomies-then-mappings) was wrong because a mapping
+			// that targets a taxonomy field — e.g. mapping
+			// theme_idea -> category_ids via term_lookup — calls
+			// WC_Product::set_category_ids() which REPLACES the entire
+			// taxonomy slot, clobbering any terms the applier had just
+			// added. Running taxonomies AFTER mappings means rules get
+			// the final say: append rules pile on top of whatever the
+			// mapping wrote, replace rules become canonical.
 			$registry_t = JEDB_Transformer_Registry::instance();
 			$payload    = array();
 			$per_field  = array();
@@ -366,52 +362,86 @@ class JEDB_Flattener {
 				$any_change                 = true;
 			}
 
-			if ( ! $any_change ) {
-				// Even if no mappings wrote, taxonomies may have changed —
-				// reflect that in status. If both are noops, log noop;
-				// if taxonomies actually moved terms, log success with a
-				// `taxonomies_only` marker so editors can audit.
-				$taxonomies_changed = ( $taxonomy_summary['terms_added'] > 0
-					|| $taxonomy_summary['terms_removed'] > 0
-					|| $taxonomy_summary['terms_created'] > 0 );
+			$mapping_write_ok = true;
+			if ( $any_change ) {
+				$mapping_write_ok = (bool) $target_adapter->update( $target_id, $payload );
+			}
 
-				if ( ! $taxonomies_changed ) {
-					$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'every mapped value already matched target — nothing to write', array(
-						'fields_examined'  => count( $per_field ),
-						'per_field'        => $per_field,
-						'resolution'       => $resolution_method,
-						'auto_attached'    => $auto_attached,
-						'taxonomies'       => $taxonomy_summary,
-					) );
-					return JEDB_Sync_Log::STATUS_NOOP;
+			// NOW run the taxonomy applier — AFTER any mapping writes —
+			// so its terms aren't clobbered by typed-setter calls like
+			// set_category_ids that replace the entire slot.
+			if ( ! empty( $taxonomies ) ) {
+				$taxonomy_summary = JEDB_Taxonomy_Applier::instance()->apply_for_bridge(
+					$taxonomies,
+					$target_id,
+					$context
+				);
+			}
+
+			$taxonomies_changed = (
+				$taxonomy_summary['terms_added']   > 0
+				|| $taxonomy_summary['terms_removed'] > 0
+				|| $taxonomy_summary['terms_created'] > 0
+			);
+
+			// --- Determine final status ---
+
+			// Path 1: mappings produced a non-empty payload AND adapter write failed.
+			if ( $any_change && ! $mapping_write_ok ) {
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_ERRORED, $origin_tag, 'target adapter update returned false', array(
+					'fields'        => array_keys( $payload ),
+					'noop_fields'   => $noop_count,
+					'per_field'     => $per_field,
+					'resolution'    => $resolution_method,
+					'auto_attached' => $auto_attached,
+					'taxonomies'    => $taxonomy_summary,
+				) );
+				return JEDB_Sync_Log::STATUS_ERRORED;
+			}
+
+			// Path 2: mappings wrote successfully (regardless of taxonomies).
+			if ( $any_change && $mapping_write_ok ) {
+				$message = sprintf( 'wrote %d field(s)', count( $payload ) );
+				if ( $taxonomies_changed ) {
+					$message .= sprintf(
+						' + %d taxonomy term change(s)',
+						$taxonomy_summary['terms_added'] + $taxonomy_summary['terms_removed']
+					);
 				}
-
-				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SUCCESS, $origin_tag, sprintf( 'fields all noop, but %d taxonomy term(s) changed', $taxonomy_summary['terms_added'] + $taxonomy_summary['terms_removed'] ), array(
-					'fields_examined'   => count( $per_field ),
-					'per_field'         => $per_field,
-					'resolution'        => $resolution_method,
-					'auto_attached'     => $auto_attached,
-					'taxonomies'        => $taxonomy_summary,
-					'taxonomies_only'   => true,
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SUCCESS, $origin_tag, $message, array(
+					'fields'        => array_keys( $payload ),
+					'noop_fields'   => $noop_count,
+					'per_field'     => $per_field,
+					'resolution'    => $resolution_method,
+					'auto_attached' => $auto_attached,
+					'taxonomies'    => $taxonomy_summary,
 				) );
 				return JEDB_Sync_Log::STATUS_SUCCESS;
 			}
 
-			$ok = $target_adapter->update( $target_id, $payload );
+			// Path 3: mappings noop'd, taxonomies changed something — log
+			// success with the `taxonomies_only` marker.
+			if ( $taxonomies_changed ) {
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SUCCESS, $origin_tag, sprintf( 'fields all noop, but %d taxonomy term(s) changed', $taxonomy_summary['terms_added'] + $taxonomy_summary['terms_removed'] ), array(
+					'fields_examined' => count( $per_field ),
+					'per_field'       => $per_field,
+					'resolution'      => $resolution_method,
+					'auto_attached'   => $auto_attached,
+					'taxonomies'      => $taxonomy_summary,
+					'taxonomies_only' => true,
+				) );
+				return JEDB_Sync_Log::STATUS_SUCCESS;
+			}
 
-			$status  = $ok ? JEDB_Sync_Log::STATUS_SUCCESS : JEDB_Sync_Log::STATUS_ERRORED;
-			$message = $ok ? sprintf( 'wrote %d field(s)', count( $payload ) ) : 'target adapter update returned false';
-
-			$this->log_status( $bridge, $source_id, $target_id, $status, $origin_tag, $message, array(
-				'fields'        => array_keys( $payload ),
-				'noop_fields'   => $noop_count,
-				'per_field'     => $per_field,
-				'resolution'    => $resolution_method,
-				'auto_attached' => $auto_attached,
-				'taxonomies'    => $taxonomy_summary,
+			// Path 4: nothing changed anywhere → noop.
+			$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'every mapped value already matched target — nothing to write', array(
+				'fields_examined' => count( $per_field ),
+				'per_field'       => $per_field,
+				'resolution'      => $resolution_method,
+				'auto_attached'   => $auto_attached,
+				'taxonomies'      => $taxonomy_summary,
 			) );
-
-			return $status;
+			return JEDB_Sync_Log::STATUS_NOOP;
 
 		} catch ( \Throwable $e ) {
 
@@ -420,7 +450,7 @@ class JEDB_Flattener {
 				'line'          => $e->getLine(),
 				'resolution'    => $resolution_method,
 				'auto_attached' => $auto_attached,
-				'taxonomies'    => isset( $taxonomy_summary ) ? $taxonomy_summary : null,
+				'taxonomies'    => $taxonomy_summary,
 			) );
 			return JEDB_Sync_Log::STATUS_ERRORED;
 

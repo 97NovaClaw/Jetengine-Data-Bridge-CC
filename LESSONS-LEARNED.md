@@ -1658,3 +1658,159 @@ fields where the CCT value drives the taxonomy.
    registered.
 
 ---
+
+## L-024: Apply taxonomy rules AFTER field mappings, not before — typed setters that target taxonomy fields will clobber pre-applied terms
+
+**Discovered:** 2026-05-06 (Phase 3.6 / version 0.5.3)
+**Severity:** High (silent data loss disguised as success)
+**Category:** Architecture / Engine ordering
+
+### Context
+The user configured a Phase 3.6 bridge with both layers of the
+categorization architecture engaged simultaneously on the same
+taxonomy:
+
+- A `taxonomies[]` rule: `{ taxonomy: 'product_cat', apply_terms: ['mosaics'], merge_strategy: 'append' }`
+- A field mapping: `theme_idea -> category_ids` with a `term_lookup`
+  transformer set to `{ taxonomy: 'product_cat', match_by: 'name' }`
+
+The CCT field `theme_idea` held a slug-style value `"available-sets"`
+that did NOT match any term name in `product_cat` (the actual term
+NAME would be "Available Sets" — `available-sets` is its slug).
+
+Expected behavior: product ends up in `mosaics` (from the rule),
+because the rule's append semantics should preserve whatever else
+got set.
+
+Observed behavior: product had NO categories at all. Sync log
+nevertheless reported success with `terms_added: 1` (mosaics).
+
+### Wrong
+The original §4.11 design ran the taxonomy applier BEFORE the field
+mappings. The rationale was editorial intent: "categorization is
+upstream of field copy-paste." That rationale ignored the mechanical
+reality of what mappings can do to taxonomies.
+
+### Evidence
+Real sync log row from the user's staging environment:
+
+| field | value |
+|---|---|
+| direction | push |
+| status | success |
+| message | "wrote 1 field(s)" |
+| fields | `["category_ids"]` |
+| per_field | `{"name":"noop","category_ids":"will_write"}` |
+| taxonomies.terms_added | 1 |
+| taxonomies.rules[0].added_ids | `[17]` |
+
+Yet the product had zero categories visible in WC admin.
+
+### Reality
+Trace of what actually happened, in the original (broken) order:
+
+1. **Taxonomy applier (first):** called
+   `wp_set_object_terms(403, [17], 'product_cat', append=true)`.
+   Product now correctly has `mosaics` (term 17) attached. Sync log
+   accurately records `added_ids: [17]`.
+2. **Mappings loop (second):** the `term_lookup` transformer with
+   `match_by='name'` scanned `product_cat` for a term NAMED
+   `"available-sets"` and found none (only a term *slugged*
+   `available-sets` exists, named "Available Sets" or similar).
+   Returned `[]`. Mapping payload became `{ category_ids: [] }`.
+3. **Adapter write:** `WC_Product::set_category_ids([])` REPLACED
+   the entire `product_cat` slot with empty. The `mosaics` term we
+   just added was wiped out.
+4. **Final state:** product has zero categories. Sync log lies
+   about success because each step *did* what it claimed; the
+   second step just clobbered the first.
+
+This is silent data loss disguised as success — the worst kind of
+bug because the audit trail says "everything worked."
+
+### Fix shipped in
+v0.5.3 (this release).
+
+`JEDB_Flattener::apply_bridge()` now runs in this order:
+
+1. Resolve target post.
+2. Cross-direction cascade check.
+3. Condition evaluation.
+4. **Mappings loop** — build payload, diff, write through target
+   adapter.
+5. **Taxonomy applier** — runs AFTER the adapter write so its
+   `wp_set_object_terms()` calls operate on the post-mapping state.
+
+This means taxonomy rules ALWAYS get the final word:
+
+- `merge_strategy='append'` rules pile on top of whatever the
+  mapping wrote (mapping's `[42]` + rule's `[mosaics]` → both attached).
+- `merge_strategy='replace'` rules become canonical (mapping write
+  doesn't survive a replace rule).
+- A mapping that resolved to `[]` (e.g. `term_lookup` found nothing)
+  clears the slot, but the subsequent taxonomy rule restores
+  whatever the editor configured. **No more silent category
+  disappearances.**
+
+### Companion fix — `term_lookup` zero-resolve warning
+In addition to the ordering fix, `JEDB_Transformer_Term_Lookup::apply_push()`
+now logs a warning to `jedb-debug.log` when the input had non-empty
+candidate values but ALL of them failed to resolve. Most common cause
+is the `match_by` / value-shape mismatch the user hit. The log
+includes the unmatched values and a hint:
+
+```
+[Transformer:term_lookup] resolved 0 term IDs from non-empty input —
+likely a match_by / value-shape mismatch
+{
+  "taxonomy":         "product_cat",
+  "match_by":         "name",
+  "unmatched_values": ["available-sets"],
+  "hint":             "try match_by=\"slug\" if your CCT field stores
+                       slug-style values, or match_by=\"name\" if it
+                       stores display names"
+}
+```
+
+This makes the user-config gotcha self-diagnosing.
+
+### Affected code
+- `includes/flatten/class-flattener.php` `apply_bridge()` — full
+  mapping/taxonomy ordering refactor with explicit four-path
+  status determination (errored / mappings-wrote / taxonomies-only /
+  noop).
+- `includes/flatten/transformers/class-transformer-term-lookup.php`
+  — new zero-resolve warning logic in `apply_push()`.
+- `BUILD-PLAN.md` §4.11 "Engine integration order on push" —
+  rewritten with the new ordering and the rationale callout.
+- `LESSONS-LEARNED.md` (this entry).
+
+### Prevention
+1. **Verify ordering against EVERY downstream side-effect, not just
+   the immediate one.** It wasn't enough to think "taxonomies should
+   conceptually run first." The question that should have been asked
+   in design: "what happens if a mapping's adapter write touches
+   the same WP API surface the taxonomy applier just wrote to?"
+   Anything that uses typed setters to write to a slot will REPLACE
+   that slot — so anything earlier targeting the same slot loses.
+2. **A "success" sync log row that doesn't match observable state on
+   the target is a critical bug, not a documentation issue.** The
+   sync log's job is to be the audit-trail truth. When it says
+   "added [17]" but the post has no terms, the engine has a
+   defect, not the log format.
+3. **Run rules AFTER mappings for ALL bridge-level concerns going
+   forward.** If a future Phase X adds, e.g., variation reconciliation
+   or downloads management, those should also run after mappings
+   for the same reason — they're "rules to enforce on top of whatever
+   field-level changes happened."
+4. **Default to ordering that's robust against config mistakes.**
+   Editors will misconfigure things — wrong `match_by`, typos in
+   slugs, dropdown drift after term renames. The engine's ordering
+   should make their misconfigurations fail-safe (rules win) rather
+   than fail-silent (mapping clobbers rule with no warning).
+5. **Surface zero-resolve cases in transformers.** Silent zero
+   results from a transformer chain that received non-empty input is
+   the editor's #1 "why isn't my config working?" debugging blocker.
+   Always log a warning with enough context to fix it.
+
+---
