@@ -811,6 +811,170 @@ fired.
 - For `Pull only` and `Bidirectional`, an additional "Auto-create CCT row when unlinked post is saved" checkbox surfaces (default off — opt-in to keep the surface area conservative).
 - Per-direction trigger pickers (per §4.9) so the editor can configure the WHEN axis for each direction independently.
 
+### 4.11 Taxonomy assignment per bridge — the categorization layer
+
+> **Locked decisions (D-20, D-21, D-22, D-23, D-24):** Bridges carry a
+> dedicated `taxonomies[]` array (D-20). Taxonomy assignment is
+> **push-only** in v1; pull never modifies terms (D-21). Per-rule
+> defaults: `merge_strategy = 'append'`, `create_if_missing = false`,
+> `match_by = 'slug'` (D-22). `apply_terms_inverse` provides explicit
+> term removal (D-23). UI queries live taxonomies/terms via AJAX,
+> never asks editors to type slugs (D-24). See `LESSONS-LEARNED.md`
+> L-023 for the architectural rationale.
+
+#### Why taxonomies need their own concern
+
+WordPress terms live in `wp_terms` / `wp_term_taxonomy` /
+`wp_term_relationships` — a different storage system from post-meta
+or post columns. They have multi-value semantics, hierarchical
+relationships, merge rules (replace vs append), and creation costs
+(unknown term names → silently dropped or `wp_insert_term`'d?).
+Trying to express "categorize this product under X" through the
+existing `mappings[]` array would require either:
+
+- forcing the CCT to store an array of WP term IDs (awful UX), or
+- overloading transformer args with taxonomy semantics every time.
+
+Instead, taxonomies get a parallel array on the flatten config.
+Cleaner schema, room to grow.
+
+#### The three categorization layers — separate, complementary
+
+| Layer | Solves | Lives in | Direction | Status |
+|---|---|---|---|---|
+| **`term_lookup` transformer** | Per-row dynamic categorization driven by CCT field values (e.g., `cct.theme = "Cityscape"` → product term `Cityscape` in `product_cat`). Composes with the existing `push_transform` / `pull_transform` chains. | `mappings[]` entry's transform chain | both | 0.5.2 |
+| **`taxonomies` array** | Static-per-bridge multi-taxonomy assignment. "Every Mosaic-bridged product is in `product_cat = mosaics`, regardless of any CCT field value." | New `taxonomies[]` on flatten config | push only (per D-21) | 0.5.2 |
+| **`term_assigned` trigger** | Term changes as wakeup events for the reverse engine. "When a product gets the `mosaics` category, fire the Mosaic bridge's pull, even if no other field changed." | `trigger.type = 'term_assigned'` (D-18 trigger taxonomy) | pull (event source) | Phase 4.5 |
+
+These compose: a Mosaic bridge can use `taxonomies[]` to assert
+`product_cat = mosaics` on every push, plus a `term_lookup`
+transformer in mappings to route `cct.theme` into `product_tag`,
+plus a future `term_assigned` trigger to wake up reverse pull when
+an editor adds the `mosaics` category to a previously-unbridged
+product.
+
+#### Schema — `taxonomies[]` per flatten config
+
+```json
+"taxonomies": [
+  {
+    "taxonomy":            "product_cat",
+    "apply_terms":         ["mosaics"],
+    "apply_terms_inverse": [],
+    "match_by":            "slug",
+    "merge_strategy":      "append",
+    "create_if_missing":   false,
+    "snippet":             null
+  },
+  {
+    "taxonomy":            "product_tag",
+    "apply_terms":         ["custom-mosaic", "made-to-order"],
+    "apply_terms_inverse": ["available-set"],
+    "match_by":            "slug",
+    "merge_strategy":      "append",
+    "create_if_missing":   false,
+    "snippet":             null
+  }
+]
+```
+
+Per-rule fields:
+
+| Field | Default | Purpose |
+|---|---|---|
+| `taxonomy` | (required) | WP taxonomy slug — must be registered for the bridge's target post type. |
+| `apply_terms` | `[]` | Terms to assign on push, interpreted via `match_by`. Resolved to term IDs via `get_term_by()`. |
+| `apply_terms_inverse` | `[]` | Terms to ENSURE NOT present after push. Engine calls `wp_remove_object_terms()`. |
+| `match_by` | `'slug'` | `'name' \| 'slug' \| 'id'` — how to interpret `apply_terms` strings. |
+| `merge_strategy` | `'append'` | `'append'` (preserves editor-added terms) or `'replace'` (bridge owns the slot). |
+| `create_if_missing` | `false` | When ON, unknown `apply_terms` values trigger `wp_insert_term()`. OFF by default to keep editors in control of taxonomy hygiene. |
+| `snippet` | `null` | Phase 5b forward-compat. When the snippet runtime ships, a snippet slug here overrides `apply_terms` with the snippet's return value. |
+
+#### Engine integration order on push
+
+`JEDB_Flattener::apply_bridge()` runs the following sequence after
+the cross-direction cascade check and condition evaluation pass:
+
+1. **Resolve target post** (existing flow, L-021 self-heal).
+2. **For each `taxonomies[]` entry**, in declared order:
+   - Resolve `apply_terms` to term IDs via `get_term_by(match_by, taxonomy, value)`.
+   - If `create_if_missing` AND a value didn't resolve, `wp_insert_term()`
+     and use the new term ID. Log the new-term creation in sync_log
+     `context_json` so editors can audit.
+   - Resolve `apply_terms_inverse` similarly (no creation — only existing
+     terms can be removed, by definition).
+   - Call `wp_set_object_terms($post_id, $resolved_apply_ids, $taxonomy, $append=true|false)`
+     — `$append=true` for `'append'`, `$append=false` for `'replace'`.
+   - Call `wp_remove_object_terms($post_id, $resolved_inverse_ids, $taxonomy)`.
+3. **Run field mappings** (existing flow with `term_lookup` transformer
+   available in chains).
+4. **Sync log** records `taxonomies_applied` count and per-rule outcome
+   (added / removed / created) in `context_json`.
+
+#### Engine integration on pull
+**Skipped entirely.** Per D-21, the reverse pull engine doesn't read
+or write taxonomies. The `taxonomies[]` array on bridge configs
+exists only for the forward direction. Editors who want pull-side
+behavior gated on terms use the conditional DSL
+(`{product.product_cat} contains "mosaics"`) or wait for Phase 4.5's
+`term_assigned` trigger.
+
+#### `term_lookup` transformer
+
+A new built-in transformer for the `mappings[]` chain. Args:
+
+| Arg | Default | Purpose |
+|---|---|---|
+| `taxonomy` | (required) | WP taxonomy to look up against. |
+| `match_by` | `'name'` | Push: how to interpret incoming string. Pull: which property to output. |
+| `output` | `'ids_array'` (push) / `'first_name'` (pull) | What shape to produce. |
+| `create_if_missing` | `false` | Push: insert term if not found. Same behavior as the `taxonomies[]` rule's flag. |
+
+Push direction: takes a string or array of strings, resolves to term
+IDs, returns an array of IDs. Pull direction: takes an array of term
+IDs (e.g., from `category_ids`), resolves to names/slugs, returns
+the first or all values per `output`. Composes naturally with
+`mapping.target_field = 'category_ids'` to write Woo's typed setter.
+
+#### Admin UI (Flatten tab — 0.5.2 deliverable)
+
+When the form's `target_target` is `posts::*`, a new collapsible
+"Taxonomies" section appears between "Self-heal options" and
+"Field mappings". Inside:
+
+- "Add taxonomy rule" button.
+- Per rule: a row with the taxonomy dropdown (populated from
+  `get_object_taxonomies($post_type)`), the apply-terms multi-select
+  (populated from `get_terms($taxonomy)`), the inverse-terms
+  multi-select (same source), the merge strategy radio pair, the
+  `create_if_missing` checkbox, the `match_by` radio (slug/name/id),
+  and a placeholder "snippet (Phase 5b)" disabled dropdown.
+- "Remove rule" button per row.
+
+The dropdowns refresh dynamically when `target_target` changes via
+the new `wp_ajax_jedb_flatten_get_post_type_taxonomies` endpoint,
+which returns `{taxonomies: [{slug, label, hierarchical, terms:[{id,name,slug}...]}]}`
+for the selected post type.
+
+#### Forward-compat with Phase 5b snippets
+
+The `snippet` slot per rule is nullable today and meaningful in
+Phase 5b. When the snippet runtime ships:
+
+- Setting `snippet = "compute_categories_from_theme"` overrides
+  `apply_terms` with the snippet's return value. The snippet
+  receives `$value = null, $args = $rule, $context = $bridge_context`
+  and returns an array of strings (interpreted via `match_by`).
+- `apply_terms` becomes a fallback when the snippet returns null
+  or an empty array.
+- No schema migration — existing `snippet: null` rules continue to
+  use `apply_terms` directly.
+
+This is what enables the "compute taxonomies from CCT field
+values" use case the user wanted (e.g., Mosaic theme → matching
+product_tag), as a more powerful alternative to the
+`term_lookup` transformer when the logic is complex.
+
 ---
 
 ## 5. Sync Loop Prevention (`JEDB_Sync_Guard`)
@@ -897,7 +1061,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, and 3.5 are complete (v0.5.0 on `main`). Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, and 3.5 are complete (v0.5.1 on `main`, verified end-to-end on Brick Builder HQ staging). Phase 3.6 (the categorization layer — `term_lookup` transformer + `taxonomies[]` array — design locked, ships as v0.5.2) is in progress. Phase 4 (Bridge meta box on Woo product edit screen) follows. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
@@ -949,7 +1113,42 @@ Each phase ends with the plugin being **installable, activatable, and useful** �
 - L-021 self-heal mirrored on the reverse side: when no relation row is found, fallback to a CCT row whose `cct_single_post_id` equals the saved post id, with the same auto-attach behavior.
 - ✅ **Exit criterion**: editing a product directly in WC (not through any CCT flow) propagates mapped fields onto the linked CCT row via the per-mapping `pull_transform` chain. With `auto_create_target_when_unlinked` on, an unlinked post-save creates a fresh CCT row + relation. No infinite sync loops, ever.
 
-### Phase 4 — Woo target & bridge meta box (3 days) — *the new code* ▶ **NEXT UP**
+### Phase 3.6 — Categorization layer (~1 day, ships as v0.5.2) ▶ **IN PROGRESS**
+
+The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
+
+- New built-in transformer: `JEDB_Transformer_Term_Lookup`
+  (`includes/flatten/transformers/class-transformer-term-lookup.php`) —
+  resolves names/slugs/IDs against a taxonomy in both directions.
+  Composes with the existing `mappings[]` push/pull transformer chains.
+  Per-row dynamic categorization use case.
+- New `taxonomies[]` array on `wp_jedb_flatten_configs.config_json`,
+  with the schema documented in §4.11. Each rule = one taxonomy's
+  push behavior. Multiple rules per bridge supported natively.
+- New `JEDB_Taxonomy_Applier` class (`includes/flatten/class-taxonomy-applier.php`)
+  — runs the rules against a target post during forward push, between
+  the condition check and the field mappings. Calls
+  `wp_set_object_terms()` and `wp_remove_object_terms()` per rule.
+- Forward `JEDB_Flattener::apply_bridge()` invokes the applier; reverse
+  flattener skips it entirely (per D-21 push-only semantics).
+- New AJAX endpoint `wp_ajax_jedb_flatten_get_post_type_taxonomies` —
+  returns `{taxonomies: [{slug, label, hierarchical, terms: [...]}]}`
+  for a given post type. Used by the Flatten admin UI.
+- Flatten admin tab gets a new collapsible "Taxonomies" section (visible
+  only when `target_target` is `posts::*`). Per-rule UI: taxonomy
+  dropdown + apply-terms multi-select + inverse-terms multi-select +
+  merge_strategy radio + create_if_missing checkbox + match_by radio +
+  disabled-snippet placeholder dropdown (Phase 5b).
+- Sync log `context_json` records `taxonomies_applied` count + per-rule
+  outcome (added / removed / created-via-create_if_missing).
+- ✅ **Exit criterion**: a Mosaic CCT bridge with `taxonomies[]`
+  containing `{taxonomy: 'product_cat', apply_terms: ['mosaics']}`
+  results in every linked product landing in the `mosaics` category on
+  push. Pull never modifies categories. The Flatten admin UI shows the
+  available taxonomies + terms via the new AJAX endpoint with no typed
+  slugs.
+
+### Phase 4 — Woo target & bridge meta box (3 days) — *the new code*
 - Implement `Target_Woo_Product` in full, with HPOS-safe writes.
 - Build the `Woo_Product_Meta_Box` with type select + linked-CCT picker + direction toggle.
 - Build the **Bridges admin tab** (`class-tab-bridges.php`) for managing the `jedb_bridge_types` JSON via UI.
@@ -1021,6 +1220,11 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | D-17 | **JE auto-create is one-directional; reverse direction is ours** *(refined per L-021)* | **Forward direction (CCT → post):** when "Has Single Page" is enabled on the CCT, JetEngine auto-creates the linked post (CPT or Woo product) and stores its ID in `cct_single_post_id`. JE does **NOT** automatically write a row to `{prefix}jet_rel_{id}` — that's the picker's responsibility. Our plugin self-heals this gap (per L-021). **Reverse direction (post → CCT):** not handled by JE at all. Our plugin owns it entirely. | Forward bridges have no `auto_create` flag (JE handles post creation; we self-heal the relation row via D-13). Reverse bridges DO have an opt-in `auto_create_target_when_unlinked` flag (default false). Two distinct hook sets, two distinct engine paths (§4.9 forward + §4.10 reverse). See L-016, L-020, L-021. |
 | D-18 | **Trigger taxonomy** is a separate axis from condition | A bridge config carries both a `trigger` (what event causes evaluation) and an optional `condition` (whether to apply once evaluating). v1 trigger types: `cct_save`, `cct_field_changed`, `post_save`, `wc_product_save`, `term_assigned`, `manual`, `bulk`. Cron-based triggers deferred to Phase 7+. | Each bridge config has `trigger` + optional `trigger_args` (e.g., watched fields for `cct_field_changed`). Engine wires the right hooks at boot based on the registered triggers across all enabled bridges. See §4.9 + L-013/L-018. |
 | D-19 | **Hook priority contract** for Phase 3+ engines | Phase 2's relation-injector transaction processor registers at priority 10 on `created-item/{slug}` (correct for picker-driven attaches). Phase 3+ flatten engine MUST register at priority **>= 20** so JE's auto-create logic finishes first. Documented as a hard contract. | Compile-time check: any code that hooks `created-item/{slug}` or `updated-item/{slug}` for sync purposes (not picker purposes) uses priority 20. New `JEDB_FLATTEN_HOOK_PRIORITY` constant (= 20) referenced by every flatten-engine `add_action` call. See L-018. |
+| D-20 | **Taxonomy concerns get their own array** | Bridge configs carry a dedicated `taxonomies[]` array, **separate from `mappings[]`**, modelling each taxonomy's behavior independently. Every entry has `taxonomy`, `apply_terms`, `apply_terms_inverse`, `match_by`, `merge_strategy`, `create_if_missing`, and a forward-compat `snippet` slot. Multiple taxonomies per bridge are first-class — covers the user's "product_cat for routing + product_tag for filters + pa_* for variations + custom taxonomy for templates" pattern. | New §4.11. New `JEDB_Taxonomy_Applier` class. New AJAX endpoint listing taxonomies + terms for a post type. Flatten admin tab gets a "Taxonomies" collapsible section. See L-023. |
+| D-21 | **Taxonomy assignment is push-only in v1** | The reverse pull engine NEVER modifies taxonomies on the source post. Pull only writes mapped CCT fields via `mappings[]`. Editors can hand-tag products with extra categories and pull won't strip them on next sync. Symmetric pull-side taxonomy logic requires the snippet runtime (Phase 5b) and isn't shippable cleanly without it. | Reverse flattener skips the `taxonomies[]` array entirely. Forward flattener applies it between condition check and mappings. Documented in L-023 with the failure-mode analysis of the three plausible pull behaviors. |
+| D-22 | **Per-rule merge strategy + create_if_missing defaults** | `merge_strategy` defaults to `'append'` (editor-friendly: doesn't strip unrelated terms). `create_if_missing` defaults to `'false'` (the plugin doesn't silently create taxonomy nodes — editor opt-in per rule). `match_by` defaults to `'slug'` (most stable identifier for `apply_terms`). | Default config-shape factory in `JEDB_Flatten_Config_Manager::default_taxonomy_rule()`. Each rule's args are exposed in the Flatten admin tab UI as radios + checkboxes. See L-023. |
+| D-23 | **`apply_terms_inverse` for explicit term removal** | Per-rule `apply_terms_inverse` array of terms that must NOT be present after push. Lets editors declare "this bridge's products are never in the `available-set` category" and have the engine call `wp_remove_object_terms()` to enforce. Empty by default. Composes cleanly with `apply_terms` (apply runs first, then inverse-remove). | New field in the taxonomy rule schema. UI exposes it as a parallel multi-select right under `apply_terms`. Engine calls `wp_remove_object_terms()` after `wp_set_object_terms()` per rule. See L-023. |
+| D-24 | **Taxonomy UI queries live, doesn't take typed slugs** | The Flatten admin tab's Taxonomies section, when a post-type target is selected, queries `get_object_taxonomies()` for available taxonomies and `get_terms()` for available terms. Editors pick from dropdowns, not type taxonomy slugs by hand. Reduces typo-driven bugs and makes the UI self-documenting. | New AJAX endpoint `jedb_flatten_get_post_type_taxonomies(post_type)` returns `{taxonomies: [{slug, label, terms: [{slug, name, id}, ...]}]}`. JS in `flatten-admin.js` populates two cascading dropdowns when the target post type changes. See L-023. |
 
 ---
 
@@ -1089,33 +1293,63 @@ plugin, not a transient session log.
 ## 12. Next Action
 
 Phases 0, 1, 2, 2.5, 3, and 3.5 are complete (see `CHANGELOG.md` and
-the roadmap in §7). Phase 4 (the Bridge meta box on the WooCommerce
-product edit screen + the Bridges admin tab managing
-`jedb_bridge_types` JSON) is the next implementation phase.
+the roadmap in §7). Phase 3.6 — the categorization layer (v0.5.2) —
+is the next implementation phase, with all architecture decisions
+already locked per D-20 → D-24 / L-023 / §4.11.
 
-Per §7's Phase 4 spec:
+Per §7's Phase 3.6 spec, in implementation order:
 
-1. Build `class-tab-bridges.php` admin tab — UI to manage the
-   `jedb_bridge_types` setting (Available Set, Mosaic, Mosaic
-   Instructions PDF, etc.). Each bridge type declares: slug, label,
-   linked CCT, link_via, default direction, optional variations
-   block (Phase 4b).
-2. Build `class-woo-product-meta-box.php` — appears on `product`
-   edit screens. Surfaces a Bridge Type select + linked-CCT picker +
-   direction toggle, populated from `jedb_bridge_types`. Per L-012
-   the meta box only renders fields where the target adapter's
-   `is_natively_rendered($field)` returns false (D-16); native
-   fields stay in their native Woo boxes.
-3. Implement the CCT-single → Woo-product redirect shim (§4.6).
-4. Verify loop-safe CCT↔Woo sync end-to-end through the Phase 3 +
-   3.5 engines, using a real bridge type definition.
+1. **`term_lookup` transformer** —
+   `includes/flatten/transformers/class-transformer-term-lookup.php`.
+   New built-in registered alongside the existing nine. Push:
+   names/slugs/IDs → term_ids array. Pull: term_ids → names. Args:
+   `taxonomy`, `match_by`, `output`, `create_if_missing`.
 
-All architectural decisions Phase 4 needs are locked (D-1 through
-D-19, with L-021 refinement to D-13 / D-17). All known JE caveats
-are documented (L-001 through L-021). The forward + reverse
-flatteners, sync guard, sync log, transformer registry, condition
-evaluator, and adapter-owned `is_natively_rendered` / `get_required_fields`
-methods are all in place and ready for the meta box to consume.
+2. **`taxonomies[]` schema in flatten config** —
+   `JEDB_Flatten_Config_Manager::default_config_json()` adds the new
+   array; `merge_with_defaults()` deep-merges per-rule defaults on
+   read so existing 0.5.x bridges get the new key filled in
+   automatically. Per-rule shape per §4.11's table.
+
+3. **`JEDB_Taxonomy_Applier`** —
+   `includes/flatten/class-taxonomy-applier.php`. Single public method
+   `apply_for_bridge( $taxonomies_array, $post_id, $context )`. Resolves
+   each rule's apply/inverse terms, calls `wp_set_object_terms()` and
+   `wp_remove_object_terms()`, returns a per-rule outcome array for
+   sync log context.
+
+4. **Forward flattener integration** —
+   `JEDB_Flattener::apply_bridge()` calls the applier between condition
+   check and field mappings. Reverse flattener skips it entirely (D-21).
+
+5. **Admin AJAX endpoint** —
+   `wp_ajax_jedb_flatten_get_post_type_taxonomies` in
+   `JEDB_Tab_Flatten`. Returns `{taxonomies: [{slug, label,
+   hierarchical, terms:[...]}]}` for a given post type via
+   `get_object_taxonomies()` + `get_terms()`.
+
+6. **Flatten admin tab UI** —
+   `templates/admin/tab-flatten.php` gets a new "Taxonomies"
+   collapsible section visible only when `target_target` is `posts::*`.
+   Per-rule UI per §4.11. JS in `assets/js/flatten-admin.js` queries
+   the new endpoint when the target post type changes.
+
+7. **Sync log context enhancement** — flatten apply records
+   `taxonomies_applied` (count) and per-rule outcome
+   (`{taxonomy, added: [...], removed: [...], created: [...]}`)
+   in `context_json`.
+
+8. **Version bump + docs** — bootstrap to 0.5.2, CHANGELOG entry,
+   README + readme.txt + workspace docs, BUILD-PLAN status update,
+   commit + push.
+
+All architectural decisions Phase 3.6 / Phase 4 need are locked
+(D-1 through D-24, with L-021 / L-022 / L-023 refinements). All
+known JE / WC / WP caveats are documented (L-001 through L-023).
+The forward + reverse flatteners, sync guard, sync log, transformer
+registry, condition evaluator, adapter-owned `is_natively_rendered` /
+`get_required_fields` methods, and now the locked-in taxonomy
+schema are all ready for Phase 4's Bridge meta box to consume.
 
 ## 13. Historical reference: original "Next Action" notes from §8 lock-in
 

@@ -1487,3 +1487,174 @@ check doesn't think it's load-bearing for the pull→push direction
    the test failing — it's the diff working.
 
 ---
+
+## L-023: Taxonomies are a separate concern from field mappings — model them as a parallel `taxonomies` array, push-only in v1
+
+**Discovered:** 2026-05-06 (Phase 3.5 / pre-0.5.2 design)
+**Severity:** High (architectural lock-in for the categorization layer)
+**Category:** Architecture / Schema design
+
+### Context
+Phase 3.5 testing surfaced a real editorial concern: when a Mosaic
+CCT row pushes to its bridged Woo product, the product doesn't end
+up in the `mosaics` category. WordPress taxonomies (`product_cat`,
+`product_tag`, `pa_*` attributes, custom taxonomies) live in a
+different storage system from post-meta and post-columns, so a CCT
+field → product field "mapping" can't naturally express
+"categorize this product under X."
+
+### Wrong (the temptation, not yet shipped)
+The first-instinct fix would be to add a one-off `default_taxonomies`
+flat dictionary to bridge configs:
+```json
+"default_taxonomies": { "product_cat": ["mosaics"] }
+```
+
+That works for the single-taxonomy case but doesn't handle the
+multi-taxonomy reality the user surfaced — a Mosaic bridge might
+need to set `product_cat` (for routing/templating), `product_tag`
+(for storefront filters), `pa_has_pdf` (for variation-attribute
+selection in Phase 4b), AND a custom taxonomy for theme grouping.
+Each of those needs its own merge strategy, its own create-if-missing
+policy, and (in Phase 5b) its own snippet override.
+
+A flat dict can't grow that far without becoming a parallel schema
+overgrown into a footgun.
+
+### Reality (what we're shipping in 0.5.2)
+**Three parallel concerns, three layers of architecture, each with
+clear ownership.**
+
+| Layer | Solves | Ships in |
+|---|---|---|
+| **`term_lookup` transformer** | Per-row dynamic categorization driven by CCT field values (CCT `theme = "Cityscape"` → product term `Cityscape` in `product_cat`). Composes with the existing `mappings[]` and `push_transform[]` / `pull_transform[]` chains. | 0.5.2 |
+| **`taxonomies` array on flatten config** | Static-per-bridge multi-taxonomy assignment. Each entry describes ONE taxonomy's behavior. Push action only — pull never modifies taxonomies. | 0.5.2 |
+| **`term_assigned` trigger** | Term changes as wakeup events for the reverse engine. "When a product gets the `mosaics` category, fire the Mosaic bridge's pull." Already in BUILD-PLAN D-18's trigger taxonomy as a v1 trigger type, deferred to Phase 4.5. | Phase 4.5 |
+
+**The `taxonomies` array shape (per bridge config):**
+
+```json
+"taxonomies": [
+  {
+    "taxonomy":           "product_cat",
+    "apply_terms":        ["mosaics"],
+    "apply_terms_inverse":[],
+    "match_by":           "slug",
+    "merge_strategy":     "append",
+    "create_if_missing":  false,
+    "snippet":            null
+  },
+  {
+    "taxonomy":           "product_tag",
+    "apply_terms":        ["custom-mosaic", "made-to-order"],
+    "apply_terms_inverse":["available-set"],
+    "match_by":           "slug",
+    "merge_strategy":     "append",
+    "create_if_missing":  false,
+    "snippet":            null
+  }
+]
+```
+
+Per-rule fields:
+- `taxonomy` — the WP taxonomy slug.
+- `apply_terms` — terms to assign on push (interpreted via `match_by`).
+- `apply_terms_inverse` — terms to ENSURE NOT present on push. Lets editors
+  declare "this bridge's products must never be in `available-set`." The
+  engine calls `wp_remove_object_terms()` for any of these that are
+  currently attached.
+- `match_by` — `'name' | 'slug' | 'id'`. How to interpret `apply_terms` /
+  `apply_terms_inverse` strings.
+- `merge_strategy` — `'append'` (default, editor-friendly: doesn't strip
+  unrelated terms) or `'replace'` (canonical: bridge owns the entire
+  taxonomy slot).
+- `create_if_missing` — default `false`. When ON, an `apply_terms` value
+  that doesn't match any existing term in `taxonomy` triggers
+  `wp_insert_term()` instead of being silently dropped.
+- `snippet` — placeholder for Phase 5b. When the snippet runtime ships,
+  setting this to a snippet slug overrides `apply_terms` with the
+  snippet's return value (an array of term references). Forward-compatible.
+
+### Why push-only in v1
+The bidirectional question — "what should pull do with taxonomies?"
+— has three plausible answers, and each has a real downside:
+
+| Pull behavior | Issue |
+|---|---|
+| Pull also writes terms back | Symmetric but ill-defined: which taxonomy on the post drives which CCT field? Requires snippet logic to be useful. Phase 5b territory. |
+| Pull strips terms not in `apply_terms` | Destructive — would silently delete editor-added categories on every product save. Anti-feature. |
+| **Pull ignores `taxonomies` entirely** | **What we're shipping.** Pull only modifies CCT fields via `mappings[]`. Taxonomies are a push-only assertion. Editors can hand-tag products with extra categories and the bridge won't strip them on next pull. |
+
+The "pull-as-trigger" use case ("when a product gets the mosaics
+category, fire the Mosaic bridge's pull") is real but architecturally
+distinct — that's Play 3 (`term_assigned` trigger) and it goes in
+Phase 4.5, not the categorization layer.
+
+### Engine integration order (push)
+1. Resolve target post (existing flow with L-021 self-heal).
+2. Cross-direction cascade check (existing flow per L-022).
+3. Condition evaluation (existing flow).
+4. **NEW: Taxonomy assertions.** For each entry in `taxonomies[]`:
+   - Resolve `apply_terms` to term IDs (via `get_term_by(match_by)` or
+     `wp_insert_term()` if `create_if_missing` AND the term doesn't exist).
+   - Resolve `apply_terms_inverse` similarly.
+   - Call `wp_set_object_terms($post_id, $resolved_ids, $taxonomy, $append)`
+     where `$append` is `true` for `'append'` strategy, `false` for `'replace'`.
+   - Call `wp_remove_object_terms($post_id, $inverse_ids, $taxonomy)` for the
+     inverse terms.
+5. Field mappings (existing flow with `term_lookup` available as a transformer).
+6. Sync log records taxonomies applied alongside fields written.
+
+### Why `term_lookup` AND `taxonomies` array (not one or the other)
+They solve different problems and are forward-compatible:
+- `term_lookup` is a **transformer** — operates on a single value, fits in
+  the existing `push_transform[]` / `pull_transform[]` chain, writes to a
+  field like `category_ids`. Per-row dynamic.
+- `taxonomies[]` is an **action** — operates on the post, runs separately
+  from mappings, bridge-level static. Per-bridge static.
+
+Editors can use either or both. Multi-taxonomy bridges typically use
+`taxonomies[]` for static categorization + `term_lookup` for one or two
+fields where the CCT value drives the taxonomy.
+
+### Affected code (planned, 0.5.2)
+- New: `includes/flatten/transformers/class-transformer-term-lookup.php`
+  — implements `JEDB_Transformer` interface; registered in `bootstrap_defaults()`.
+- New: `includes/flatten/class-taxonomy-applier.php` — runs the taxonomies
+  array against a post; called from both forward and reverse flatteners
+  (forward: writes; reverse: skipped per "push-only in v1").
+- Modified: `includes/flatten/class-flatten-config-manager.php` — adds
+  `taxonomies` (default `[]`) to the canonical config_json shape; adds
+  default-shape merging for new entries on read.
+- Modified: `includes/flatten/class-flattener.php` — calls
+  `JEDB_Taxonomy_Applier` between condition check and mappings.
+- Modified: `templates/admin/tab-flatten.php` — new "Taxonomies"
+  collapsible section visible when target_target is `posts::*`.
+- Modified: `assets/js/flatten-admin.js` — wires the new section, queries
+  taxonomies + terms via WP REST or AJAX endpoints.
+- New AJAX endpoint: `jedb_flatten_get_post_type_taxonomies` returns the
+  list of taxonomies registered for the chosen post type, plus first 100
+  terms in each.
+
+### Prevention
+1. **Treat taxonomies as a separate concern from field mappings, always.**
+   They have different storage, different cardinality semantics, different
+   merge rules, and different creation costs.
+2. **Don't try to "unify" everything into the `mappings[]` array.** Each
+   thing the bridge can do (mappings, taxonomies, future: variations,
+   downloads, attributes) gets its own array if it has its own semantics.
+   The flatten config is a CONFIGURATION, not a programming language —
+   verbosity is a feature when it makes intent obvious.
+3. **Push-only is a valid v1 stance** when the symmetric bidirectional
+   semantics aren't well-defined. Better to ship a clear unidirectional
+   feature and add the reverse side under a separate trigger later than
+   to ship something half-baked that loses data on every sync.
+4. **Forward-compat with the snippet runtime** by adding a `snippet`
+   slot per rule that's nullable today and meaningful in Phase 5b. No
+   schema migration required when snippets ship.
+5. **The UI should query the live system** — `get_object_taxonomies()`
+   for available taxonomies, `get_terms()` for available terms. Don't
+   ask editors to type taxonomy slugs; surface what's actually
+   registered.
+
+---
