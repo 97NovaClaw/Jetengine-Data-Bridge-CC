@@ -2,6 +2,55 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.1] — 2026-05-06
+
+**Documentation + small cleanups; no behavior change.**
+
+End-to-end testing of v0.5.0 on Brick Builder HQ staging surfaced an
+architectural asymmetry between the forward and reverse cycle-
+prevention paths. The cross-direction `Sync_Guard::is_locked()`
+checks at the top of each engine's `apply_bridge()` are correct, but
+on the reverse-pull side they're effectively dead code under
+current JetEngine behavior — because JE's `$cct->db->update()`
+doesn't fire the `updated-item/{slug}` hook that would have
+triggered the forward push to wake up. The cycle architecturally
+cannot form on that side; on the forward push side it can (WC's
+`WC_Product->save()` does fire its hooks). Both sides keep the
+defensive check; this release just documents what each does.
+
+### Documentation
+
+- **`LESSONS-LEARNED.md` L-022** added — full root-cause analysis
+  with five sync-log rows of evidence + the cross-direction
+  asymmetry table. Locks in the understanding that the reverse
+  pull → forward push cascade is non-recurring by JE design, not
+  by our defensive code; the defensive code stays as insurance for
+  future JE behavior changes / third-party hook re-firers / Phase
+  4 meta-box manual-sync paths that DO fire the hook.
+
+- **`BUILD-PLAN.md` §4.10** gets a small footnote referencing
+  L-022's asymmetry finding so future readers don't expect
+  cascade markers on every reverse-pull row.
+
+### Improved (papercut closure)
+
+- Forward and reverse `noop` / `skipped_no_target` / `skipped_locked`
+  log rows now include `resolution` and (where applicable)
+  `cascade` keys in their `context_json`. Symmetric with the
+  `success` / `errored` rows that already had them. Closes the
+  v0.4.1 / v0.5.0 inconsistency the user flagged in test session
+  rounds 2 + 3.
+
+### Notes for upgraders
+
+- **No schema change, no behavior change, no migration needed.**
+  This is purely a documentation release plus a few extra context
+  fields in sync_log rows that were already being written.
+- **Existing bridges are unaffected.** The defensive cross-direction
+  lock check has been in place since v0.5.0; this release only
+  documents that the pull → push side of the cascade doesn't
+  currently fire because JE's API doesn't surface the trigger event.
+
 ## [0.5.0] — 2026-05-06
 
 **Phase 3.5 — reverse-direction (post → CCT) flatten engine + bidirectional bridges.**

@@ -341,6 +341,9 @@ class JEDB_Flattener {
 			if ( ! $any_change ) {
 				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_NOOP, $origin_tag, 'every mapped value already matched target — nothing to write', array(
 					'fields_examined' => count( $per_field ),
+					'per_field'       => $per_field,
+					'resolution'      => $resolution_method,
+					'auto_attached'   => $auto_attached,
 				) );
 				return JEDB_Sync_Log::STATUS_NOOP;
 			}

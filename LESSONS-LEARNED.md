@@ -1355,3 +1355,135 @@ options" fieldset under the link-via picker.
    exists via single-page but was rejected for X reason."
 
 ---
+
+## L-022: JetEngine `$cct->db->update()` and `->insert()` do NOT fire the `updated-item` / `created-item` hooks — cycles between forward push and reverse pull don't form on the JE side
+
+**Discovered:** 2026-05-06 (Phase 3.5 / version 0.5.1)
+**Severity:** Medium (architectural finding, not a bug)
+**Category:** API surprise / Architecture
+
+### Context
+Phase 3.5's reverse flattener writes back to a CCT row via
+`JEDB_Target_CCT::update($id, $payload)`, which delegates to
+`$cct_factory->db->update($fields, ['_ID' => $id])` on JetEngine's CCT
+DB handle. The expectation, when designing the cross-direction
+cascade prevention (BUILD-PLAN §4.10's cycle prevention notes), was
+that this CCT write would fire JE's `updated-item/{slug}` hook and
+the forward push engine — listening on the same hook for
+bidirectional bridges — would wake up, see the pull lock held by the
+reverse engine, and bail with `cascade: pull_in_flight`. That was
+the symmetric counterpart to the `cascade: push_in_flight` case
+(forward push → `WC_Product->save()` → reverse pull wakes up → sees
+push lock → bails).
+
+### Wrong
+We assumed JE's CCT save events fire on every CCT row write,
+including writes that originate inside our own code via the public
+JE DB handle.
+
+### Evidence
+End-to-end test on 2026-05-06 with bridge id 3 set to
+`direction = bidirectional`, `auto_create_target_when_unlinked = true`:
+
+| event | timestamp | direction | result |
+|---|---|---|---|
+| User edits product 403 | 00:15:27 | reverse pull writes `mosaic_name` to CCT 2 | success — wrote 1 field |
+| `[Reverse_Flattener]` write completes | 00:15:27 | — | no `updated-item/mosaics_data` hook fires |
+| Forward push listener (waiting on that hook) | 00:15:27 | — | **never wakes** — no companion sync_log row, no cascade marker |
+| Auto-create CCT 5 from product 404 | 00:20:12 | reverse pull creates+writes | success |
+| Forward push listener (waiting on the new CCT save) | 00:20:12 | — | **never wakes** — same null result |
+
+`SELECT COUNT(*) FROM wp_jedb_sync_log WHERE direction='push' AND
+JSON_EXTRACT(context_json,'$.cascade')='push_in_flight'` returns 0
+across every test run. Five reverse-pull writes that wrote real CCT
+data, zero forward-push cascade events.
+
+The user even attempted a forced-write test (rows 31, 32) — edited
+the CCT mosaic_name AFTER a reverse pull had brought it into sync,
+expected forward push to write, expected reverse pull to bail with
+the cascade marker. Both rows logged `noop` because the diff engine
+correctly short-circuited (CCT and product values matched), and the
+test never produced an actual cross-direction event to observe.
+
+### Reality
+The `jet-engine/custom-content-types/created-item/{slug}` and
+`updated-item/{slug}` hooks are fired by JetEngine's **higher-level
+CCT save handlers** — REST API endpoints (`POST /jet-cct/{slug}`),
+the JE CCT admin form submit handler, and the Phase 2 picker payload
+processor. They are NOT fired by JE's low-level `$db->update()` /
+`$db->insert()` methods.
+
+This means:
+
+| Direction | Recursion possibility |
+|---|---|
+| **Forward push (CCT → post)** writes through `$product->save()` → WC fires `woocommerce_update_product` (and `save_post_product`) → reverse pull listener wakes → cross-direction lock check fires → bails with `cascade: push_in_flight`. **Cycle is possible; cascade check is the active protection.** |
+| **Reverse pull (post → CCT)** writes through `$cct->db->update()` → JE does NOT fire `updated-item/{slug}` → forward push listener never wakes → no cascade event → **cycle architecturally cannot form.** |
+
+The plugin's cross-direction `is_locked()` check still runs in both
+engines and is correct, but on the reverse side it is *unreachable
+defensive code* under current JE behavior — a belt to the
+suspenders of "the hook just doesn't fire on the path that would
+recurse."
+
+### Why this is actually a positive finding
+- Bidirectional bridges are recursion-free even if a future regression
+  weakens our cross-direction lock check on the reverse side.
+- Editorial mental model is simpler: "post saves can cascade; CCT
+  saves done by us don't."
+- We don't have to introduce hook-suppression flags or instance
+  re-entry counters for the reverse path.
+
+### Why we still want the lock check
+- A future JE version may start firing `updated-item` from
+  `$db->update()` (it's a reasonable behavior change). If they do,
+  our cross-direction check kicks in automatically — no plugin update
+  needed.
+- Third-party plugins that re-fire `updated-item` after our writes
+  (some sync-tracking plugins do this) would otherwise create the
+  cycle JE itself doesn't.
+- Phase 4 (Bridge meta box on the product edit screen) might trigger
+  manual sync via JE REST APIs that DO fire the hook. The lock check
+  still guards that path.
+
+### Affected code
+- `includes/flatten/class-flattener.php` — cross-direction lock check
+  at the top of `apply_bridge()` (kept as-is; correct)
+- `includes/flatten/class-reverse-flattener.php` — cross-direction
+  lock check at the top of `apply_bridge()` (kept as-is; correct)
+- `includes/targets/class-target-cct.php` `update()` / `create()` —
+  call `$db->update()` / `$db->insert()` directly; this is the
+  intentional bypass that makes the reverse path non-recursive.
+- `BUILD-PLAN.md` §4.10 cycle-prevention notes — needs a footnote
+  about the asymmetry (added in 0.5.1)
+- `CHANGELOG.md` 0.5.1 entry
+
+### Fix shipped in
+v0.5.1 — documentation-only release. No code change; the existing
+defensive code is correct. This entry exists to lock the architectural
+understanding so the next person reading the cross-direction lock
+check doesn't think it's load-bearing for the pull→push direction
+(it isn't, today, but it's correct insurance).
+
+### Prevention
+1. **Don't assume save events fire from low-level WP/JE/WC API
+   methods.** Verify empirically before relying on cascade behavior.
+   WC fires hooks at the public typed-setter API layer (`save()`); JE
+   does not at the equivalent DB-handle layer (`$db->update`).
+2. **When a recursion path "doesn't fire" in testing, that's a fact
+   to capture, not a bug to fix.** The right response is to document
+   the asymmetry, keep the defensive check (cheap insurance), and
+   move on. Don't introduce hook-firing forcing functions just to
+   make symmetry feel complete.
+3. **The sync log's `cascade` field will be NULL on every reverse-pull
+   row in v0.5.x.** If a future test ever shows `cascade=push_in_flight`,
+   that means the JE→cascade path has activated for some reason
+   (3rd-party hook, JE behavior change, manual REST sync from Phase
+   4's meta box, etc.) — investigate, don't celebrate.
+4. **Trust the diff engine.** Many of our "expected to write but
+   logged noop" surprises trace back to forgetting that a previous
+   reverse-pull or self-heal already brought both sides into sync.
+   The diff is doing its job; the cascade marker test failing isn't
+   the test failing — it's the diff working.
+
+---

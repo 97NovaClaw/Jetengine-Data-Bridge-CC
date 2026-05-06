@@ -774,20 +774,33 @@ The DSL path resolver maps `{cct.foo}` to `$source_data['foo']` when source is a
 - The forward direction always finds the post already created by JE; the reverse direction must decide whether to auto-create or not.
 - Therefore: forward bridges have NO `auto_create_target_when_unlinked` flag (always implicit-yes via JE); reverse bridges DO have it (default false; editor opts in per bridge type).
 
-**Cycle prevention** is critical here:
+**Cycle prevention** is critical here, but the forward and reverse
+sides are *not* symmetric. Per **L-022** (verified empirically on
+2026-05-06):
 
-- Reverse-direction sync writes to a CCT row.
-- That CCT write fires `updated-item/{slug}`.
-- The Phase 3 forward flatten engine listens on that hook and writes back to the post.
-- That post write fires `wc_product_save` (or `save_post_{type}`).
-- We're back at step 1 with a recursive cycle.
+- **Forward push → reverse pull cascade CAN form.** Forward writes
+  go through `WC_Product->save()`, which fires
+  `woocommerce_update_product`. The reverse pull listener wakes up
+  during that nested save. Our cross-direction
+  `JEDB_Sync_Guard::is_locked('push', ...)` check is what prevents
+  the cycle — bails with `cascade: push_in_flight`.
+- **Reverse pull → forward push cascade CANNOT form** (currently).
+  Reverse writes go through `$cct->db->update()` directly. JetEngine
+  does NOT fire `updated-item/{slug}` from its low-level DB methods;
+  the hook fires only from JE's higher-level save flows (REST, admin
+  form, picker payload). The forward push listener never wakes up
+  on reverse-pull writes, so the cycle architecturally cannot form.
+  The cross-direction `is_locked('pull', ...)` check at the top of
+  forward push is dead code under current JE behavior — kept as
+  belt-and-suspenders insurance for future JE versions, third-party
+  hook re-firers, and Phase 4's manual-sync-via-REST paths.
 
-`JEDB_Sync_Guard` (§5) catches this via origin tagging — every write
-carries a `$context['origin']` (e.g., `'reverse_pull'`, `'forward_push'`)
-and the guard's per-request lock refuses re-entry on the same
-`(direction, source_id, target_id)` triplet. Logged as
-`status='skipped_locked'`. Without the guard, this cycle is the
-default-failure mode of bidirectional sync; with it, it's a no-op.
+In both cases, `JEDB_Sync_Guard` (§5) is the active protection where
+needed and benign overhead where the recursion never forms. Origin
+tagging via `$context['origin']` (`'reverse_pull'`, `'forward_push'`,
+`'manual'`, `'wc_product_save'`, `'cct_save_updated'`, etc.) provides
+the audit trail in `wp_jedb_sync_log` regardless of which protection
+fired.
 
 **Editor UX (Phase 4 / 4.5 deliverable):**
 

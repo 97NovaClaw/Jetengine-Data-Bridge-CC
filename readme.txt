@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.5.0
+Stable tag: 0.5.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.5.0) ==
+== Current Capability (v0.5.1) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -89,6 +89,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.5.1 =
+* Documentation + small cleanups; no behavior change. Adds L-022 to LESSONS-LEARNED capturing the architectural finding that JetEngine's `$db->update()` doesn't fire the `updated-item/{slug}` hook — meaning the reverse pull → forward push cascade can't form on the JE side, and our defensive `is_locked()` check on that path is insurance for future JE versions / 3rd-party hook re-firers / Phase 4 manual-sync paths. BUILD-PLAN §4.10 cycle-prevention prose updated to reflect the asymmetry. Forward + reverse `noop` log rows now include `resolution`, `auto_attached`, and `auto_created` fields for symmetric debuggability with success/errored rows.
+
 = 0.5.0 =
 * Phase 3.5 — reverse-direction (post → CCT) flatten engine. Editing a Woo product or any bridged CPT now propagates mapped fields back to the linked CCT row via the per-mapping `pull_transform` chain. Adds: `JEDB_Reverse_Flattener` engine, `direction = pull` and `direction = bidirectional` bridge support, mutual cascade prevention via cross-direction Sync_Guard checks, optional `auto_create_target_when_unlinked` flag (D-17 opt-in). Forward engine's `skipped_condition` log now includes resolution metadata (the v0.4.1 papercut).
 
@@ -112,6 +115,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.5.1 =
+Documentation + small cleanups; no behavior change. Locks in the L-022 architectural finding from staging testing. Existing 0.5.0 bridges work unchanged.
 
 = 0.5.0 =
 Phase 3.5 — reverse direction works. Editing a Woo product propagates back to the linked CCT row. Bidirectional bridges supported with automatic cascade prevention. No schema migration; existing 0.4.x bridges work unchanged. The `direction` field on the form now accepts pull and bidirectional.

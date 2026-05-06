@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.5.0 — Phases 3 + 3.5 complete. Bidirectional sync works end-to-end: editing a CCT pushes mapped fields onto the linked Woo / CPT record, AND editing the post propagates back to the CCT via the per-mapping `pull_transform` chain. Per-direction triggers, mutual cascade prevention via `Sync_Guard::is_locked()` cross-checks, optional auto-create of CCT rows for unlinked posts (D-17 opt-in), and L-021 self-heal in both directions. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase.
+**Status:** v0.5.1 — Phases 3 + 3.5 complete and verified on staging. Bidirectional sync works end-to-end: editing a CCT pushes mapped fields onto the linked Woo / CPT record, AND editing the post propagates back to the CCT via the per-mapping `pull_transform` chain. Per-direction triggers, mutual cascade prevention via `Sync_Guard::is_locked()` cross-checks, optional auto-create of CCT rows for unlinked posts (D-17 opt-in), and L-021 self-heal in both directions. v0.5.1 documents L-022 (the JE `$db->update()` hook bypass that makes the reverse cascade non-recurring by default) + closes a small noop log-context papercut. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -41,7 +41,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.5.0)
+## What's actually shipped right now (v0.5.1)
 
 **Functional capabilities (cumulative through Phase 3):**
 
@@ -76,7 +76,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## Current file tree (v0.5.0)
+## Current file tree (v0.5.1)
 
 ```
 je-data-bridge-cc/
@@ -217,7 +217,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 2  | Relation Injector port (picker on CCT edit screens) | **✅ Complete** (v0.3.0) |
 | 2.5 | Bidirectional architecture lock + picker visibility fix (L-016 → L-020, D-17 → D-19) | **✅ Complete** (v0.3.1) |
 | 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers + L-021 self-heal | **✅ Complete** (v0.4.0 → v0.4.1) |
-| 3.5 | Reverse-direction flatten (post → CCT) + bidirectional bridges + auto-create CCT (D-17) per BUILD-PLAN §4.10 | **✅ Complete** (v0.5.0) |
+| 3.5 | Reverse-direction flatten (post → CCT) + bidirectional bridges + auto-create CCT (D-17) per BUILD-PLAN §4.10 + L-022 cascade-asymmetry doc | **✅ Complete** (v0.5.0 → v0.5.1, verified on staging) |
 | 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | **▶ Next up** |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
 | 5  | Settings API + debug log viewer enhancements + utilities export/import | Pending |
