@@ -2,6 +2,86 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.3] — 2026-05-10
+
+**Phase 4 / Day 1 — alpha.3 reshape: revert template layer + flatten config schema extensions + per-product engine guards (D-25 / D-26 / D-27 / L-026).**
+
+The alpha.1/alpha.2 Bridges admin tab and `JEDB_Bridge_Types_Manager`
+were a premature template-layer abstraction. Architectural review
+(L-026) found the layer didn't deliver value for the actual editing
+workflow on Brick Builder HQ — the flatten config IS the bridge
+identity. This release retires the layer and reshapes Phase 4 around
+three new locked decisions:
+
+- **D-25** — drop bridge types template layer.
+- **D-26** — field presets are first-class portable artifacts (target-scoped, freeform groups, three application modes — display/apply/scaffold). Skeleton lands here; full UI ships Phase 4 Day 4.
+- **D-27** — meta box reads flatten config directly. The Phase 4 Day 2 Bridge meta box on Woo product / variation edit screens will be a *view* of an existing flatten config, not an authoring surface for a separate concept.
+
+This release ships the foundation: revert + flatten config schema
+extensions + engine guards. Days 2-4 follow on subsequent commits.
+
+### Removed
+
+- **`includes/admin/class-bridge-types-manager.php`** (~620 lines) — entire template-layer CRUD wrapper retired per D-25.
+- **`includes/admin/class-tab-bridges.php`** (~330 lines) — Bridges admin tab.
+- **`templates/admin/tab-bridges.php`** (~280 lines) — admin tab template.
+- **`assets/js/bridges-admin.js`** (~220 lines) — admin tab JS.
+- **Bridges-tab CSS block** in `assets/css/admin.css` (~55 lines). The `.jedb-pill-info` rule is kept as a general-purpose info badge.
+- **`JEDB_OPTION_BRIDGE_TYPES` constant + activation default** in `je-data-bridge-cc.php`. `delete_option('jedb_bridge_types')` runs on activation (best-effort cleanup for any install that ran alpha.1/alpha.2; no-op otherwise). The legacy option key + `jedb_bridge_types__previous` are also listed in `uninstall.php` for full cleanup.
+- **4 lines of bootstrap wiring** for the Bridges tab in `includes/admin/class-admin-shell.php`.
+
+Net deletion: ~1,500 lines.
+
+### Added
+
+- **`JEDB_OPTION_FIELD_PRESETS` constant** + activation default `array()` in `je-data-bridge-cc.php`. Stores the new portable field-preset library (D-26 / BUILD-PLAN §4.12).
+- **`JEDB_Field_Presets_Manager`** in `includes/admin/class-field-presets-manager.php` — Day 1 ships the read-only API: `get_all()` / `get_for_target()` / `get_by_slug()` / `count_all()` + `default_preset()` / `default_field()` shape factories. Full CRUD + admin tab UI ships in Phase 4 Day 4.
+- **`STATUS_SKIPPED_DIRECTION_OVERRIDE`** constant in `JEDB_Sync_Log` for the new direction-override engine guard. Distinct from `STATUS_SKIPPED_LOCKED` so editors can filter the sync log by per-product direction overrides specifically. The lock guard (per-product `_jedb_bridge_locked`) reuses `STATUS_SKIPPED_LOCKED` with a `reason: per_product_lock` field in `context_json` to disambiguate from the in-flight cascade lock.
+- **Per-product engine guards** in `JEDB_Flattener::apply_bridge()` and `JEDB_Reverse_Flattener::apply_bridge()`. Inserted right after the existing cascade-prevention check, before condition DSL evaluation. Read `_jedb_bridge_locked` and `_jedb_bridge_direction_override` post meta off the target post (forward push) or post-that-just-saved (reverse pull). Different signal source / lifetime / intent from the existing `JEDB_Sync_Guard` cascade lock — see L-026 audit table for the full disambiguation. Forward push respects `pull` and `none` overrides; reverse pull respects `push` and `none` overrides.
+
+### Changed
+
+- **`JEDB_Flatten_Config_Manager::default_config_json()`** — extended:
+  - `meta_box: { enabled, title, position, groups[] }` block (D-27 / §4.5). Day 2 Bridge meta box reads it.
+  - `cct_single_redirect: bool` top-level flag (D-27 / §4.6). Day 3 redirect shim reads it. Default OFF.
+- **`JEDB_Flatten_Config_Manager::default_mapping()`** — extended with three new per-mapping fields:
+  - `surface_on_target: bool` — Day 2 meta box renders an editable input for this mapping when true AND the target adapter's `is_natively_rendered()` returns false (D-16 composes naturally).
+  - `surface_on_source: bool` — forward-compat for an eventual CCT-side meta box. Stored but no consumer in Phase 4.
+  - `group: string` — freeform per-mapping label used by the meta box for visual grouping ("Pricing", "Identity", etc. — admin types whatever, no enum). Per D-26.
+- **`JEDB_Flatten_Config_Manager::merge_with_defaults()`** — back-compat: deep-merges the new `meta_box` block, defaults `cct_single_redirect` to false, and casts the new per-mapping fields. Existing 0.5.x flatten configs read with the new keys filled in transparently.
+- **`JEDB_Flatten_Config_Manager::default_meta_box()`** — new public static factory for the meta_box block defaults (used by the merge path + the Flatten admin tab template).
+- **Flatten admin tab editor (`templates/admin/tab-flatten.php`)** — three new UI elements:
+  - **CCT-single redirect checkbox** (between Reverse-direction options and Enabled). Stores into `cct_single_redirect`. Description references BUILD-PLAN §4.6 + the Day 3 deliverable.
+  - **"Meta box settings" collapsible section** (between the form table and Mandatory coverage). Controls: enabled checkbox, title text input, position radio (normal/side/advanced), groups CSV text input. Open by default.
+  - **"Meta box" column** added to the field mappings table. Per-row: Target checkbox, Source checkbox, Group text input. Stacked compact layout.
+- **`assets/js/flatten-admin.js`** — `makeMappingRow()` + `readMappingsFromDom()` extended to render and read the new column. `buildConfig()` extended to capture `meta_box.*` + `cct_single_redirect`. New change/input listeners wire the new controls into `syncJSON()`.
+- **`assets/css/admin.css`** — added `.jedb-flatten-meta-box-section` collapsible styles + `.jedb-mapping-meta-cell` for the per-mapping meta column.
+- **`uninstall.php`** — added `jedb_field_presets` to the cleanup list. Legacy `jedb_bridge_types` + `jedb_bridge_types__previous` retained for installs that ran alpha.1/alpha.2.
+
+### Behavior unchanged
+
+- **Engine paths byte-identical to v0.5.3** outside of the new per-product guards (which are skip-only — they never modify data, just early-return with a sync_log row). Forward push, reverse pull, Sync_Guard cascade prevention, condition DSL, mappings loop, taxonomy applier, sync log, all four target adapters: untouched.
+- **Existing flatten configs work unchanged.** Back-compat handled in `merge_with_defaults()`. The new schema fields default-fill on read; no migration runs.
+- **No new tables.** No new admin tabs in this release (the Field Presets tab ships in Day 4).
+
+### Migration / upgrade notes
+
+- **Automatic.** Install over an alpha.1 / alpha.2 install: the Bridges tab disappears, the `jedb_bridge_types` option is dropped on next activation hook, the new flatten config schema fields default-fill on read for any existing rows, the new constants exist, the new engine guards are no-ops until editors set the post meta. No manual action required.
+- **`_jedb_bridge_locked` / `_jedb_bridge_direction_override` post meta** can be set programmatically TODAY for any product/variation. The Day 2 meta box will provide a UI for these; this release just wires the engine to respect them.
+
+### Architectural notes locked (added to `BUILD-PLAN.md` §8)
+
+- **D-25** — bridge type template layer retired. `jedb_bridge_types` option dropped. The flatten config IS the bridge identity. (Supersedes D-5.)
+- **D-26** — field presets are first-class portable artifacts: target-scoped (single adapter), freeform groups, three application modes (display / apply / scaffold).
+- **D-27** — Phase 4 Bridge meta box reads flatten config directly. No bridge type select, no clone-from-template, no parallel storage.
+
+### Lessons learned (added to `LESSONS-LEARNED.md`)
+
+- **L-025 postscript** — the schema-mirror rule remains valid for any future case where two systems must mirror each other (e.g. Phase 6 setup preset format), but the deeper meta-rule from L-026 — "don't add a template layer until you have ≥2 real consumers driving the design" — applies first.
+- **L-026** — premature template-layer abstraction. Six prevention rules including: "When System A is a template for System B, A's inner shape MUST mirror B's. Don't gratuitously rename keys" (carried over from L-025) and "Make the copy-paste workflow a first-class design criterion."
+
+---
+
 ## [0.6.0-alpha.2] — 2026-05-10
 
 **Phase 4 / Day 1 hotfix — bridge type schema realigned with flatten config (L-025).**

@@ -28,6 +28,9 @@ foreach ( $tables as $table ) {
 
 $options = array(
 	'jedb_settings',
+	'jedb_field_presets',
+	// Legacy (retired in alpha.3 per D-25 / L-026). Listed for cleanup
+	// of any installs that ran alpha.1 or alpha.2.
 	'jedb_bridge_types',
 	'jedb_bridge_types__previous',
 	'jedb_meta_whitelist',

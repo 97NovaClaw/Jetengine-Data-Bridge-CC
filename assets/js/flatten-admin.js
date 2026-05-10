@@ -174,13 +174,31 @@
 		var $pushTd = $( '<td/>' ).append( renderTransformerSelect( mapping.push_transform || [], 'push' ) );
 		var $pullTd = $( '<td/>' ).append( renderTransformerSelect( mapping.pull_transform || [], 'pull' ) );
 
+		// Phase 4 alpha.3 (D-26 / D-27): per-mapping meta box surfacing
+		// flags + freeform group label. The Day 2 Bridge meta box reads
+		// these to decide which fields to render on the Woo product edit
+		// screen.
+		var surfaceTarget = !!mapping.surface_on_target;
+		var surfaceSource = !!mapping.surface_on_source;
+		var groupVal      = String( mapping.group || '' );
+
+		var $surfaceTd = $( '<td class="jedb-mapping-meta-cell"/>' );
+		var $tgtChk    = $( '<input type="checkbox" class="jedb-surface-target" />' ).prop( 'checked', surfaceTarget );
+		var $srcChk    = $( '<input type="checkbox" class="jedb-surface-source" />' ).prop( 'checked', surfaceSource );
+		var $groupIn   = $( '<input type="text" class="jedb-mapping-group" placeholder="Group label" />' ).val( groupVal );
+
+		$surfaceTd
+			.append( $( '<label/>' ).append( $tgtChk ).append( ' Target' ) )
+			.append( $( '<label/>' ).append( $srcChk ).append( ' Source' ) )
+			.append( $groupIn );
+
 		var $rm = $( '<button type="button" class="button button-small button-link-delete">Remove</button>' )
 			.on( 'click', function () {
 				$tr.remove();
 				syncJSON();
 			} );
 
-		$tr.append( $sourceTd ).append( $targetTd ).append( $pushTd ).append( $pullTd ).append( $( '<td/>' ).append( $rm ) );
+		$tr.append( $sourceTd ).append( $targetTd ).append( $pushTd ).append( $pullTd ).append( $surfaceTd ).append( $( '<td/>' ).append( $rm ) );
 
 		return $tr;
 	}
@@ -197,12 +215,21 @@
 			var pushChain = readChain( $tr.find( 'td:nth-child(3)' ) );
 			var pullChain = readChain( $tr.find( 'td:nth-child(4)' ) );
 
+			// Phase 4 alpha.3 — meta cell at column 5.
+			var $metaTd       = $tr.find( 'td:nth-child(5)' );
+			var surfaceTarget = $metaTd.find( 'input.jedb-surface-target' ).is( ':checked' );
+			var surfaceSource = $metaTd.find( 'input.jedb-surface-source' ).is( ':checked' );
+			var groupVal      = $metaTd.find( 'input.jedb-mapping-group' ).val() || '';
+
 			out.push( {
-				source_field:   src,
-				target_field:   tgt,
-				push_transform: pushChain,
-				pull_transform: pullChain,
-				enabled:        true
+				source_field:      src,
+				target_field:      tgt,
+				push_transform:    pushChain,
+				pull_transform:    pullChain,
+				enabled:           true,
+				surface_on_source: surfaceSource,
+				surface_on_target: surfaceTarget,
+				group:             String( groupVal )
 			} );
 		} );
 		return out;
@@ -537,6 +564,24 @@
 
 		cfg.auto_create_target_when_unlinked = $form.find( 'input[name="auto_create_target_when_unlinked"]' ).is( ':checked' );
 
+		// Phase 4 alpha.3 (D-27 / §4.6): top-level redirect shim opt-in.
+		cfg.cct_single_redirect = $form.find( 'input[name="cct_single_redirect"]' ).is( ':checked' );
+
+		// Phase 4 alpha.3 (D-27 / §4.5): Meta box settings block. Form
+		// fields override anything that may have been pasted into the
+		// raw JSON for these specific keys.
+		var groupsRaw = String( $form.find( 'input[name="meta_box_groups"]' ).val() || '' );
+		var groupsArr = groupsRaw.split( ',' )
+			.map( function ( s ) { return $.trim( s ); } )
+			.filter( function ( s ) { return s.length > 0; } );
+
+		cfg.meta_box = $.extend( {}, cfg.meta_box || {}, {
+			enabled:  $form.find( 'input[name="meta_box_enabled"]' ).is( ':checked' ),
+			title:    String( $form.find( 'input[name="meta_box_title"]' ).val() || '' ),
+			position: String( $form.find( 'input[name="meta_box_position"]:checked' ).val() || 'normal' ),
+			groups:   groupsArr
+		} );
+
 		if ( ! cfg.trigger ) {
 			cfg.trigger = { type: 'cct_save', args: {} };
 		}
@@ -580,8 +625,8 @@
 
 	$tbody.on( 'change', 'select, input, textarea', syncJSON );
 
-	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="direction"]', syncJSON );
-	$form.on( 'input',  '#jedb_flatten_condition', syncJSON );
+	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="direction"]', syncJSON );
+	$form.on( 'input',  '#jedb_flatten_condition, #jedb_flatten_meta_box_title, #jedb_flatten_meta_box_groups', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 
 	$form.on( 'submit', function () {

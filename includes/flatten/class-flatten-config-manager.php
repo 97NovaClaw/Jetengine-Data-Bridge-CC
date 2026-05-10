@@ -73,11 +73,46 @@ class JEDB_Flatten_Config_Manager {
 			// Defaults to false because the action is destructive (creates
 			// data); editors must explicitly opt in per bridge.
 			'auto_create_target_when_unlinked'  => false,
+			// Phase 4 alpha.3 (D-27 / §4.5): Bridge meta box configuration
+			// on the Woo product / variation edit screen for this bridge.
+			// Day 1 stores the schema; Day 2 builds the meta box that
+			// reads it. Per-mapping `surface_on_*` flags select WHICH
+			// fields render; this block controls HOW the meta box is
+			// presented as a whole.
+			'meta_box'                          => array(
+				'enabled'  => true,        // when false, no meta box rendered for this bridge
+				'title'    => '',          // empty = use the flatten config's `label` column
+				'position' => 'normal',    // normal | side | advanced — passed to add_meta_box()
+				'groups'   => array(),     // optional explicit ordering of freeform group labels: ['Identity','Pricing',...]
+			),
+			// Phase 4 alpha.3 (D-27 / §4.6): when true and `direction`
+			// includes `push`, a `template_redirect` shim 301-redirects
+			// the JE CCT-single URL to the linked post permalink for any
+			// row whose target is resolved through this bridge's
+			// `link_via`. Default OFF — opt-in per bridge so CCTs that
+			// remain frontend-visible aren't accidentally hidden.
+			'cct_single_redirect'               => false,
 			'required_overrides'                => array(
 				'add'    => array(),
 				'remove' => array(),
 			),
 			'origin_tag'                        => 'flatten',
+		);
+	}
+
+	/**
+	 * Default shape for the meta_box block. Used by merge_with_defaults()
+	 * for back-compat with existing 0.5.x flatten configs that were saved
+	 * before the block existed.
+	 *
+	 * @return array
+	 */
+	public static function default_meta_box() {
+		return array(
+			'enabled'  => true,
+			'title'    => '',
+			'position' => 'normal',
+			'groups'   => array(),
 		);
 	}
 
@@ -108,16 +143,29 @@ class JEDB_Flatten_Config_Manager {
 	 */
 	public static function default_mapping() {
 		return array(
-			'source_field'   => '',
-			'target_field'   => '',
-			'push_transform' => array(
+			'source_field'      => '',
+			'target_field'      => '',
+			'push_transform'    => array(
 				array( 'name' => 'passthrough', 'args' => array() ),
 			),
-			'pull_transform' => array(
+			'pull_transform'    => array(
 				array( 'name' => 'passthrough', 'args' => array() ),
 			),
-			'enabled'        => true,
-			'note'           => '',
+			'enabled'           => true,
+			'note'              => '',
+			// Phase 4 alpha.3 (D-26 / D-27): meta box surfacing flags +
+			// freeform group label. The Woo bridge meta box renders an
+			// editable input for fields where surface_on_target=true AND
+			// the target adapter's is_natively_rendered() returns false
+			// (D-16 composes naturally). surface_on_source is forward-
+			// compat for an eventual CCT-side meta box and is stored
+			// but not yet consumed in Phase 4. group is a freeform
+			// per-mapping label used by the meta box for visual
+			// grouping ("Pricing", "Identity", etc. — admin types
+			// whatever, no enum).
+			'surface_on_source' => false,
+			'surface_on_target' => false,
+			'group'             => '',
 		);
 	}
 
@@ -242,6 +290,43 @@ class JEDB_Flatten_Config_Manager {
 		if ( ! is_array( $config['required_overrides'] ) ) {
 			$config['required_overrides'] = $defaults['required_overrides'];
 		}
+
+		// Phase 4 alpha.3 (D-27): deep-merge meta_box block for back-compat
+		// with 0.5.x flatten configs that were saved before this block
+		// existed. Idempotent for new configs (already present from
+		// default_config_json()).
+		if ( ! is_array( $config['meta_box'] ) ) {
+			$config['meta_box'] = self::default_meta_box();
+		} else {
+			$config['meta_box'] = wp_parse_args( $config['meta_box'], self::default_meta_box() );
+			if ( ! is_array( $config['meta_box']['groups'] ) ) {
+				$config['meta_box']['groups'] = array();
+			}
+		}
+
+		// Phase 4 alpha.3 (D-27): cct_single_redirect default — false for
+		// existing configs that pre-date the flag.
+		if ( ! isset( $config['cct_single_redirect'] ) ) {
+			$config['cct_single_redirect'] = false;
+		} else {
+			$config['cct_single_redirect'] = (bool) $config['cct_single_redirect'];
+		}
+
+		// Phase 4 alpha.3 (D-26 / D-27): per-mapping surface_* flags +
+		// group default. Back-compat fill for existing mappings — the
+		// inner foreach earlier already runs wp_parse_args with the
+		// updated default_mapping() shape, so the new keys land
+		// automatically. This explicit cast block just ensures types
+		// are stable when raw JSON gets edited by hand.
+		foreach ( $config['mappings'] as &$m ) {
+			if ( ! is_array( $m ) ) {
+				continue;
+			}
+			$m['surface_on_source'] = ! empty( $m['surface_on_source'] );
+			$m['surface_on_target'] = ! empty( $m['surface_on_target'] );
+			$m['group']             = isset( $m['group'] ) ? (string) $m['group'] : '';
+		}
+		unset( $m );
 
 		return $config;
 	}

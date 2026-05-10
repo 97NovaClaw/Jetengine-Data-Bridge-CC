@@ -445,21 +445,10 @@
 }
 
 /* -------------------------------------------------------------------------
- * Phase 4 Day 1 — Bridges admin tab
+ * Phase 4 alpha.3 — kept .jedb-pill-info as a general-purpose info badge.
+ * The Bridges admin tab block was retired per D-25 / L-026 (template-layer
+ * abstraction was premature). See BUILD-PLAN section 12.
  * --------------------------------------------------------------------- */
-
-.jedb-bridges-tab .jedb-targets-header {
-	align-items: flex-start;
-}
-
-.jedb-bridges-list code {
-	font-size: 11px;
-}
-
-.jedb-bridges-list .jedb-pill {
-	font-size: 10px;
-	padding: 2px 8px;
-}
 
 .jedb-pill-info {
 	background: #e7f5ff;
@@ -467,34 +456,47 @@
 	border: 1px solid #a5d8ff;
 }
 
-.jedb-bridges-import-dialog {
+/* -------------------------------------------------------------------------
+ * Phase 4 Day 1 — Flatten admin tab Meta box settings + per-mapping surface
+ * --------------------------------------------------------------------- */
+
+.jedb-flatten-meta-box-section {
 	margin-top: 28px;
-	padding: 20px 24px;
+	padding: 14px 18px;
 	background: #fff;
-	border: 2px solid #2271b1;
+	border: 1px solid #c3c4c7;
 	border-radius: 6px;
-	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
 }
 
-.jedb-bridges-import-dialog h2 {
-	margin-top: 0;
+.jedb-flatten-meta-box-section > summary {
+	cursor: pointer;
+	user-select: none;
+	padding: 6px 0;
+	list-style: none;
 }
 
-.jedb-bridges-import-dialog textarea {
-	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
-	font-size: 12px;
-}
-
-#jedb_bridges_relation_picker_wrap select {
-	min-width: 320px;
-	max-width: 100%;
-}
-
-#jedb_bridges_relations_status:empty {
+.jedb-flatten-meta-box-section > summary::-webkit-details-marker {
 	display: none;
 }
 
-#jedb_bridges_json {
-	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+.jedb-flatten-meta-box-section[open] > summary {
+	margin-bottom: 12px;
+	padding-bottom: 8px;
+	border-bottom: 1px solid #dcdcde;
+}
+
+.jedb-mapping-meta-cell {
 	font-size: 12px;
+	min-width: 140px;
+}
+
+.jedb-mapping-meta-cell label {
+	display: block;
+	margin: 2px 0;
+}
+
+.jedb-mapping-meta-cell input[type="text"] {
+	width: 100%;
+	font-size: 12px;
+	margin-top: 4px;
 }

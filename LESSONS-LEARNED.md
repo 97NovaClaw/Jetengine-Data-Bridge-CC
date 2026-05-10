@@ -1999,4 +1999,105 @@ verbatim now Just Works.
    alpha.1 → alpha.2 migration template (`upgrade_alpha1_shape()`)
    becomes the prototype for any future schema migrations.
 
+### Postscript (added 2026-05-10 alongside L-026)
+
+This lesson stayed valuable but its framing changed. The schema-mirror
+rule above was the *symptom-level* fix. The deeper, *root-cause* lesson
+was: *the template layer that needed mirroring shouldn't have existed
+in the first place.* See **L-026 — Premature template-layer abstraction**
+for the architectural review that retired bridge types entirely (D-25),
+moved per-product overrides to engine-level guards, and recast the meta
+box as a view of the flatten config (D-27). L-025's prevention rules
+remain useful any time you DO have two systems that must mirror each
+other (e.g. bridge presets and flatten configs in the Phase 6 setup
+preset format), but the meta-rule from L-026 — "don't add a template
+layer until you have ≥2 real consumers driving the design" — applies
+first.
+
+---
+
+## L-026: Premature template-layer abstraction — retiring the bridge type concept
+
+**Discovered:** 2026-05-10 (Phase 4 / Day 1 architectural review, between v0.6.0-alpha.2 and the alpha.3 release that opens Phase 4 reshape)
+**Severity:** High (over-engineering manifested as silent data loss in L-025; deeper review found the layer didn't deliver value)
+**Category:** Architecture / Premature abstraction
+
+### Context
+v0.6.0-alpha.1 introduced a Bridges admin tab plus a `JEDB_Bridge_Types_Manager` class managing a `jedb_bridge_types` site option. The premise: bridge types would be **templates** — declared once per "kind of bridge" (Mosaic, Available Set, etc.) — that the eventual Phase 4 Day 2 Bridge meta box would clone into concrete `wp_jedb_flatten_configs` rows when an editor wired up an individual product. This was carried forward from BUILD-PLAN §3.1 (D-5 in the original decisions log).
+
+The build of alpha.1 went smoothly. Schema, CRUD wrapper, admin tab UI, JSON export/import, live JE Relation picker — all shipped. Lint clean. Pushed.
+
+### Wrong
+The template layer was an answer to a workflow problem that didn't actually exist on the operating site (Brick Builder HQ):
+
+1. **The anticipated "many products of the same kind being onboarded by editors" workflow was hypothetical.** BBHQ has TWO long-lived bridges (`cct::mosaics_data` ↔ `posts::product` and `cct::available_sets_data` ↔ `posts::product`). Both already exist as flatten configs. They work. New products are auto-created from the CCT side via JE Has-Single-Page; editors don't reach for "make this a Mosaic" from the Woo side.
+2. **"Templates not bindings" creates surprise.** Editing a bridge type after products are linked doesn't propagate to the existing flatten configs — only future clones get the changes. This subtle semantic gap kept showing up as a UI warning callout. That's a smell — the system was fighting itself.
+3. **Templates double the editing surface.** Every concept now needs to be authored twice (once in the bridge type, once per flatten config that diverges from it). Mappings, taxonomies, conditions, link_via — all of it lived in both places, joined by clone semantics.
+4. **The schema mismatch surfaced in L-025 was the smoking gun.** When a user pasted a working flatten config's "Advanced JSON" into the bridge type editor, it silently dropped every mapping. The cause was renamed keys. The deeper cause was that the two systems shouldn't have had different shapes at all — and one of the two systems shouldn't have existed.
+
+### Evidence
+The user's verbatim feedback after the alpha.2 hotfix landed:
+
+> *"Honestly, the whole bridge thing feels redundant when we have the flatten thats proven and working… I'd almost prefer we don't use the bridge tab and then just append. The biggest part of meta box is to show fields that are important on woocommerce from the CCT, because the product post is not easy to add custom fields to. so having extra fields available on this post that sync back to the CCT is important."*
+
+That feedback identified three concepts that had been getting mashed together inside the bridge type abstraction:
+
+1. **The meta box's killer feature** is field surfacing on the Woo product edit screen, not template selection. WC products are notoriously hard to extend with custom fields; the CCT carries operational fields (`pdf_link`, `theme_idea`, `internal_notes`); editors want to see and edit those without context-switching.
+2. **The "configurable mandatory fields" story** is a separate, portable artifact — a curated "what does a complete bridge to target X look like?" list — that should travel between sites as JSON. PAC VDM hardcoded this knowledge in PHP per role; we can pull it out of code.
+3. **Per-product overrides** (lock, direction override) are post meta + engine guards, not "instance overrides on a template's defaults."
+
+When those three concepts are recognized as separate, the bridge type abstraction collapses — there's nothing left for it to hold.
+
+### Reality
+The architecture that actually fits the requirements (per D-25 / D-26 / D-27 added 2026-05-10):
+
+1. **One authoring surface for bridges:** the Flatten admin tab. The flatten config IS the bridge identity. No separate template layer.
+2. **One storage table for bridges:** `wp_jedb_flatten_configs`. No parallel option.
+3. **Meta box reads flatten configs directly** (D-27). Walks the table at render time, runs the existing link-resolution logic to determine which bridge governs THIS product, renders one panel per resolved bridge.
+4. **Field surfacing** lives on the flatten config — per-mapping `surface_on_source` / `surface_on_target` flags + freeform `group` label. The meta box renders an input for each mapping flagged for the target side where the adapter's `is_natively_rendered()` returns false (D-16 composes naturally).
+5. **Per-product overrides** are post meta — `_jedb_bridge_locked`, `_jedb_bridge_direction_override` — checked by engine guards at the top of `apply_bridge()` calls. Three lines of new logic per engine, no new tables, no new options.
+6. **Field Presets** (D-26) become a separate first-class concept: target-scoped, exportable JSON, three application modes (display-only overlay, apply-as-`required_overrides.add`, scaffold-as-passthrough-mappings). Solves the "I discovered the right Woo storefront-visibility field list, package it, drop it on the next site" workflow that PAC VDM hardcoded per role.
+
+The bridge type as an abstraction had been doing 3 unrelated jobs poorly. Splitting them into 3 proper homes does each one well, with less code overall.
+
+### Fix shipped in
+v0.6.0-alpha.3 (Phase 4 Day 1).
+
+The alpha.3 release deletes the entire alpha.1/alpha.2 footprint:
+
+- `includes/admin/class-bridge-types-manager.php` (~620 lines)
+- `includes/admin/class-tab-bridges.php` (~330 lines)
+- `templates/admin/tab-bridges.php` (~280 lines)
+- `assets/js/bridges-admin.js` (~220 lines)
+- The Bridges-tab CSS block (~55 lines; `.jedb-pill-info` stays as general-purpose)
+- `JEDB_OPTION_BRIDGE_TYPES` constant + activation default
+- 4-line bootstrap in `class-admin-shell.php`
+
+Net deletion: ~1,500 lines.
+
+In its place:
+
+- Flatten config schema gets a `meta_box: { enabled, title, position, groups[] }` block + top-level `cct_single_redirect: bool`.
+- Each mapping gets `surface_on_source`, `surface_on_target`, `group` fields (freeform group per D-26).
+- Engine guards add `_jedb_bridge_locked` + `_jedb_bridge_direction_override` checks with new sync_log statuses (`skipped_locked` with `reason: per_product_lock`, `skipped_direction_override`).
+- New `jedb_field_presets` site option + `JEDB_Field_Presets_Manager` (skeleton in Day 1, full UI in Day 4).
+
+### Affected code
+- Deletion list above.
+- `includes/flatten/class-flatten-config-manager.php` — schema extensions (Day 1).
+- `includes/flatten/class-flattener.php` + `class-reverse-flattener.php` — engine guards (Day 1).
+- `includes/admin/class-tab-flatten.php` + `templates/admin/tab-flatten.php` + `assets/js/flatten-admin.js` — UI extensions (Day 1).
+- `includes/admin/class-woo-product-meta-box.php` — new in Day 2.
+- `includes/class-cct-single-redirect.php` — new in Day 3.
+- `includes/admin/class-field-presets-manager.php` + `class-tab-field-presets.php` + templates / JS — new in Day 4.
+- `BUILD-PLAN.md` §4.5 / §4.5.1 / §4.6 / §4.12 / §7 / §8 / §9 / §12 — updated 2026-05-10 with the reshape.
+
+### Prevention
+1. **Don't add a template-and-instance layer until you have at least TWO real consumers driving the design.** Bridge types as a separate layer would have made sense if BBHQ had 20+ products of varying shapes that editors needed to onboard quickly via "pick a kind." With 2-3 long-lived bridges authored once, the layer is pure indirection.
+2. **The "what does this layer let me do that the existing layer doesn't?" test.** Before adding a template layer, list the user actions that become possible (or significantly faster) AFTER the layer exists vs BEFORE. If the list is short or hypothetical, don't add the layer. For bridge types, the actions were: (a) "name a kind of bridge for editor recognition" — but flatten config `label` already does this; (b) "share defaults across instances" — but BBHQ has one instance per kind; (c) "package presets for setup" — but Phase 6 setup presets ship flatten configs directly.
+3. **Surface vs identity.** A meta box on the Woo product edit screen is a *surface* (where editors interact) — it doesn't need to own the *identity* (what bridge governs this product). Trying to make the meta box's authoring surface own the identity created the template-layer pressure. Recognize when a UI surface is ASKING for an identity layer because the existing identity layer (flatten config) wasn't surfaced there yet — the answer is to surface the existing identity, not to invent a new one.
+4. **Operational knowledge belongs in portable artifacts, not hardcoded PHP and not the bridge config.** PAC VDM hardcoded "Vehicle Configs need year + make + model" — an operational truth — into PHP per role. We tried to bury it in a bridge type's `default_field_mappings`. Both are wrong. The right home is a third concept (Field Presets) that's target-scoped and exportable across sites because the knowledge IS site-portable in the way the bridge config isn't.
+5. **An architectural reframe in alpha is cheap; rolling it out in beta is expensive.** alpha.1 → alpha.3 cost ~2 days of work + a clean revert. The same reshape after beta would have meant deprecation cycles, migration scripts, and editor retraining. Use the alpha label literally — push back hard on architecture during alpha, accept that "maybe we shouldn't have built this" is a perfectly valid alpha-phase outcome.
+6. **L-025's lesson stays valid for any future case where two systems DO need to mirror each other.** Bridge presets vs flatten configs in the Phase 6 setup preset format is one such case. The lesson there is enforceable AT design time by adopting the same `default_config_json()` shape verbatim, not by inventing a parallel schema with similar-but-renamed keys.
+
 ---

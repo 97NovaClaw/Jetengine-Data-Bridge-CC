@@ -281,6 +281,33 @@ class JEDB_Reverse_Flattener {
 			return JEDB_Sync_Log::STATUS_SKIPPED_LOCKED;
 		}
 
+		// Phase 4 alpha.3 (D-27 / §4.5): per-product override guards.
+		// Mirror of the forward flattener's guard. The post that just
+		// saved IS the post we read meta from; reverse direction means
+		// pull is "into the source", so a push-only override blocks us.
+		// See L-026 for the architectural rationale.
+		if ( get_post_meta( (int) $post_id, '_jedb_bridge_locked', true ) ) {
+			$this->log_status( $bridge, $source_id, $post_id, JEDB_Sync_Log::STATUS_SKIPPED_LOCKED, $origin_tag, 'per-product lock set on post — pull suppressed', array(
+				'reason'        => 'per_product_lock',
+				'resolution'    => $resolution_method,
+				'auto_attached' => $auto_attached,
+				'auto_created'  => $auto_created,
+			) );
+			return JEDB_Sync_Log::STATUS_SKIPPED_LOCKED;
+		}
+
+		$override = (string) get_post_meta( (int) $post_id, '_jedb_bridge_direction_override', true );
+		if ( '' !== $override && in_array( $override, array( 'push', 'none' ), true ) ) {
+			$this->log_status( $bridge, $source_id, $post_id, JEDB_Sync_Log::STATUS_SKIPPED_DIRECTION_OVERRIDE, $origin_tag, 'per-product direction override disallows pull', array(
+				'override'      => $override,
+				'call_dir'      => 'pull',
+				'resolution'    => $resolution_method,
+				'auto_attached' => $auto_attached,
+				'auto_created'  => $auto_created,
+			) );
+			return JEDB_Sync_Log::STATUS_SKIPPED_DIRECTION_OVERRIDE;
+		}
+
 		$dsl = isset( $config['condition'] ) ? (string) $config['condition'] : '';
 		if ( '' !== trim( $dsl ) ) {
 			$ok = JEDB_Condition_Evaluator::instance()->evaluate( $dsl, $context );

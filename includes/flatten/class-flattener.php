@@ -263,6 +263,38 @@ class JEDB_Flattener {
 			return JEDB_Sync_Log::STATUS_SKIPPED_LOCKED;
 		}
 
+		// Phase 4 alpha.3 (D-27 / §4.5): per-product override guards. The
+		// editor can stamp `_jedb_bridge_locked` post meta on a specific
+		// product to freeze sync without touching the bridge config, OR
+		// `_jedb_bridge_direction_override` to constrain direction for
+		// just this product. Distinct from the cascade guard above —
+		// different signal source (post meta vs in-memory lock),
+		// different lifetime (sticky until editor changes vs in-flight
+		// only), different intent (editor will vs cascade prevention).
+		// Only meaningful when target is a post (CCT targets don't
+		// carry post meta). See L-026 / L-025 for the architectural
+		// post-mortem that drove this design.
+		$target_is_post = 0 === strpos( $target_target, 'posts::' );
+		if ( $target_is_post ) {
+			if ( get_post_meta( (int) $target_id, '_jedb_bridge_locked', true ) ) {
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_LOCKED, $origin_tag, 'per-product lock set on target — push suppressed', array(
+					'reason'     => 'per_product_lock',
+					'resolution' => $resolution_method,
+				) );
+				return JEDB_Sync_Log::STATUS_SKIPPED_LOCKED;
+			}
+
+			$override = (string) get_post_meta( (int) $target_id, '_jedb_bridge_direction_override', true );
+			if ( '' !== $override && in_array( $override, array( 'pull', 'none' ), true ) ) {
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_DIRECTION_OVERRIDE, $origin_tag, 'per-product direction override disallows push', array(
+					'override'   => $override,
+					'call_dir'   => 'push',
+					'resolution' => $resolution_method,
+				) );
+				return JEDB_Sync_Log::STATUS_SKIPPED_DIRECTION_OVERRIDE;
+			}
+		}
+
 		$dsl = isset( $config['condition'] ) ? (string) $config['condition'] : '';
 		if ( '' !== trim( $dsl ) ) {
 			$ok = JEDB_Condition_Evaluator::instance()->evaluate( $dsl, $context );

@@ -92,7 +92,8 @@ JFB-WC is the most loosely-coupled of the three, but it contributes **patterns**
 - **Option keys**:
   - `jedb_settings` — global settings (debug toggle, defaults, WC consumer keys, "Enable Custom PHP Snippets" toggle).
   - `jedb_meta_whitelist` — per-target meta-key allowlist (JFB-WC pattern).
-  - `jedb_bridge_types` — JSON array of bridge-type definitions (e.g., `[{slug: 'available_set', label: 'Available Set', cct: 'available_sets_data'}, …]`). **Source of truth for the Bridge Type select on the product editor.** Editable from the Settings tab; export/importable; survives plugin updates.
+  - ~~`jedb_bridge_types`~~ — *retired in v0.6.0-alpha.3 per D-25 / L-026. The flatten config IS the bridge identity; no separate template layer.*
+  - `jedb_field_presets` *(added by D-26 for v0.6.0-alpha.3)* — JSON array of field-preset definitions, each target-scoped (single adapter slug) with curated mandatory-field lists + freeform group labels. Overlays onto flatten configs at edit time. Export/importable. The "I discovered the right Woo storefront-visibility field list, package it, drop it on the next site" portable knowledge layer. See §4.12.
 - **Custom DB tables** (carried over and renamed):
   - `wp_jedb_relation_configs` (was `wp_jet_injector_configs`)
   - `wp_jedb_flatten_configs` (new — PAC VDM stored these in `wp_options`; promote to its own table for parity)
@@ -394,7 +395,7 @@ interface JEDB_Data_Target {
 | Categories / tags | Woo uses taxonomies (`product_cat`, `product_tag`). | Adapter accepts term IDs OR slugs OR names; resolves to IDs and uses `wp_set_object_terms()`. |
 | Custom product meta from third-party Woo plugins | Need to be visible to bridge UI without hardcoding. | Whitelist textarea in Settings tab (JFB-WC pattern) OR auto-discover by sampling N existing products. |
 
-### 4.5 The "Bridge to CCT" meta box + link strategy
+### 4.5 The "Bridge to CCT" meta box (view of flatten config)
 
 > **Locked decision (D-10):** JE Relations are the **primary** link
 > mechanism. `cct_single_post_id` is a special-case alternative for CCTs
@@ -402,19 +403,93 @@ interface JEDB_Data_Target {
 > meta** is stored on the product — the link lives where JE owns it.
 > See `LESSONS-LEARNED.md` L-013/L-015.
 
+> **Locked decision (D-27 — added 2026-05-10):** the meta box is a *view*
+> of an existing flatten config, **not** an authoring surface for a
+> separate "bridge type" template. The flatten config IS the bridge.
+> The meta box resolves the relevant flatten config(s) at render time
+> and surfaces controls + selected fields on the Woo product edit
+> screen. Bridge types as a separate template layer are out — see D-25
+> in §8 and L-026 in `LESSONS-LEARNED.md` for the post-mortem.
+
 > **Scope note (Phase 4):** the Bridge meta box is intentionally Woo-specific
 > — it lives on `product` and `product_variation` edit screens because that's
 > where editors spend their time managing shop content. **The bridge engine
 > itself is target-agnostic** (see §4.5.1) and supports CCT ↔ CPT, CCT ↔ CCT,
 > and CPT ↔ CPT bridges through the Flatten admin tab today. A generic
-> non-Woo CPT meta box is parked as a deferred Phase 4c if/when needed.
+> non-Woo CPT meta box is parked as a deferred future addition if/when needed.
 
-A new admin module `JEDB_Woo_Product_Meta_Box` injects a panel on `product` edit screens with these controls:
+#### Why the meta box exists at all (the core value)
 
-1. **Bridge type** select — populated from `jedb_bridge_types` (the Settings JSON, see §3.1). For Brick Builder HQ this lists "Available Set", "Mosaic", "Mosaic Instructions PDF". Editors can add new bridge types from the Bridges admin tab without touching code.
-2. **Linked CCT item** — once a type is chosen, an Ajax dropdown shows existing CCT items of that type, plus "Create new from this product" and "Edit linked item". **Cardinality is 1:1 per bridge** (D-1) — but multiple bridge configs can target the same source via the conditional engine (§4.9 / D-14).
-3. **Variation scope** (only shown when product type = `variable`) — radio: `Bridge the parent product` vs `Bridge a specific variation`. If "specific variation" is chosen, a second dropdown picks which variation. See §4.7.
-4. **Direction & lock** — radio: `CCT is canonical (push to product)` vs `Product is canonical (pull from CCT)`. Lock checkbox to freeze sync. **Default direction is CCT-canonical** (D-2).
+WooCommerce products are notoriously hard to extend with custom fields. The Mosaic CCT carries fields like `theme_idea`, `pdf_link`, `internal_notes` that editors operationally care about while looking at a product, but Woo's product edit screen has no native home for them. The meta box's primary job is to **surface CCT fields directly on the product edit screen** so editors can edit them without context-switching to JE's CCT admin — and have those edits sync back to the CCT via the existing reverse-pull engine.
+
+Secondary jobs: status display, manual sync trigger, per-product locks/overrides, and link/unlink controls.
+
+#### How the meta box resolves "which bridge applies to this product"
+
+No `_jedb_bridge_type` meta. No bridge type lookup. The meta box at render time:
+
+1. **Walks `wp_jedb_flatten_configs`** for any row whose `target_target` matches this post's type (`posts::product` or `posts::product_variation`).
+2. **For each candidate flatten config**, checks whether the resolution path (`link_via.type`) yields a linked source for THIS specific product:
+   - `je_relation` → query `{prefix}jet_rel_{relation_id}` for a row whose `child_object_id` = current post ID (or `parent_object_id`, depending on `side`). Found → that flatten config governs this product.
+   - `cct_single_post_id` → query the source CCT for any row whose `cct_single_post_id` = current post ID. Found → that flatten config governs this product.
+3. **Renders one panel per resolved flatten config** (typically zero or one — if a product matches multiple, each gets its own panel and the editor sees them all). When zero are resolved, renders the "Not linked yet" picker (below).
+
+This is the same resolution logic the engine already uses to find the linked source on save events. **No new resolver code** — the meta box just calls the existing path in read mode.
+
+#### Controls per resolved bridge
+
+1. **Linked CCT row label + edit link** — "Linked to: Mosaic CCT row #2 — *Sunset Vista* (via JE Relation #9, auto-attached). [Edit in JetEngine →]"
+2. **Bridge config quick reference** — slug of the governing flatten config + a deep link to its row in the Flatten admin tab. ("Edit in Flatten tab →")
+3. **Last syncs** — top 3 rows from `wp_jedb_sync_log` for this product, including direction / status / message / time. "View full sync log →" links to a filtered Debug-tab view.
+4. **Surfaced fields** — for each mapping in the flatten config where `surface_on_target = true` AND the target adapter's `is_natively_rendered($field)` returns false (D-16), the meta box renders an editable input. Grouping uses the per-mapping freeform `group` label so editors see "Pricing", "Identity", "Variations" headings (D-26 — groups are free-form per preset / per mapping).
+5. **Per-product overrides** — a hidden field always submitted alongside the surfaced inputs:
+   - **Lock checkbox** → writes `_jedb_bridge_locked` post meta. Engine guard at the top of `apply_bridge()` checks this and logs `skipped_locked, reason: per_product_lock` when set.
+   - **Direction override** radio → writes `_jedb_bridge_direction_override` post meta. Engine treats this product as if the bridge's direction were the override (push-only / pull-only / no-sync) without touching the bridge config itself.
+6. **Sync now button** → calls `JEDB_Flattener::apply_bridge()` directly with `origin: manual`. Same engine path, same Sync_Guard, same sync log row.
+7. **Unlink button** → drops the JE relation row (or clears `cct_single_post_id`) for this product. Idempotent. Surfaces a confirm dialog.
+
+#### Controls when the product is NOT linked yet
+
+1. **Available bridge configs for this product** — list of flatten configs whose `target_target` matches this product type. Editor picks one.
+2. **Linked CCT row picker** — Ajax dropdown of source CCT rows from the chosen bridge's `source_target`. Reuses the `wp_ajax_jedb_relation_search_items` endpoint from Phase 2.
+3. **Link button** → calls `JEDB_Relation_Attacher::attach()` (idempotent) for `je_relation` bridges, OR writes `cct_single_post_id` for Has-Single-Page bridges. Reloads the meta box in "linked" state.
+
+#### Variation scope (Phase 4b)
+
+When the product type is `variable`, the meta box adds a top-level radio: *"Bridge the parent product"* vs *"Bridge a specific variation"*. The latter shows a second dropdown picking which variation. The variation reconciliation engine (Phase 4b) consumes the flatten config's `variations[]` array to auto-create / update / soft-delete variations from CCT fields.
+
+#### Stored product-side meta (minimal — link is NOT here)
+
+```
+_jedb_bridge_locked              bool   "Don't sync at all" override for this specific product
+_jedb_bridge_direction_override  enum   ''|push|pull|bidirectional|none — overrides flatten config direction for this product
+_jedb_bridge_last_manual_sync_id int    sync_log row id of last manual "Sync now" — drives the status block
+```
+
+**No `_jedb_bridge_type`.** The flatten config IS the bridge identity; product-level meta is purely for behavior overrides on this one product.
+
+**No `_jedb_bridge_cct_id`.** Per D-10, the link lives in JE Relations / `cct_single_post_id` only.
+
+#### Engine integration (per-product overrides)
+
+Both `JEDB_Flattener::apply_bridge()` and `JEDB_Reverse_Flattener::apply_bridge()` get a 3-line guard near the top of the method:
+
+```
+if ( get_post_meta( $target_id, '_jedb_bridge_locked', true ) ) {
+    return $this->log_skipped_locked( $bridge, $source_id, $target_id, 'per_product_lock', $origin );
+}
+
+$override = (string) get_post_meta( $target_id, '_jedb_bridge_direction_override', true );
+if ( '' !== $override ) {
+    if ( ! $this->call_direction_allowed_under_override( $current_call_direction, $override ) ) {
+        return $this->log_skipped_direction_override( $bridge, $source_id, $target_id, $override, $origin );
+    }
+}
+```
+
+The lock guard is universal. The override guard is direction-aware: a forward-push call respects an override of `pull` (skip), `none` (skip), but allows `push` and `bidirectional`.
+
+Both new statuses (`skipped_locked` with `reason: per_product_lock`, and `skipped_direction_override`) extend the existing §4.9 status taxonomy. Sync log records them with full context.
 
 #### Link mechanism (D-10)
 
@@ -457,21 +532,7 @@ This pattern explicitly resolves the "Path 4" question from
 have frontend filters work — without touching the picker. The
 self-heal is what makes that expectation hold.
 
-#### Stored product-side meta (minimal — link is NOT here)
-
-```
-_jedb_bridge_type       slug       "Which bridge type config governs this product?"
-_jedb_bridge_locked     bool       "Don't sync at all" override for this specific product
-_jedb_bridge_direction  enum       Per-product override of the bridge type's default direction (rare)
-```
-
-The actual source-record link is resolved at runtime by:
-1. Reading `_jedb_bridge_type` from the product.
-2. Looking up the bridge type config to find its `link_via` setting.
-3. If `je_relation`: query the relation table for the row whose `child_object_id` equals this product's ID.
-4. If `cct_single_post_id`: query the CCT for the row whose `cct_single_post_id` equals this product's ID.
-
-**Why no `_jedb_bridge_cct_id`:** keeping the link in JE's own structures eliminates the dual-source-of-truth problem. The product page stays simple (just the type tag). JE Smart Filters and Listings see the bridge automatically.
+*(Stored product-side meta is documented in the "Per-product overrides" controls block above. It deliberately does NOT include a `_jedb_bridge_type` meta — the flatten config IS the bridge identity, no template layer is involved. Per D-25, see L-026 for the post-mortem on why an earlier alpha had one.)*
 
 ### 4.5.1 Supported source / target combinations
 
@@ -505,11 +566,11 @@ The `JEDB_Flattener::apply_bridge()` and `JEDB_Reverse_Flattener::apply_bridge()
 
 The Phase 4 Bridge meta box lives on `product` and `product_variation` edit screens — that's the **whole point** of the meta box pattern. Editors live in the Woo product editor day-to-day, so the high-traffic surface is where the controls go.
 
-For non-Woo bridges (CCT ↔ CPT, CCT ↔ CCT, CPT ↔ CPT), the **Flatten admin tab is the editor**. It's already production-verified for that role through Phases 3, 3.5, and 3.6. The Bridges admin tab from Phase 4 generalizes one level above that — a bridge type definition with `target_target: posts::story_bricks` is structurally identical to one with `posts::product`; only the meta box surface is Woo-bound.
+For non-Woo bridges (CCT ↔ CPT, CCT ↔ CCT, CPT ↔ CPT), the **Flatten admin tab is the editor** AND surfaces all the operational controls Phase 4 was originally going to put in a meta box (per D-25/D-27, the Flatten admin tab is now the only authoring surface and the meta box is purely a per-product control panel rendered on Woo edit screens specifically).
 
-#### Phase 4c (deferred) — generic CPT meta box
+#### Future expansion — generic CPT meta box
 
-If at some future date editors want a Bridge meta box on a non-Woo CPT edit screen (e.g. on the Story Bricks CPT), it's a clean extraction from Phase 4 — same template, just a different `add_meta_box()` post type. Spec'd here for traceability; not included in Phase 4 scope.
+If editors later want the same "view of flatten config" meta box on a non-Woo CPT edit screen (e.g. on the Story Bricks CPT), it's a clean extraction from the Phase 4 Day 2 meta box — same template, just a different `add_meta_box()` post type. Not in current scope; would only be built when a real consumer drives the requirement.
 
 ### 4.6 The "Has Single Page = the linked post" CCT pattern (redirect shim)
 
@@ -533,7 +594,9 @@ add_action( 'template_redirect', function () {
 
 **Target-agnostic.** The shim doesn't care whether the linked post is a `product`, a `story_bricks` CPT, a custom CPT, or anything else — it just resolves the bridge config's `link_via`, reads the linked post ID, and redirects. The "WC product" framing was historically the headline use case (Brick Builder HQ's Available Sets and Mosaics) but the engine path is identical for any source CCT → target post bridge.
 
-**Opt-in per bridge type.** Each bridge type definition in `jedb_bridge_types` carries a `cct_single_redirect` boolean (default `false`). The shim only fires for bridges that opt in. Reasoning: some bridges might want the CCT to remain frontend-visible (e.g., a CCT acting as a hidden "data record" bridged to a CPT for filtering, where the CPT single is the display surface but the CCT single shouldn't redirect).
+**Opt-in per flatten config.** Each flatten config's `config_json` carries a `cct_single_redirect` boolean (default `false`) — exposed as a checkbox in the Flatten admin tab editor (alongside `auto_create_target_when_unlinked`). The shim only fires for bridges that opt in. Reasoning: some bridges might want the CCT to remain frontend-visible (e.g., a CCT acting as a hidden "data record" bridged to a CPT for filtering, where the CPT single is the display surface but the CCT single shouldn't redirect).
+
+*(Earlier drafts attached this flag to a "bridge type" template layer; per D-25 / D-27 the template layer was retired and the flag now lives directly on the flatten config that already governs the bridge.)*
 
 **Admin escape hatch.** Logged-in users with `manage_options` who pass `?jedb_no_redirect=1` skip the redirect, so the CCT single template (or "no single template" 404) is still inspectable for debugging.
 
@@ -1059,6 +1122,105 @@ values" use case the user wanted (e.g., Mosaic theme → matching
 product_tag), as a more powerful alternative to the
 `term_lookup` transformer when the logic is complex.
 
+### 4.12 Field Presets — portable target-coverage knowledge
+
+> **Locked decision (D-26 — added 2026-05-10):** field presets are
+> first-class portable artifacts, separate from flatten configs. Each
+> preset is target-scoped (single adapter slug like `posts::product`),
+> contains a curated list of fields with mandatory flags + freeform
+> group labels + hint text, and is exportable / importable as JSON
+> across sites. They overlay onto flatten configs at edit time —
+> they never replace the flatten config and they never modify the
+> engine's behavior.
+
+#### What a field preset IS
+
+A field preset answers the question: *"For target adapter X, what does a complete bridge look like?"*
+
+That knowledge is **operational** (discovered by hands-on use of the target system — e.g. "WooCommerce won't show a product on the storefront archive without `name`, `regular_price`, `category_ids`, AND `_visibility` set"), not **structural** (which is the bridge config's job — "for THIS specific Mosaic CCT row, source field X maps to target field Y").
+
+PAC VDM hardcoded this knowledge in PHP (per role: Makes, Models, Vehicle Configs, Service Guides). We pull it OUT of code and INTO a curated, exportable artifact so it can move between sites.
+
+#### Schema
+
+Stored in a new site option `jedb_field_presets`. Flat indexed array of preset entries:
+
+```
+field_preset {
+    slug:        string         // unique, sanitize_key()
+    label:       string
+    description: string         // why this preset exists, when to apply it
+    target:      string         // single adapter slug — "posts::product", "cct::mosaics_data", etc.
+    fields: [
+        {
+            name:      string   // field key matching the adapter's schema
+            label:     string   // human-readable display name
+            mandatory: bool     // adds to required-field check when applied; false = recommended/informational
+            group:     string   // freeform — editor types whatever — used for visual grouping
+            hint:      string   // tooltip / hover-help text
+        },
+        ...
+    ],
+    notes:        string        // free-form notes
+    created_at:   string        // mysql datetime
+    updated_at:   string
+}
+```
+
+Per **D-26**: target is a single adapter slug, not multi-target. A preset that covers both a CCT and a CPT is two separate presets that share a `description` link.
+
+Per **D-26**: `group` is freeform string. No predefined enum. Editors might use `"Pricing"` / `"Identity"` / `"Visibility"` / `"SEO"` / `"Variations"` — or whatever taxonomy makes sense to them. The Flatten admin tab and the meta box render groups as collapsible sections.
+
+#### How presets compose with flatten configs
+
+Three application modes (all available from the Flatten admin tab editor's "Mandatory coverage" panel):
+
+1. **Display mode (read-only overlay)** — pick a preset → the panel adds the preset's fields to the existing list (PAC VDM-style green/red badges per field, "5 of 7 covered" summary), but does NOT modify the flatten config. Useful for inspection and gap analysis without changing anything.
+2. **Apply mode (overlay persists)** — pick a preset → its mandatory fields are added to the flatten config's `required_overrides.add` array. Persists. The "Mandatory coverage" check now treats the preset's fields as required for THIS bridge. Editors can later remove any specific field via `required_overrides.remove`.
+3. **Scaffold mode (auto-stub mappings)** — single button: *"Scaffold missing mappings as passthrough"*. For every preset field that has no mapping in this bridge yet, create a stub mapping with `source_field: ''` (empty — editor fills it in), `target_field: <preset.field.name>`, push/pull = passthrough, `surface_on_target: <copy from preset's natively-rendered detection>`, `group: <preset.field.group>`. Editors fill in the source side; the rest is pre-baked.
+
+Modes 2 and 3 are **not mutually exclusive** — you can apply a preset as overlay AND click scaffold. The scaffold button is even smarter when a preset is already applied (it knows what fields the bridge is committing to cover).
+
+#### Adapter-declared required fields vs preset-declared required fields
+
+Both compose into the "Mandatory coverage" panel. The order is:
+
+1. `JEDB_Data_Target::get_required_fields()` (adapter-declared, D-15) — engineering minimum (e.g. Woo product needs `name` + `status` to even save).
+2. Applied presets' mandatory fields (D-26) — operational minimum for THIS site's use case (e.g. "in BBHQ, every product must also have `category_ids` + `regular_price` to be storefront-visible").
+3. `required_overrides.add` from the bridge config (D-15) — bridge-specific custom additions.
+4. `required_overrides.remove` from the bridge config (D-15) — escape hatch for "I know what I'm doing, stop warning me about this field."
+
+The panel renders the union, sorted by group, with provenance per field ("required by adapter" / "required by preset: BBHQ Storefront-Visible" / "added by this bridge" / "explicitly removed by this bridge"). Provenance makes it obvious WHY a field is mandatory, which is critical for editor onboarding.
+
+#### Export / import format
+
+JSON export of all presets (mirroring the bridge type export shape from the retired alpha.1):
+
+```
+{
+    "plugin":      "je-data-bridge-cc",
+    "version":     "0.6.0",
+    "exported_at": "2026-05-10 12:34:56",
+    "count":       3,
+    "presets": [
+        { ... woocommerce-storefront-visible ... },
+        { ... woocommerce-seo ... },
+        { ... cct-mosaic-essentials ... }
+    ]
+}
+```
+
+Import accepts: the wrapper above, a bare `presets[]` array, or a single preset entry (auto-promoted to a one-element list). Imports merge by slug; an explicit `replace_all` checkbox forces destructive replacement.
+
+This is the "I discovered the magic Woo fields list while building one site, package it, drop it on the next site" workflow that makes the plugin actually portable across BBHQ-style stores.
+
+#### Phase 4 deliverable boundary
+
+- **Day 1**: schema + read path. Adapter-declared required fields stay where they are; the option is created on activation; no UI yet.
+- **Day 4**: Field Presets admin tab + JSON export/import + the engine integration on the Mandatory coverage panel ("Apply preset" + "Scaffold missing").
+
+(Days 2 and 3 are the meta box and the redirect shim, which don't depend on field presets.)
+
 ---
 
 ## 5. Sync Loop Prevention (`JEDB_Sync_Guard`)
@@ -1145,7 +1307,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-10:** Phases 0, 1, 2, 2.5, 3, 3.5, and 3.6 are complete and **end-to-end verified on Brick Builder HQ staging** through eleven releases (v0.1.0 through v0.5.3 on `main`). **Phase 4 Day 1 just shipped in v0.6.0-alpha.1 → alpha.2** — the Bridges admin tab + `JEDB_Bridge_Types_Manager` give the long-reserved `jedb_bridge_types` setting a UI (no engine code touched). alpha.2 is a hotfix for L-025: bridge type schema realigned with flatten config so the inner shape (`flatten_defaults` sub-object) mirrors `JEDB_Flatten_Config_Manager::default_config_json()` exactly — pasting raw flatten "Advanced JSON" into the Bridges admin tab now Just Works. Phase 4 Day 2 (Bridge meta box on Woo product edit screen) and Day 3 (CCT-single → linked-post redirect shim) are next. All upstream architectural decisions remain locked (D-1 → D-24) and all known platform caveats documented (L-001 → L-025). Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-05-10:** Phases 0, 1, 2, 2.5, 3, 3.5, and 3.6 are complete and **end-to-end verified on Brick Builder HQ staging** through eleven releases (v0.1.0 through v0.5.3 on `main`). **Phase 4 Day 1 just shipped in v0.6.0-alpha.3** as the reshape (D-25 / D-26 / D-27 / L-026): the alpha.1/alpha.2 Bridges admin tab + `JEDB_Bridge_Types_Manager` template layer was retired (~1,500 lines deleted). The flatten config IS the bridge identity. Schema extended with `meta_box` block + per-mapping `surface_on_target` / `surface_on_source` + freeform `group` + top-level `cct_single_redirect`. Per-product engine guards added in both flatteners for `_jedb_bridge_locked` and `_jedb_bridge_direction_override` post meta. New `STATUS_SKIPPED_DIRECTION_OVERRIDE` sync_log constant. New `JEDB_OPTION_FIELD_PRESETS` site option + read-only `JEDB_Field_Presets_Manager` skeleton (full UI ships Day 4). **Engine paths are byte-identical to v0.5.3** outside the new skip-only guards. Existing 0.5.x flatten configs work unchanged. Phase 4 Day 2 (Bridge meta box reads flatten config directly, surfaces flagged CCT fields on the Woo product edit screen), Day 3 (CCT-single → linked-post redirect shim), Day 4 (Field Presets admin tab + Mandatory coverage integration) are next. All architectural decisions locked (D-1 → D-27, with D-5 superseded by D-25); all known platform caveats documented (L-001 → L-026). Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
@@ -1232,17 +1394,59 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
   available taxonomies + terms via the new AJAX endpoint with no typed
   slugs.
 
-### Phase 4 — Woo target & bridge meta box (3 days) — *the new code* ▶ **NEXT UP**
-- Implement `Target_Woo_Product` in full, with HPOS-safe writes.
-- Build the `Woo_Product_Meta_Box` with type select + linked-CCT picker + direction toggle.
-- Build the **Bridges admin tab** (`class-tab-bridges.php`) for managing the `jedb_bridge_types` JSON via UI.
-- Implement the CCT-single → linked-post redirect shim (target-agnostic per §4.6 — works for any bridged post type, opt-in per bridge type).
-- Implement loop-safe CCT↔Woo PUSH and PULL through the existing flattener.
-- ✅ **Exit criterion**: editing the Available Sets CCT updates the matching simple Woo product (and vice versa) without recursion, and the Woo product page loads when visiting the CCT single URL.
+### Phase 4 — Woo bridge meta box + flatten config extensions + field presets (4 days) — *the new code* ▶ **NEXT UP**
+
+> **Note (2026-05-10):** Phase 4 was originally scoped around a separate
+> "Bridges admin tab" + bridge type template layer. That scope was retired
+> per **D-25 / D-27** after staging testing surfaced L-025 (silent data loss
+> from schema mismatch between bridge type and flatten config) and a
+> deeper architectural review (L-026 — *premature template-layer
+> abstraction*). The flatten config IS the bridge identity now. Phase 4
+> reshape below; v0.6.0-alpha.1 + alpha.2 work to be reverted in the
+> alpha.3 release that opens this phase.
+
+#### Day 1 — alpha.3 revert + flatten config schema extensions + engine guards
+
+- Revert all v0.6.0-alpha.1 / alpha.2 work: delete `JEDB_Bridge_Types_Manager`, `JEDB_Tab_Bridges`, `templates/admin/tab-bridges.php`, `assets/js/bridges-admin.js`, the bridges-tab CSS block, the `JEDB_OPTION_BRIDGE_TYPES` constant + activation default. ~1,500 lines.
+- Extend `JEDB_Flatten_Config_Manager::default_config_json()`: add `meta_box: { enabled, title, position, groups[] }` block + top-level `cct_single_redirect: bool`. Deep-merge defaults handle existing rows transparently.
+- Extend `JEDB_Flatten_Config_Manager::default_mapping()`: add `surface_on_source: bool`, `surface_on_target: bool`, `group: string` per mapping (D-26 — freeform group label).
+- Add per-product engine guards in `JEDB_Flattener::apply_bridge()` and `JEDB_Reverse_Flattener::apply_bridge()`: respect `_jedb_bridge_locked` (skip with `skipped_locked, reason: per_product_lock`) and `_jedb_bridge_direction_override` (constrain effective direction; skip with `skipped_direction_override` if disallowed).
+- Extend the Flatten admin tab (`templates/admin/tab-flatten.php` + `class-tab-flatten.php`):
+  - New collapsible **"Meta box settings"** section (title, position, hint when no mappings have `surface_on_target`).
+  - Per-mapping `surface_on_source` + `surface_on_target` checkboxes + `group` text input added to the mappings table.
+  - New `cct_single_redirect` checkbox (next to existing `auto_create_target_when_unlinked`).
+- Add a new field preset option scaffolding: `JEDB_OPTION_FIELD_PRESETS` constant, activation default `array()`, `JEDB_Field_Presets_Manager` skeleton with read-only API. (Full UI ships Day 4.)
+- ✅ **Exit criterion**: Flatten admin tab editor lets editors flag mapped fields for surfacing on the Woo product edit screen. Engine guards work for `_jedb_bridge_locked` and `_jedb_bridge_direction_override` post meta. Existing 0.5.x flatten configs work unchanged (back-compat verified on staging).
+
+#### Day 2 — Bridge meta box on Woo edit screens (reads flatten config directly)
+
+- Implement `JEDB_Woo_Product_Meta_Box` for `product` and `product_variation` edit screens.
+- **Resolution path**: walk `wp_jedb_flatten_configs` → for each row whose `target_target` matches this post's type, run the existing link-resolution logic to determine if THIS specific product has a linked source. Render one panel per resolved bridge.
+- **Linked panel** renders: linked CCT row label + edit link, bridge config quick reference + deep link to Flatten admin tab, last-3 sync log rows, surfaced field inputs grouped by `group` label, per-product Lock checkbox (`_jedb_bridge_locked`), Direction override radio (`_jedb_bridge_direction_override`), Sync now button, Unlink button.
+- **Unlinked panel** renders: list of available flatten configs whose `target_target` matches → editor picks one → Ajax CCT picker for source rows of that bridge → Link button (calls `JEDB_Relation_Attacher::attach()` for `je_relation` bridges, OR sets `cct_single_post_id` for Has-Single-Page bridges).
+- Save handler for surfaced fields: writes through the appropriate `Target_*::update()` (typed-setter API, HPOS-safe).
+- ✅ **Exit criterion**: editing a Mosaic product on the Woo admin shows the linked CCT row, surfaces `pdf_link` / `theme_idea` / etc. fields per the flatten config, lets the editor sync now / lock / unlink without leaving the screen. Reverse-pull engine writes surfaced fields back to CCT.
+
+#### Day 3 — CCT-single → linked-post redirect shim
+
+- Implement the §4.6 shim. New file `includes/class-cct-single-redirect.php`. Hook `template_redirect`.
+- Reads opt-in from each flatten config's `cct_single_redirect` flag (per Day 1 extension). Direction guard (only redirects for bridges where direction includes push). Admin escape hatch (`?jedb_no_redirect=1` with `manage_options`).
+- ✅ **Exit criterion**: visiting `/cct/mosaics_data/2/` 301-redirects to the linked product permalink for opt-in bridges. Logged-in admin with `?jedb_no_redirect=1` sees the CCT single (or 404).
+
+#### Day 4 — Field Presets admin tab + Mandatory coverage integration
+
+- Implement `JEDB_Field_Presets_Manager` writes (CRUD on `jedb_field_presets` option). Validation enforces unique slug, target adapter slug must be valid, fields must have `name`.
+- New admin tab "Field Presets" (priority 35, after Flatten). UI for add/edit/delete + JSON export (browser download) + JSON import (paste with optional replace-all).
+- Flatten admin tab "Mandatory coverage" panel gains:
+  - **Apply preset** dropdown — picks a preset whose `target` matches the bridge's `target_target`; on apply, preset's mandatory fields are added to `required_overrides.add`.
+  - **Display-only overlay** mode — pick a preset to see its fields layered into the panel WITHOUT modifying the bridge config (PAC VDM-style green/red badges + "X of Y covered" summary, freeform group labels per preset).
+  - **Scaffold missing mappings** button — for any preset field not yet in the bridge's mappings, stub a passthrough mapping (`source_field` empty, `target_field` set, push/pull = passthrough, `group` carried over from preset). Editor fills in source side.
+- Provenance display on the Mandatory coverage panel: each required field labeled with its origin (adapter / preset / bridge override).
+- ✅ **Exit criterion**: editor can curate a "WooCommerce — Storefront Visible" preset with `name` / `regular_price` / `category_ids` / `_visibility` as mandatory + freeform groups, export it as JSON, drop into a fresh staging site, import, apply to a bridge, see PAC VDM-style coverage badges, click Scaffold to auto-stub missing mappings.
 
 ### Phase 4b — Variation bridging (1.5 days) — *new code, builds on Phase 4*
-- Implement `Target_Woo_Variation`.
-- Add `variations[]` and `show_when` mini-DSL parser to bridge type definitions.
+- Implement `Target_Woo_Variation` writes (read path was done in Phase 1).
+- Add `variations[]` + `show_when` mini-DSL parser **directly on the flatten config** (per D-25 — no separate template layer). The variation reconciliation engine reads the `variations[]` array from `wp_jedb_flatten_configs.config_json`.
 - Variation reconciliation engine on PUSH (create / update / soft-delete based on `show_when`).
 - Variation Scope radio + variation picker added to the meta box.
 - Wire downloadable-files handling (the "Has Instructions PDF" path).
@@ -1264,8 +1468,8 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 
 ### Phase 6 — Setup tab + presets (½ day)
 - Programmatic CCT/relation builder (PAC VDM's `class-cct-builder.php`).
-- "Brick Builder HQ" preset JSON shipped in plugin (CCTs + relations + bridge types + a starter snippet for LEGO trademark stripping).
-- ✅ **Exit criterion**: on a fresh Woo+JE site, clicking "Apply Brick Builder HQ preset" creates `available_sets_data` CCT, `mosaics_data` CCT, the relations, the bridges (including the variable-product Mosaic bridge with its variations), and the snippet in under 10 seconds.
+- "Brick Builder HQ" preset JSON shipped in plugin (CCTs + relations + flatten configs + field presets + a starter snippet for LEGO trademark stripping). Two preset types per D-26: **bridge presets** (pre-cooked flatten configs to insert into `wp_jedb_flatten_configs`) and **field presets** (curated target-coverage knowledge for `jedb_field_presets`). Both export/import as JSON.
+- ✅ **Exit criterion**: on a fresh Woo+JE site, clicking "Apply Brick Builder HQ preset" creates `available_sets_data` CCT, `mosaics_data` CCT, the relations, the flatten configs (including the variable-product Mosaic bridge with its variations), the field presets ("WooCommerce — Storefront Visible" etc.), and the snippet in under 10 seconds.
 
 ### Phase 7 — Hardening (1 day)
 - Capability gating (`manage_jedb` + `jedb_can_edit_snippets`).
@@ -1275,7 +1479,7 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 - Codex / `readme.txt` written.
 - ✅ **Exit criterion**: passes a basic security pass (no public unauthenticated writes, no SQL injection paths, all admin AJAX nonced, snippet editor blocked for non-admins).
 
-**Total estimated build**: ~11 working days end-to-end, of which ~6 are net-new code (Phases 4, 4b, 5b) and the rest are port-and-generalize.
+**Total estimated build**: ~11.5 working days end-to-end (Phase 4 grew by 1 day for the alpha.3 reshape + Field Presets), of which ~6.5 are net-new code (Phases 4, 4b, 5b) and the rest are port-and-generalize.
 
 ### 7.1 Staging verification log — Phases 0 through 3.6
 
@@ -1368,7 +1572,7 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | D-2 | **Source of truth on conflict** | **CCT-canonical by default.** When both sides change between syncs, CCT wins. Per-bridge override (`Product is canonical`) available in the meta box. **Phase 7+** may add per-field "last write wins" via timestamps. | Default value of `_jedb_bridge_direction` is `cct_canonical`. PUSH events from CCT always overwrite Woo fields. PULL events from Woo only fire when `_jedb_bridge_direction = product_canonical` OR when the meta box "Pull from Woo now" button is clicked. |
 | D-3 | **Variations** | **In scope.** Both parent products and individual variations can be bridge targets. Variation reconciliation engine ships in Phase 4b. | Adds `Target_Woo_Variation`, the `variations[]` block in bridge type JSON, the `show_when` mini-DSL evaluator, and the variation reconciliation logic. See §4.7. |
 | D-4 | **"Has Instructions PDF" implementation** | **Woo product variation** of the parent Mosaic product, NOT a separate product. Reconciled automatically by the bridge type's `variations[]` block. | The Brick Builder HQ preset (Phase 6) ships with a `mosaic` bridge type whose `variations[]` includes both `build_only` and `with_instructions`. The CCT field `has_instructions_pdf` controls whether the second variation exists. |
-| D-5 | **Bridge type enum storage** | **Plugin Settings JSON** (`jedb_bridge_types` option), NOT JetEngine Glossary. | Editable in the Bridges admin tab. Export/importable. Survives plugin updates. JetEngine Glossaries are still used for *content* enums like `story_type` per `site-structure.md`, but bridge configuration is plugin-owned. |
+| D-5 | ~~**Bridge type enum storage**~~ *(superseded by D-25 on 2026-05-10)* | ~~Plugin Settings JSON (`jedb_bridge_types` option), NOT JetEngine Glossary.~~ **Bridge types as a separate template layer were retired** — the flatten config IS the bridge identity. The `jedb_bridge_types` option is dropped in v0.6.0-alpha.3. JetEngine Glossaries are still used for *content* enums like `story_type` per `site-structure.md`. | Decision kept in this log for audit traceability. See L-026 for the post-mortem and D-25 for the replacement decision. |
 | D-6 | **Plugin author / license** | **Legwork Media · GPL v2 or later.** Matches existing JFB-WC convention. | Plugin header in `je-data-bridge-cc.php`. `readme.txt` License field. Copyright notice in `LICENSE` file. |
 | D-7 | **JFB WC Quotes Advanced consolidation** | **Stays separate.** Quoting is its own beast and out of scope. We lift *patterns* (Settings API, JSON config files, debug log) but never the quoting logic. Both plugins can co-exist on the same site. | No changes to JFB-WC repo. New plugin's debug-log helper detects if JFB-WC is active and (optionally) tails its log too in the Debug tab. |
 | D-8 | **Repo strategy** | **New standalone GitHub repo** (`legworkmedia/je-data-bridge-cc`). The three reference plugins remain in their own repos and are explicitly ignored in this repo's `.gitignore`. | New repo gets its own README, LICENSE, CHANGELOG. The path `Refrence but block from git/` is already gitignored at the project root; new plugin sits in its own repo entirely separate from the Brick Builder HQ workspace. |
@@ -1388,6 +1592,9 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | D-22 | **Per-rule merge strategy + create_if_missing defaults** | `merge_strategy` defaults to `'append'` (editor-friendly: doesn't strip unrelated terms). `create_if_missing` defaults to `'false'` (the plugin doesn't silently create taxonomy nodes — editor opt-in per rule). `match_by` defaults to `'slug'` (most stable identifier for `apply_terms`). | Default config-shape factory in `JEDB_Flatten_Config_Manager::default_taxonomy_rule()`. Each rule's args are exposed in the Flatten admin tab UI as radios + checkboxes. See L-023. |
 | D-23 | **`apply_terms_inverse` for explicit term removal** | Per-rule `apply_terms_inverse` array of terms that must NOT be present after push. Lets editors declare "this bridge's products are never in the `available-set` category" and have the engine call `wp_remove_object_terms()` to enforce. Empty by default. Composes cleanly with `apply_terms` (apply runs first, then inverse-remove). | New field in the taxonomy rule schema. UI exposes it as a parallel multi-select right under `apply_terms`. Engine calls `wp_remove_object_terms()` after `wp_set_object_terms()` per rule. See L-023. |
 | D-24 | **Taxonomy UI queries live, doesn't take typed slugs** | The Flatten admin tab's Taxonomies section, when a post-type target is selected, queries `get_object_taxonomies()` for available taxonomies and `get_terms()` for available terms. Editors pick from dropdowns, not type taxonomy slugs by hand. Reduces typo-driven bugs and makes the UI self-documenting. | New AJAX endpoint `jedb_flatten_get_post_type_taxonomies(post_type)` returns `{taxonomies: [{slug, label, terms: [{slug, name, id}, ...]}]}`. JS in `flatten-admin.js` populates two cascading dropdowns when the target post type changes. See L-023. |
+| D-25 | **No "bridge type" template layer** *(retires D-5)* | The flatten config IS the bridge identity. There's exactly ONE authoring surface for bridges — the Flatten admin tab — and exactly ONE storage row per bridge: `wp_jedb_flatten_configs`. The Phase 4 meta box is a *view* of an existing flatten config (D-27), not an authoring tool that creates one. A separate `jedb_bridge_types` option as a template-to-clone layer was added in v0.6.0-alpha.1, hotfixed in alpha.2 (L-025), and retired in alpha.3 after a hard architectural review surfaced that templates created surprise (editors expected propagation), doubled the editing surface, and added a schema-mismatch failure mode without delivering value for the only use cases on the table. | v0.6.0-alpha.3 deletes `JEDB_Bridge_Types_Manager`, `JEDB_Tab_Bridges`, the Bridges admin tab template + JS + CSS, and the `JEDB_OPTION_BRIDGE_TYPES` constant + activation default. Per-product overrides (`_jedb_bridge_locked`, `_jedb_bridge_direction_override`) are added as engine guards instead. The bridge meta box (Phase 4 Day 2) reads from `wp_jedb_flatten_configs` directly. Phase 4b variations live as a `variations[]` array directly on the flatten config. See L-026 for the full post-mortem. |
+| D-26 | **Field presets are first-class portable artifacts** | Field presets are a separate, target-scoped (single adapter) library of curated "what does a complete bridge to target X look like?" knowledge. Each preset declares fields with `mandatory: bool` + freeform `group: string` + `hint: string`. They overlay onto flatten configs at edit time in three modes (display-only, apply-as-`required_overrides.add`, scaffold-as-passthrough-mappings), they're exportable / importable as JSON across sites, and they do NOT replace adapter-declared `get_required_fields()` — they compose with it. PAC VDM hardcoded this knowledge in PHP per role; we pull it OUT of code and INTO a curated artifact so it can move between sites. | New `jedb_field_presets` site option, new `JEDB_OPTION_FIELD_PRESETS` constant, new `JEDB_Field_Presets_Manager` class, new "Field Presets" admin tab (priority 35). Flatten admin tab "Mandatory coverage" panel gains "Apply preset" / "Display preset" / "Scaffold missing mappings" controls. See §4.12 for the full architecture, Phase 4 Day 4 for the deliverable. |
+| D-27 | **Meta box reads flatten config directly** | The Phase 4 Bridge meta box on Woo product / variation edit screens is a *view* of the existing flatten config(s) governing the current product. No "bridge type select." No clone-from-template behavior. Resolution path: walk `wp_jedb_flatten_configs` for rows whose `target_target` matches the post type, run the existing link-resolution logic per row to determine which one(s) govern THIS specific product, render one panel per resolved bridge. Reuses the engine's existing resolver in read-only mode. | New `JEDB_Woo_Product_Meta_Box` class (Phase 4 Day 2). Per-product overrides via post meta: `_jedb_bridge_locked`, `_jedb_bridge_direction_override`, `_jedb_bridge_last_manual_sync_id`. The meta box's *killer feature* is field surfacing — for each mapping where `surface_on_target=true` AND adapter's `is_natively_rendered($field) = false` (D-16), render an editable input on the product edit screen that syncs back to the CCT via the reverse-pull engine. See §4.5 for full controls list. |
 
 ---
 
@@ -1409,7 +1616,7 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | **Custom Snippets: malicious or buggy PHP fatal-erroring a save** | Medium | High if not gated | Triple gate: (1) capability check on edit + on run, (2) global "Enable Custom PHP Snippets" toggle default OFF, (3) `Snippet_Runner` wraps every invocation in try/catch + `set_error_handler` so a fatal returns the original value and logs the trace. |
 | **Custom Snippets: snippet file deleted from disk while DB row remains** | Low | Low | `Snippet_Loader::load()` re-checks file existence + hash before include; mismatched/missing → marks snippet `errored`, logs, returns passthrough. Admin notice surfaces orphaned snippets. |
 | **Custom Snippets: privilege escalation via writeable uploads dir** | Low | High (theoretical RCE) | `.htaccess` (`deny from all`) + `index.php` written on activation; files chmod 0644; folder existence + perms re-verified on every plugin load via `Snippet_Installer::verify()`. Disabling the feature in Settings stops the loader from including any snippet file. |
-| **Bridge Types JSON corruption from bad import** | Low | Medium | Import goes through a JSON-schema validator before being persisted; a backup of the previous `jedb_bridge_types` value is kept in `jedb_bridge_types__previous` for one-click rollback. |
+| **Field Presets JSON corruption from bad import** | Low | Medium | Import goes through a JSON-schema validator before being persisted; a backup of the previous `jedb_field_presets` value is kept in `jedb_field_presets__previous` for one-click rollback. (Replaces the original "Bridge Types JSON" risk row from before D-25 retired the bridge type layer.) |
 
 ---
 
@@ -1453,70 +1660,137 @@ replace any architectural pattern.
 they correct an assumption — it's the persistent memory for the
 plugin, not a transient session log.
 
-## 12. Next Action — Phase 4 readiness gate
+## 12. Next Action — Phase 4 readiness gate (alpha.3 reshape)
 
 Phases 0 through 3.6 are complete and verified end-to-end on
-Brick Builder HQ staging (see `CHANGELOG.md` for per-version detail
-and §7.1 for the verification log). **Phase 4 — the Bridge meta
-box on the WooCommerce product edit screen + the Bridges admin
-tab managing `jedb_bridge_types` JSON — is the next implementation
-phase.** This section is the readiness gate: what's in place, what
-Phase 4 will consume, and what Phase 4 will deliver.
+Brick Builder HQ staging (see `CHANGELOG.md` for per-version
+detail and §7.1 for the verification log). v0.6.0-alpha.1 +
+alpha.2 added a Bridges admin tab + Bridge Types Manager
+template layer that was retired per **D-25 / L-026** after a
+deeper architectural review (the flatten config is the bridge
+identity; templating it created surprise + a schema-mismatch
+failure mode without paying for itself). **Phase 4 has been
+reshaped** around three concepts (D-25, D-26, D-27) and runs
+in four days from the alpha.3 release that opens the phase.
 
-### What's already in place (consumed by Phase 4)
+### What gets reverted in alpha.3 (~1,500 lines deleted)
+
+| File | Why |
+|---|---|
+| `includes/admin/class-bridge-types-manager.php` | D-25: template layer retired. |
+| `includes/admin/class-tab-bridges.php` | D-25: no Bridges admin tab. |
+| `templates/admin/tab-bridges.php` | D-25: no Bridges admin tab. |
+| `assets/js/bridges-admin.js` | D-25: no Bridges admin tab. |
+| Bridges-tab CSS block in `assets/css/admin.css` | D-25: no Bridges admin tab. (The `.jedb-pill-info` rule stays — general-purpose.) |
+| `JEDB_OPTION_BRIDGE_TYPES` constant + activation default in `je-data-bridge-cc.php` | D-25: option no longer used. |
+| Bootstrap entries in `includes/admin/class-admin-shell.php` (4 lines) | D-25: stop loading + enqueueing Bridges tab assets. |
+
+### What stays in place (consumed by Phase 4)
 
 | Subsystem | Where | Phase 4 use |
 |---|---|---|
-| Forward + reverse flatten engines | `includes/flatten/class-flattener.php`, `class-reverse-flattener.php` | Meta box's "Sync now" button calls `apply_bridge()` directly. |
-| Sync_Guard | `includes/class-sync-guard.php` | Manual syncs from the meta box go through the same lock as auto-syncs (no special path). |
-| Sync_Log | `includes/class-sync-log.php` | Meta box can read recent rows for "last synced X ago" display. |
-| Target_Registry + four adapters | `includes/targets/` | Meta box queries adapters for `is_natively_rendered($field)` (D-16) to decide which fields it renders. |
-| `get_required_fields()` (D-15) | All four adapters | "Mandatory coverage" panel in the Bridges admin tab uses this. |
-| `JEDB_Flatten_Config_Manager` | `includes/flatten/class-flatten-config-manager.php` | Bridges admin tab CRUD layer for `jedb_bridge_types` will mirror this pattern. |
-| `JEDB_Taxonomy_Applier` (D-20–D-24) | `includes/flatten/class-taxonomy-applier.php` | Bridge type definitions can declare default `taxonomies[]` rules; meta box surfaces the applied terms. |
+| Forward + reverse flatten engines | `includes/flatten/class-flattener.php`, `class-reverse-flattener.php` | Meta box's "Sync now" button calls `apply_bridge()` directly. New per-product guards in Day 1 (see "What's NOT being rebuilt" below for the disambiguation from the existing cascade guard). |
+| Sync_Guard | `includes/class-sync-guard.php` | Manual syncs from the meta box go through the same lock as auto-syncs (no special path). The existing `is_locked()` / `acquire()` check at the top of `apply_bridge()` is **kept as-is** — it handles in-flight cascade prevention, not editor-set locks. |
+| Sync_Log | `includes/class-sync-log.php` | Meta box reads recent rows for "last synced X ago" display. New per-product guards reuse `STATUS_SKIPPED_LOCKED` with a `reason` field in `context_json` to disambiguate from `cascade=pull_in_flight` — **no new status constant needed**. Direction override gets a new constant `STATUS_SKIPPED_DIRECTION_OVERRIDE`. |
+| Target_Registry + four adapters | `includes/targets/` | Meta box queries adapters for `is_natively_rendered($field)` (D-16) — decides which surfaced fields to render. |
+| `get_required_fields()` (D-15) | All four adapters | Mandatory coverage panel in the Flatten admin tab uses this. Field Presets (D-26) overlay on top — **D-15 is preserved unchanged**. |
+| `JEDB_Flatten_Config_Manager` | `includes/flatten/class-flatten-config-manager.php` | Schema extensions Day 1 (`meta_box` block, `cct_single_redirect`, per-mapping `surface_*` + `group`) added via `default_config_json()` + `default_mapping()` extension only. Existing fields untouched. |
+| `JEDB_Taxonomy_Applier` (D-20–D-24) | `includes/flatten/class-taxonomy-applier.php` | Untouched. |
+| `JEDB_Relation_Attacher::attach()` (D-13) | `includes/relations/class-relation-attacher.php` | Day 2 meta box's "Link this product" button calls this directly — same idempotent path the L-021 self-heal uses. **No reimplementation.** |
+| `resolve_target_id()` (D-10 / L-021 self-heal) | `JEDB_Flattener::resolve_target_id()` | Day 2 meta box reuses this method in read-only mode to determine which flatten config governs the current product. **No reimplementation.** |
 | L-021 self-heal + L-022 cascade asymmetry | engine paths | No Phase 4 work needed — already correct. |
-| AJAX endpoints | `wp_ajax_jedb_flatten_get_target_schema`, `wp_ajax_jedb_flatten_get_post_type_taxonomies`, `wp_ajax_jedb_flatten_validate_condition` | Bridge meta box's CCT picker can reuse the schema endpoint shape. |
-| `jedb_bridge_types` settings option | `JEDB_OPTION_BRIDGE_TYPES` constant + empty default | Phase 4's Bridges admin tab finally populates this with real data. |
+| AJAX endpoints | `wp_ajax_jedb_flatten_get_target_schema`, `wp_ajax_jedb_flatten_get_post_type_taxonomies`, `wp_ajax_jedb_flatten_validate_condition`, `wp_ajax_jedb_relation_search_items` | Meta box CCT picker reuses the relation-search endpoint. New endpoints (Day 4): `wp_ajax_jedb_flatten_apply_field_preset`, `wp_ajax_jedb_flatten_scaffold_missing_mappings`. |
 
-### What Phase 4 will deliver
+### What's NOT being rebuilt (audit done 2026-05-10)
 
-1. **`includes/admin/class-tab-bridges.php`** — new admin tab "Bridges" between Relations and Flatten. UI to manage the `jedb_bridge_types` setting (Available Set, Mosaic, Mosaic Instructions PDF). Each bridge type definition declares: slug, label, linked source (CCT slug), linked target (post_type), `link_via`, default direction, default `taxonomies[]` rules, optional `variations[]` block (Phase 4b), optional `default_field_mappings[]` (template that the Flatten admin tab can clone from when creating a new flatten config). Export/import of the entire `jedb_bridge_types` array as JSON.
+Before alpha.3 work begins, this section is the explicit "we already verified X exists; we're calling it, not duplicating it" list. Future-me reading this in a hurry: don't re-grep, the audit was done, here's the result.
 
-2. **`includes/admin/class-woo-product-meta-box.php`** — meta box on `product` and `product_variation` edit screens. Per L-012 / D-16: renders the Bridge Type select (populated from `jedb_bridge_types`), the linked CCT item Ajax picker, the direction toggle (CCT-canonical vs Product-canonical, per D-2), the `Sync now` button, and a status block ("Last synced 3 minutes ago via bridge id X — view sync log"). Renders inputs ONLY for fields where the target adapter's `is_natively_rendered()` returns false; native Woo fields stay in their native boxes and the sync engine talks to them via the typed-setter API.
+| Concern | Already exists | Where | alpha.3 touches it? |
+|---|---|---|---|
+| **Cascade prevention between forward + reverse engines** | `JEDB_Sync_Guard::is_locked() / acquire()` cross-direction check at top of `apply_bridge()` | `class-flattener.php` ~258–264 + symmetric in `class-reverse-flattener.php` | **No.** New per-product guards are a separate layer — different signal source (post meta vs in-memory lock), different lifetime (sticky vs in-flight), different intent (editor will vs cascade prevention). Reuses `STATUS_SKIPPED_LOCKED` constant with a `reason` field to disambiguate context. |
+| **Bridge cardinality 1:1 (D-1)** | `default_config_json()` + adapter contracts | `class-flatten-config-manager.php` | **No.** alpha.3 doesn't touch cardinality. |
+| **Default direction = CCT-canonical (D-2)** | `'direction' => 'push'` in defaults | `class-flatten-config-manager.php` | **No.** Per-product `_jedb_bridge_direction_override` is a layer on top, not a default change. |
+| **Link via JE Relations primary (D-10)** | `resolve_target_id()` walks `link_via.type` then falls back per L-021 | `class-flattener.php` | **No.** Day 2 meta box reuses `resolve_target_id()` in read-only mode. |
+| **Relation rows self-heal (D-13)** | `JEDB_Relation_Attacher::attach()` (idempotent), invoked by L-021 fallback | `class-relation-attacher.php` | **No.** Day 2's "Link this product" button calls `attach()` directly. |
+| **Adapter-declared required fields (D-15)** | `get_required_fields()` on all four adapters | `interface-data-target.php` + `class-target-*.php` | **No.** Field Presets (D-26) compose ON TOP via `required_overrides.add` — `get_required_fields()` is unchanged. |
+| **Adapter-declared native rendering (D-16)** | `is_natively_rendered($field)` on all four adapters | `interface-data-target.php` + `class-target-*.php` | **No.** Day 2 meta box CALLS this to skip Woo-native fields when rendering surfaced inputs. |
+| **JE asymmetric auto-create (D-17)** | Forward engine no auto-create; reverse engine has opt-in `auto_create_target_when_unlinked` | both flatteners | **No.** Untouched. |
+| **Hook priority 20 (D-19)** | `JEDB_FLATTEN_HOOK_PRIORITY` constant + `init` hook at priority 30 to register | `je-data-bridge-cc.php` + `class-flattener.php` line 57 | **No.** Untouched. |
+| **Taxonomy applier (D-20–D-24)** | `JEDB_Taxonomy_Applier` shipped Phase 3.6 | `class-taxonomy-applier.php` | **No.** Untouched. |
+| **L-024 mappings-then-taxonomies ordering** | Locked into `apply_bridge()` flow | `class-flattener.php` ~319–325 | **No.** Untouched. |
+| **`_jedb_bridge_locked` / `_jedb_bridge_direction_override` post meta** | *Confirmed via grep: zero occurrences in active code* | (none) | **Yes — genuinely net new.** No post meta with these names exists today; alpha.3 introduces them. |
 
-3. **Variation Scope control on the meta box** (per §4.5): radio for `Bridge the parent product` vs `Bridge a specific variation`. The variation picker only appears when the product is variable AND scope is set to `specific variation`. Hooks into `Target_Woo_Variation`.
+### Reusable patterns from reference plugins (cited verbatim, ported into Day 2 / Day 4)
 
-4. **CCT-single → linked-post redirect shim** (per §4.6 — target-agnostic): on `template_redirect`, if the current request is a JE CCT single page AND the CCT row has a linked post via any active bridge AND the bridge type has `cct_single_redirect: true`, do a `wp_safe_redirect( get_permalink( $linked_post_id ), 301 )`. The linked post can be a `product`, a `story_bricks` CPT, or any other post type — the shim resolves through the bridge's `link_via`, no Woo dependency. This is what makes "Has Single Page = the linked post" work without building a separate CCT single template.
+The two reference plugins in `Refrence but block from git/` that have the most relevant patterns for Phase 4 are JFB-WC (meta box on Woo edit screens) and Jet Engine Relation Injector (JE hook timing + conditional asset enqueue). Don't re-invent these:
 
-5. **Stored product-side meta** per §4.5 D-10:
-   - `_jedb_bridge_type` — the slug of the governing bridge type.
-   - `_jedb_bridge_locked` — bool, "freeze sync for this product."
-   - `_jedb_bridge_direction` — per-product override of the bridge type's default direction.
-   - **NO** `_jedb_bridge_cct_id` — link lives in JE Relations only (D-10).
+| Pattern | Source citation | Day 2 / Day 4 application |
+|---|---|---|
+| `add_meta_box()` registration with `add_action('add_meta_boxes', ...)` | `Refrence but block from git/JFB-WC-Quoites/jfb-wc-quotes-advanced/jfb-wc-quotes-advanced.php` lines ~1435–1444 | Day 2: identical call, post_type = `product` AND `product_variation`, context = `normal` (more space than `side` for surfaced fields). |
+| Save handler with the canonical 4-guard preamble (nonce, perms, autosave, post-type) | JFB-WC ~1465–1484 | Day 2: identical structure, hooked on `save_post_product` + `save_post_product_variation` at default priority 10 (runs after Woo's own save handlers). |
+| `wp_nonce_field()` in render + `wp_verify_nonce()` in save | JFB-WC ~1452 + ~1468 | Day 2: identical. |
+| Conditional `admin_enqueue_scripts` keyed on `$hook == 'post.php' && $post_type == ...` | JFB-WC ~1658–1661 | Day 2: same shape, condition = `'post.php' == $hook && in_array( $post_type, array('product','product_variation'), true )`. |
+| `admin_notices` for inline save-time feedback | JFB-WC ~795 | Day 2: use for "Sync now" success/failure surfacing instead of inventing a custom UI. |
+| `add_action('init', ..., 20+)` for JE hook registration timing | `Refrence but block from git/Jet Engine Relation Injector/includes/class-transaction-processor.php` line 25 | Day 1+: already followed (`class-flattener.php` line 57 uses `init` priority 30). No change. |
+| Conditional picker asset enqueue scoped to relevant edit screens | RI's `class-runtime-loader.php` + JFB-WC's enqueue gate | Day 2: meta box JS/CSS only enqueues on product / variation edit screens. Day 4: Field Presets admin tab JS only on the Field Presets tab. |
 
-6. **End-to-end verification** on Brick Builder HQ staging — replicate the existing flatten-config-only setup as bridge-type-driven, prove parity, then migrate.
+What we explicitly do NOT crib from these plugins: their inline `<style>` blocks, direct-SQL where the JE/WP API would do, commented-out legacy branches in JFB-WC. The patterns are right; the surrounding style isn't.
 
-### Phase 4 exit criterion
+### What Phase 4 will deliver (4 days)
 
-Editing the Available Sets CCT updates the matching simple Woo product (via the bridge type's mappings), and editing the same product back updates the CCT — same engine paths as today, just configured through the Bridges admin tab and meta box rather than raw Flatten configs. The CCT single URL redirects to the product permalink. Sync log records every operation with `bridge_type` slug populated.
+### What Phase 4 will deliver (4 days)
 
-### Phase 4 estimate
+#### Day 1 — alpha.3 release: revert + flatten config schema + engine guards
 
-Per §7's roadmap: ~3 days. Sub-day breakdown:
+- Delete the alpha.1/alpha.2 work listed above.
+- Extend `JEDB_Flatten_Config_Manager::default_config_json()` with `meta_box: { enabled, title, position, groups[] }` block and top-level `cct_single_redirect: bool`.
+- Extend `JEDB_Flatten_Config_Manager::default_mapping()` with `surface_on_source: bool`, `surface_on_target: bool`, `group: string` (D-26 freeform).
+- Add 3-line guards at the top of `JEDB_Flattener::apply_bridge()` and `JEDB_Reverse_Flattener::apply_bridge()` for `_jedb_bridge_locked` post meta and `_jedb_bridge_direction_override` post meta.
+- Extend the Flatten admin tab editor: new "Meta box settings" collapsible section, per-mapping `surface_*` + `group` controls in the mappings table, new `cct_single_redirect` checkbox.
+- Add `JEDB_OPTION_FIELD_PRESETS` constant + activation default. `JEDB_Field_Presets_Manager` skeleton (read-only API) — full UI ships Day 4.
+- ✅ Exit: editing existing 0.5.x flatten configs still works (back-compat verified). New per-mapping flags render correctly. Engine guards skip-log a locked product. Lint clean.
 
-- Day 1: Bridges admin tab CRUD on `jedb_bridge_types` + JSON import/export + manage UI.
-- Day 2: Bridge meta box on product / variation edit screens (incl. live AJAX picker, status block, native-field detection, direction toggle).
-- Day 3: Redirect shim + integration testing + verification log entry in §7.1.
+#### Day 2 — Bridge meta box on Woo edit screens (reads flatten config directly per D-27)
+
+- Implement `JEDB_Woo_Product_Meta_Box` for `product` and `product_variation` edit screens.
+- Resolution: walk `wp_jedb_flatten_configs` → for each row whose `target_target` matches → run existing link-resolution logic per row → render one panel per resolved bridge (or the unlinked picker if zero).
+- Linked panel: linked CCT row label + edit link, last-3 sync log rows, surfaced field inputs grouped by `group` label, Lock checkbox, Direction override radio, Sync now button, Unlink button.
+- Unlinked panel: pick from compatible flatten configs → Ajax CCT picker → Link button (calls `JEDB_Relation_Attacher::attach()` for `je_relation` bridges).
+- Save handler routes surfaced field edits through `Target_*::update()` (HPOS-safe, typed setters).
+- ✅ Exit: editing a Mosaic product on Woo admin shows linked CCT row, surfaces flagged fields, lets editor sync now / lock / unlink without leaving the screen. Reverse-pull engine writes surfaced fields back to CCT.
+
+#### Day 3 — CCT-single → linked-post redirect shim
+
+- New `includes/class-cct-single-redirect.php`. Hook `template_redirect`.
+- Reads opt-in from each flatten config's `cct_single_redirect` flag. Direction guard (only redirects when direction includes push). Admin escape hatch (`?jedb_no_redirect=1` for `manage_options`).
+- ✅ Exit: visiting a CCT single URL 301-redirects to linked product permalink for opt-in bridges. Admin escape hatch works.
+
+#### Day 4 — Field Presets admin tab + Mandatory coverage integration (D-26)
+
+- New `JEDB_Field_Presets_Manager` writes (CRUD on `jedb_field_presets`).
+- New "Field Presets" admin tab (priority 35).
+- Flatten admin tab Mandatory coverage panel gains: **Apply preset** dropdown, **Display-only overlay** mode, **Scaffold missing mappings** button, provenance display (adapter / preset / bridge override per required field).
+- ✅ Exit: editor curates "WooCommerce — Storefront Visible" preset, exports as JSON, imports on a fresh staging site, applies to a bridge, sees PAC VDM-style coverage badges, clicks Scaffold to auto-stub missing mappings.
+
+### Per-product meta added in alpha.3
+
+```
+_jedb_bridge_locked              bool   universal lock — engine skip with reason: per_product_lock
+_jedb_bridge_direction_override  enum   '' | push | pull | bidirectional | none — constrains effective direction for this product
+_jedb_bridge_last_manual_sync_id int    sync_log row id of the last meta box "Sync now" — drives status block
+```
+
+**No `_jedb_bridge_type`.** **No `_jedb_bridge_cct_id`.** Per D-10 / D-25 / D-27, the link lives in JE Relations / `cct_single_post_id`, the bridge identity lives in `wp_jedb_flatten_configs`.
 
 ### What stays NOT in Phase 4
 
-- Variation reconciliation engine + `show_when` mini-DSL — Phase 4b.
+- Variation reconciliation engine + `show_when` mini-DSL — Phase 4b. The `variations[]` array lives directly on the flatten config per D-25.
 - `term_assigned` trigger — Phase 4.5.
 - Custom Code Snippets runtime — Phase 5b.
-- Setup tab presets — Phase 6.
+- Setup tab presets — Phase 6 ships both bridge presets (flatten config JSON) and field presets (Day 4 artifact format).
 - Capability gating beyond `manage_options`, REST auth hardening, i18n .pot — Phase 7.
 
-All architectural decisions Phase 4 needs are locked: D-1 through D-24, with L-021 / L-022 / L-023 / L-024 refinements all in. All known JE / WC / WP caveats are documented (L-001 through L-024). The forward + reverse flatteners, sync guard, sync log, transformer registry, condition evaluator, adapter-owned `is_natively_rendered` / `get_required_fields` methods, taxonomy applier, and live-querying admin AJAX endpoints are all production-verified and ready for the meta box to consume.
+All architectural decisions Phase 4 needs are locked: D-1 through D-27 (with D-5 superseded by D-25). All known JE / WC / WP caveats are documented (L-001 through L-026). The forward + reverse flatteners, sync guard, sync log, transformer registry, condition evaluator, adapter-owned `is_natively_rendered` / `get_required_fields` methods, taxonomy applier, and live-querying admin AJAX endpoints are all production-verified through Phase 3.6 and ready for the meta box to consume.
 
 ## 13. Historical reference: original "Next Action" notes from §8 lock-in
 

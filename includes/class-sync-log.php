@@ -4,9 +4,10 @@
  *
  * Backed by `{prefix}jedb_sync_log` (created by JEDB_Config_DB::install()).
  * Every flatten apply writes one row regardless of outcome — success,
- * partial, errored, skipped_condition, skipped_error, skipped_locked, noop
- * (per BUILD-PLAN §4.9). The Debug tab reads the most recent N rows; the
- * Phase 5 retention setting prunes old rows on a daily cron.
+ * partial, errored, skipped_condition, skipped_error, skipped_locked,
+ * skipped_no_target, skipped_direction_override, noop (per BUILD-PLAN
+ * §4.9). The Debug tab reads the most recent N rows; the Phase 5
+ * retention setting prunes old rows on a daily cron.
  *
  * @package JEDB
  */
@@ -17,14 +18,21 @@ if ( ! defined( 'WPINC' ) ) {
 
 class JEDB_Sync_Log {
 
-	const STATUS_SUCCESS           = 'success';
-	const STATUS_PARTIAL           = 'partial';
-	const STATUS_ERRORED           = 'errored';
-	const STATUS_SKIPPED_CONDITION = 'skipped_condition';
-	const STATUS_SKIPPED_ERROR     = 'skipped_error';
-	const STATUS_SKIPPED_LOCKED    = 'skipped_locked';
-	const STATUS_SKIPPED_NO_TARGET = 'skipped_no_target';
-	const STATUS_NOOP              = 'noop';
+	const STATUS_SUCCESS                    = 'success';
+	const STATUS_PARTIAL                    = 'partial';
+	const STATUS_ERRORED                    = 'errored';
+	const STATUS_SKIPPED_CONDITION          = 'skipped_condition';
+	const STATUS_SKIPPED_ERROR              = 'skipped_error';
+	const STATUS_SKIPPED_LOCKED             = 'skipped_locked';
+	const STATUS_SKIPPED_NO_TARGET          = 'skipped_no_target';
+	// Phase 4 alpha.3 (D-27): editor set `_jedb_bridge_direction_override`
+	// post meta on the target (or post id, on reverse pull) to a value
+	// that disallows the current call direction. Distinct from
+	// SKIPPED_LOCKED (which covers both in-flight cascade locks and the
+	// per-product `_jedb_bridge_locked` editor lock — the latter
+	// disambiguated by `reason: per_product_lock` in context_json).
+	const STATUS_SKIPPED_DIRECTION_OVERRIDE = 'skipped_direction_override';
+	const STATUS_NOOP                       = 'noop';
 
 	/** @var JEDB_Sync_Log|null */
 	private static $instance = null;

@@ -3,7 +3,7 @@
  * Plugin Name:       JetEngine Data Bridge CC
  * Plugin URI:        https://github.com/legworkmedia/je-data-bridge-cc
  * Description:       Bridges JetEngine CCTs, CPTs, and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
- * Version:           0.6.0-alpha.2
+ * Version:           0.6.0-alpha.3
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Legwork Media
@@ -24,7 +24,7 @@ if ( ! defined( 'WPINC' ) ) {
  * Plugin constants
  * -------------------------------------------------------------------------- */
 
-define( 'JEDB_VERSION',              '0.6.0-alpha.2' );
+define( 'JEDB_VERSION',              '0.6.0-alpha.3' );
 define( 'JEDB_DB_VERSION',           '1.1.0' );
 define( 'JEDB_PLUGIN_FILE',          __FILE__ );
 define( 'JEDB_PLUGIN_DIR',           plugin_dir_path( __FILE__ ) );
@@ -37,7 +37,10 @@ define( 'JEDB_MIN_WP_VERSION',       '6.0' );
 define( 'JEDB_MIN_JE_VERSION',       '3.3.1' );
 
 define( 'JEDB_OPTION_SETTINGS',      'jedb_settings' );
-define( 'JEDB_OPTION_BRIDGE_TYPES',  'jedb_bridge_types' );
+// JEDB_OPTION_BRIDGE_TYPES retired in v0.6.0-alpha.3 per D-25 / L-026 —
+// the flatten config IS the bridge identity; a separate template layer
+// was a premature abstraction. See BUILD-PLAN section 12.
+define( 'JEDB_OPTION_FIELD_PRESETS', 'jedb_field_presets' );
 define( 'JEDB_OPTION_META_WHITELIST','jedb_meta_whitelist' );
 define( 'JEDB_OPTION_DB_VERSION',    'jedb_db_version' );
 
@@ -128,13 +131,17 @@ function jedb_activate() {
 		);
 	}
 
-	if ( false === get_option( JEDB_OPTION_BRIDGE_TYPES ) ) {
-		add_option( JEDB_OPTION_BRIDGE_TYPES, array(), '', 'no' );
+	if ( false === get_option( JEDB_OPTION_FIELD_PRESETS ) ) {
+		add_option( JEDB_OPTION_FIELD_PRESETS, array(), '', 'no' );
 	}
 
 	if ( false === get_option( JEDB_OPTION_META_WHITELIST ) ) {
 		add_option( JEDB_OPTION_META_WHITELIST, array(), '', 'no' );
 	}
+
+	// Best-effort cleanup of the retired alpha.1/alpha.2 option. No-op
+	// when it doesn't exist (most installs). Per D-25 / L-026.
+	delete_option( 'jedb_bridge_types' );
 }
 
 /* -----------------------------------------------------------------------------
