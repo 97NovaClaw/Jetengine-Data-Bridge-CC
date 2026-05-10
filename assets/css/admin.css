@@ -443,3 +443,58 @@
 .jedb-flatten-taxonomies input.jedb-tax-create-if-missing {
 	margin-top: 4px;
 }
+
+/* -------------------------------------------------------------------------
+ * Phase 4 Day 1 — Bridges admin tab
+ * --------------------------------------------------------------------- */
+
+.jedb-bridges-tab .jedb-targets-header {
+	align-items: flex-start;
+}
+
+.jedb-bridges-list code {
+	font-size: 11px;
+}
+
+.jedb-bridges-list .jedb-pill {
+	font-size: 10px;
+	padding: 2px 8px;
+}
+
+.jedb-pill-info {
+	background: #e7f5ff;
+	color: #0a558c;
+	border: 1px solid #a5d8ff;
+}
+
+.jedb-bridges-import-dialog {
+	margin-top: 28px;
+	padding: 20px 24px;
+	background: #fff;
+	border: 2px solid #2271b1;
+	border-radius: 6px;
+	box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.jedb-bridges-import-dialog h2 {
+	margin-top: 0;
+}
+
+.jedb-bridges-import-dialog textarea {
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+	font-size: 12px;
+}
+
+#jedb_bridges_relation_picker_wrap select {
+	min-width: 320px;
+	max-width: 100%;
+}
+
+#jedb_bridges_relations_status:empty {
+	display: none;
+}
+
+#jedb_bridges_json {
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+	font-size: 12px;
+}

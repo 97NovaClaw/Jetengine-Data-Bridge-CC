@@ -2,6 +2,115 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.1] — 2026-05-06
+
+**Phase 4 / Day 1 — Bridges admin tab + `JEDB_Bridge_Types_Manager`.**
+
+First slice of Phase 4. The long-reserved `jedb_bridge_types` site
+option (`JEDB_OPTION_BRIDGE_TYPES`, scaffolded since v0.1.0) finally
+gets a UI. Bridge types are *templates* — each declares a
+`source_target`, `target_target`, `default_direction`, `link_via`,
+default field mappings, default taxonomy rules, and the §4.6 redirect
+opt-in. The Phase 4 Day 2 Bridge meta box on the Woo product edit
+screen will clone a bridge type into a concrete `wp_jedb_flatten_configs`
+row when an editor wires up an individual product.
+
+This release is `alpha.1` because Phase 4 isn't feature-complete —
+Day 1 ships the definitions layer; Day 2 ships the meta box (consumer);
+Day 3 ships the redirect shim. No staging-test gate yet.
+
+### Added
+
+- **`JEDB_Bridge_Types_Manager`** —
+  `includes/admin/class-bridge-types-manager.php`. CRUD wrapper around
+  the `jedb_bridge_types` option (a flat indexed array, sanitized +
+  validated on every write). Public API: `get_all()`, `get_enabled()`,
+  `get_by_slug()`, `get_for_post_type()`, `count_all()`, `count_enabled()`,
+  `upsert()`, `set_enabled()`, `delete()`, `replace_all()`,
+  `prepare_for_storage()`, `default_bridge_type()`. Validation enforces:
+  unique slug, both source and target required, source ≠ target, JE
+  Relation must have a relation_id selected, `cct_single_post_id` link
+  type only valid when source is a CCT. Fires `jedb/bridge_types/changed`
+  action on every successful write.
+- **`JEDB_Tab_Bridges`** — `includes/admin/class-tab-bridges.php`.
+  Admin tab between Relations and Flatten (priority 25, label
+  "Bridges"). Form actions: `jedb_bridges_save` (upsert),
+  `jedb_bridges_toggle` (enable/disable), `jedb_bridges_delete`,
+  `jedb_bridges_import`. AJAX endpoints: `jedb_bridges_export`
+  (download all as JSON), `jedb_bridges_get_relations_for_pair`
+  (live JE Relation picker scoped to the chosen source/target).
+  Relation lookup delegates to the existing `JEDB_Tab_Flatten::
+  get_relations_between()` helper — no duplication.
+- **`templates/admin/tab-bridges.php`** — list of existing bridge
+  types as a sortable table + add/edit form. Includes the standard
+  link-via picker with self-heal options, a "Defaults JSON" textarea
+  (mappings + taxonomies + variations) for hand editing, the
+  `cct_single_redirect` opt-in for the §4.6 redirect shim (Day 3),
+  the `auto_create_target_when_unlinked` default that gets cloned to
+  reverse bridges, and inline JSON import dialog with a
+  destructive-replace-all toggle.
+- **`assets/js/bridges-admin.js`** — vanilla DOM + jQuery (matches
+  flatten-admin.js style, no build step). Behavior: live relation
+  picker refresh on source/target change (debounced 250ms), JSON
+  export download, import dialog open/close, slug auto-fill from
+  label on add (stops auto-filling once user types in slug), JSON
+  textarea live border-color validation (green/red).
+- **CSS** — `.jedb-bridges-tab`, `.jedb-bridges-list`,
+  `.jedb-bridges-import-dialog`, `.jedb-pill-info` blue variant.
+  Appended to `assets/css/admin.css`.
+- **Asset enqueue** — `JEDB_Admin_Shell::enqueue_assets()` now
+  enqueues `bridges-admin.js` when the Bridges tab is active
+  (matching the Flatten tab pattern).
+
+### Behavior unchanged
+
+- **No engine code touched.** The flattener, reverse flattener,
+  taxonomy applier, sync guard, sync log, and every transformer
+  are byte-identical to v0.5.3. Bridge types are a configuration
+  template layer that doesn't run at sync time — Day 2's meta box
+  is the consumer.
+- **Existing flatten configs unchanged.** `wp_jedb_flatten_configs`
+  rows created in 0.4.0 → 0.5.3 keep working through the Flatten
+  admin tab exactly as before. Day 2 will add the meta box as a
+  *second* path to creating flatten configs.
+
+### Migration / upgrade notes
+
+- No schema migration. `jedb_bridge_types` was already created with
+  an empty array as default during Phase 0 activation.
+- No breaking changes. Existing 0.5.x sites can install 0.6.0-alpha.1
+  with no functional changes until they actually create a bridge
+  type AND wire it through the (Day 2) meta box.
+
+### Known limitations of Day 1
+
+- The "Defaults JSON" textarea is the only way to set up
+  `default_field_mappings[]` and `default_taxonomies[]` — there's
+  no per-mapping picker UI in the bridge type editor. Editors are
+  expected to clone the JSON from a working flatten config that
+  was set up the regular way. Phase 4 Day 2's meta box will provide
+  a friendlier surface; the Day 1 form is a config-as-data backbone.
+- Bridge type changes do NOT propagate to existing flatten configs
+  (templates not bindings — surfaced in the UI).
+- The variation reconciliation block in the JSON is stored but not
+  consumed yet (Phase 4b).
+
+### Architectural notes locked
+
+- **Storage:** flat indexed array in a site option, not a custom
+  table. Bridge types are a small list per site; total payload is
+  tiny; change frequency is low. Custom table would be overkill.
+- **Templates not bindings:** bridge type defaults are cloned at
+  link-time. Editing a bridge type doesn't retroactively change
+  products already linked to it. Surfaced in the UI with an explicit
+  warning callout.
+- **Target-agnostic:** the bridge type editor lists every adapter
+  kind (CCT, CPT, Woo Product, Woo Variation) — Phase 4's Bridge
+  meta box is the only Woo-specific surface (per BUILD-PLAN §4.5
+  scope note).
+
+---
+
 ## [0.5.3] — 2026-05-06
 
 **Phase 3.6 hotfix — engine ordering bug + term_lookup zero-resolve warning.**

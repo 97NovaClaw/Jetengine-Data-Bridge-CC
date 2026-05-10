@@ -402,6 +402,13 @@ interface JEDB_Data_Target {
 > meta** is stored on the product — the link lives where JE owns it.
 > See `LESSONS-LEARNED.md` L-013/L-015.
 
+> **Scope note (Phase 4):** the Bridge meta box is intentionally Woo-specific
+> — it lives on `product` and `product_variation` edit screens because that's
+> where editors spend their time managing shop content. **The bridge engine
+> itself is target-agnostic** (see §4.5.1) and supports CCT ↔ CPT, CCT ↔ CCT,
+> and CPT ↔ CPT bridges through the Flatten admin tab today. A generic
+> non-Woo CPT meta box is parked as a deferred Phase 4c if/when needed.
+
 A new admin module `JEDB_Woo_Product_Meta_Box` injects a panel on `product` edit screens with these controls:
 
 1. **Bridge type** select — populated from `jedb_bridge_types` (the Settings JSON, see §3.1). For Brick Builder HQ this lists "Available Set", "Mosaic", "Mosaic Instructions PDF". Editors can add new bridge types from the Bridges admin tab without touching code.
@@ -466,19 +473,71 @@ The actual source-record link is resolved at runtime by:
 
 **Why no `_jedb_bridge_cct_id`:** keeping the link in JE's own structures eliminates the dual-source-of-truth problem. The product page stays simple (just the type tag). JE Smart Filters and Listings see the bridge automatically.
 
-### 4.6 The "Has Single Page = the WC product" CCT pattern
-Using JetEngine's "has single page" feature pointed at the linked Woo product means we never need to build a separate CCT single template. The Bridge meta box's "Linked CCT item" stores the product ID into the CCT row; the CCT's "single page" URL resolves to the product's permalink via a small `template_redirect` shim:
+### 4.5.1 Supported source / target combinations
+
+The bridge engine is target-agnostic. The CCT ↔ Woo Product example is the **headline use case** (driven by Brick Builder HQ's Available Sets and Mosaics shop), but the underlying machinery does not assume either side is Woo.
+
+Every record store the plugin can read or write is wrapped in an adapter implementing the `JEDB_Data_Target` interface (§3.4). There are exactly four adapters:
+
+| Adapter | Slug format | Backing store | Hook for change events |
+|---|---|---|---|
+| `JEDB_Target_CCT` | `cct::{slug}` (e.g. `cct::available_sets_data`) | JetEngine CCT items via `$inst->db->update()` + direct SQL fallback (L-003 / L-004) | `jet-engine/custom-content-types/created-item/{slug}` AND `updated-item/{slug}` at priority 20 (D-19) |
+| `JEDB_Target_CPT` | `posts::{post_type}` (e.g. `posts::story_bricks`) | Standard WP posts + post-meta via `wp_insert_post()` / `update_post_meta()` | `save_post_{post_type}` at priority 20 |
+| `JEDB_Target_Woo_Product` | `posts::product` | WC products via `WC_Product->save()` (HPOS-safe) | `woocommerce_update_product` + `woocommerce_new_product` |
+| `JEDB_Target_Woo_Variation` | `posts::product_variation` | WC variations via `WC_Product_Variation->save()` (HPOS-safe) | Same Woo hooks, scoped to variation post type |
+
+The `JEDB_Flattener::apply_bridge()` and `JEDB_Reverse_Flattener::apply_bridge()` engines take a `source_target` slug and a `target_target` slug from the bridge config. They don't know or care which adapter kind sits behind each — they call `Target_Registry::get( $slug )` and then `->get()` / `->update()` on whatever comes back.
+
+**All of these source/target combinations work today through the engine path:**
+
+| Source | Target | Real example | Status |
+|---|---|---|---|
+| `cct::available_sets_data` | `posts::product` | Available Sets ↔ WC product (cat: `available-sets`) via JE Relation #8 | Verified on staging through Phase 3.6. |
+| `cct::mosaics_data` | `posts::product` | Mosaics ↔ WC product (cat: `mosaics`) via JE Relation #9 | Verified on staging through Phase 3.6 (incl. bidirectional). |
+| `cct::story_bricks_data` | `posts::story_bricks` | Story Bricks (CCT) ↔ Story Bricks (CPT) via JE native Has-Single-Page | Engine supports it; no flatten config wired up yet. |
+| `cct::featured_parts_data` | `posts::featured_parts` | Featured Parts CCT ↔ CPT (on hold per site-structure.md) | Engine supports it; on hold. |
+| `posts::product` | `cct::mosaics_data` | Reverse leg of bidirectional Mosaics bridge | Verified on staging through Phase 3.5. |
+| `posts::story_bricks` | `cct::story_bricks_data` | Reverse direction of Story Bricks bridge | Engine supports it; would just need `direction: pull` on the flatten config. |
+| `cct::A` | `cct::B` | CCT-to-CCT bridge (e.g. derived data sync between two CCTs) | Engine supports it; no test coverage yet. |
+| `posts::A` | `posts::B` | CPT-to-CPT bridge | Engine supports it; no test coverage yet. |
+
+#### Where the Bridge meta box (§4.5) is intentionally Woo-specific
+
+The Phase 4 Bridge meta box lives on `product` and `product_variation` edit screens — that's the **whole point** of the meta box pattern. Editors live in the Woo product editor day-to-day, so the high-traffic surface is where the controls go.
+
+For non-Woo bridges (CCT ↔ CPT, CCT ↔ CCT, CPT ↔ CPT), the **Flatten admin tab is the editor**. It's already production-verified for that role through Phases 3, 3.5, and 3.6. The Bridges admin tab from Phase 4 generalizes one level above that — a bridge type definition with `target_target: posts::story_bricks` is structurally identical to one with `posts::product`; only the meta box surface is Woo-bound.
+
+#### Phase 4c (deferred) — generic CPT meta box
+
+If at some future date editors want a Bridge meta box on a non-Woo CPT edit screen (e.g. on the Story Bricks CPT), it's a clean extraction from Phase 4 — same template, just a different `add_meta_box()` post type. Spec'd here for traceability; not included in Phase 4 scope.
+
+### 4.6 The "Has Single Page = the linked post" CCT pattern (redirect shim)
+
+Using JetEngine's "Has Single Page" feature pointed at any linked post means we never need to build a separate CCT single template. The bridge's `link_via` resolution returns the linked post ID; the CCT's "single page" URL resolves to that post's permalink via a small `template_redirect` shim — regardless of what kind of post sits on the other end of the bridge.
 
 ```
 add_action( 'template_redirect', function () {
-    if ( is_jet_cct_single() ) {
-        $linked = jedb_get_linked_woo_product_for_current_cct();
-        if ( $linked ) wp_safe_redirect( get_permalink( $linked ), 301 );
+    if ( ! jedb_is_jet_cct_single() ) {
+        return;
     }
+    $linked_post_id = jedb_get_linked_post_for_current_cct(); // walks every active bridge
+    if ( ! $linked_post_id ) {
+        return;
+    }
+    wp_safe_redirect( get_permalink( $linked_post_id ), 301 );
+    exit;
 });
 ```
 
-(The actual implementation will use JetEngine's CCT-single detection helpers, not a placeholder function.)
+(The actual implementation will use JetEngine's CCT-single detection helpers, not the placeholder function names above.)
+
+**Target-agnostic.** The shim doesn't care whether the linked post is a `product`, a `story_bricks` CPT, a custom CPT, or anything else — it just resolves the bridge config's `link_via`, reads the linked post ID, and redirects. The "WC product" framing was historically the headline use case (Brick Builder HQ's Available Sets and Mosaics) but the engine path is identical for any source CCT → target post bridge.
+
+**Opt-in per bridge type.** Each bridge type definition in `jedb_bridge_types` carries a `cct_single_redirect` boolean (default `false`). The shim only fires for bridges that opt in. Reasoning: some bridges might want the CCT to remain frontend-visible (e.g., a CCT acting as a hidden "data record" bridged to a CPT for filtering, where the CPT single is the display surface but the CCT single shouldn't redirect).
+
+**Admin escape hatch.** Logged-in users with `manage_options` who pass `?jedb_no_redirect=1` skip the redirect, so the CCT single template (or "no single template" 404) is still inspectable for debugging.
+
+**Direction guard.** The shim only redirects for bridges where `direction` includes `push` (i.e., the CCT is canonical and the linked post is the rendered face). For pull-only bridges, the CCT is the display surface and the redirect would invert the intended flow.
 
 ### 4.7 Variation bridging — the "Has Instructions PDF" pattern
 
@@ -1086,7 +1145,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, 3.5, and 3.6 are complete (v0.5.3 on `main`, includes the L-024 engine-ordering hotfix). Bidirectional flatten + categorization layer all shipped, with mappings-then-taxonomies ordering verified to behave correctly. Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase. Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-05-06:** Phases 0, 1, 2, 2.5, 3, 3.5, and 3.6 are complete and **end-to-end verified on Brick Builder HQ staging** through ten releases (v0.1.0 through v0.5.3 on `main`). **Phase 4 Day 1 just shipped in v0.6.0-alpha.1** — the Bridges admin tab + `JEDB_Bridge_Types_Manager` give the long-reserved `jedb_bridge_types` setting a UI (no engine code touched). Phase 4 Day 2 (Bridge meta box on Woo product edit screen) and Day 3 (CCT-single → linked-post redirect shim) are next. All upstream architectural decisions remain locked (D-1 → D-24) and all known platform caveats documented (L-001 → L-024). Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
@@ -1177,7 +1236,7 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 - Implement `Target_Woo_Product` in full, with HPOS-safe writes.
 - Build the `Woo_Product_Meta_Box` with type select + linked-CCT picker + direction toggle.
 - Build the **Bridges admin tab** (`class-tab-bridges.php`) for managing the `jedb_bridge_types` JSON via UI.
-- Implement the CCT-single → Woo-product redirect shim.
+- Implement the CCT-single → linked-post redirect shim (target-agnostic per §4.6 — works for any bridged post type, opt-in per bridge type).
 - Implement loop-safe CCT↔Woo PUSH and PULL through the existing flattener.
 - ✅ **Exit criterion**: editing the Available Sets CCT updates the matching simple Woo product (and vice versa) without recursion, and the Woo product page loads when visiting the CCT single URL.
 
@@ -1217,6 +1276,85 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 - ✅ **Exit criterion**: passes a basic security pass (no public unauthenticated writes, no SQL injection paths, all admin AJAX nonced, snippet editor blocked for non-admins).
 
 **Total estimated build**: ~11 working days end-to-end, of which ~6 are net-new code (Phases 4, 4b, 5b) and the rest are port-and-generalize.
+
+### 7.1 Staging verification log — Phases 0 through 3.6
+
+Each phase boundary that ships runtime behavior gets verified end-to-end on Brick Builder HQ staging (`bbhq.legworklabs.com`) before being marked complete. Every entry below cites the actual artifact (sync_log row id, debug log line, SQL inspection) that proved the assertion.
+
+#### Phase 2 — Relation Injector port (v0.3.0)
+
+| Assertion | Evidence |
+|---|---|
+| Picker UI on CCT edit screen attaches relations on save | `wp_jet_rel_8` row created with `parent=1, child=395` after first picker save (per L-014 verified contract). |
+| L-001/L-007 JE field-storage resolution works on JE 3.8.5 | Discovery diagnostic (Debug tab) reports `meta_fields` source = `wp_jet_post_types` row decoded successfully. |
+
+#### Phase 2.5 — Bidirectional architecture lock + picker visibility fix (v0.3.1)
+
+| Assertion | Evidence |
+|---|---|
+| L-017 self-heal: picker sees products created by JE auto-create (not just via WC API) | Picker dropdown lists products created by raw `wp_insert_post` after switching `Target_Woo_Product::list_records()` to `WP_Query` direct. |
+
+#### Phase 3 — Forward-direction flatten engine (v0.4.0)
+
+| Assertion | Evidence |
+|---|---|
+| CCT save triggers forward push at hook priority 20 (D-19) | `[Flattener] hooks registered ... priority: 20` lines in `jedb-debug.log`. |
+| Mapped fields written via HPOS-safe adapter | `wp_jedb_sync_log` row id 6 (2026-05-03 02:50:13): `direction=push, status=success, fields=["regular_price"]`. |
+| Sync_Guard prevents same-direction recursion | Same-source-id consecutive saves never produce duplicate write rows. |
+| Diff engine NOOPs when source/target already match | `wp_jedb_sync_log` rows 2, 3, 5 — `status=noop, message="every mapped value already matched target"`. |
+
+#### Phase 3 hotfix — L-021 self-heal (v0.4.1)
+
+| Assertion | Evidence |
+|---|---|
+| Engine falls back to `cct_single_post_id` when relation row missing | `[Flattener] auto-attached JE relation via cct_single_post_id fallback (L-021 self-heal)` line at 2026-05-05 23:28:42. |
+| Fallback writes the missing relation row idempotently | `[Attacher] attach: connection inserted {"relation_id":"9", parent_id:2, child_id:403}` at the same timestamp. New row in `wp_jet_rel_9` confirmed via SQL. |
+| Fast path activates after first self-heal | Subsequent sync at 2026-05-05 23:31:53 logs `resolution: "relation_row"` (not `fallback_single_page`) and `auto_attached: false`. |
+| Condition DSL gates correctly in both directions of the boolean | Mosaic 2 with `display_price_publicly = "no"` → `skipped_condition` (rows at 23:28:42 and 23:32:25); switched to `"yes"` → `success` (row at 23:31:53). |
+
+#### Phase 3.5 — Reverse-direction flatten + bidirectional + auto-create (v0.5.0)
+
+| Assertion | Evidence |
+|---|---|
+| Reverse pull engine fires on `woocommerce_update_product` | `wp_jedb_sync_log` rows at 2026-05-06 00:04:11 and 00:15:27: `direction=pull, origin=wc_product_save, status=success`. |
+| Reverse pull writes mapped fields back via `Target_CCT::update` | Row 27 (00:15:27): `fields=["mosaic_name"]` resolved via `relation_row`, with `auto_attached=false`. CCT mosaic_name updated as expected. |
+| Auto-create CCT row works for unlinked posts (D-17 opt-in) | `[Reverse_Flattener] auto-created CCT row (D-17 opt-in)` at 2026-05-06 00:20:12 — new CCT _ID 5, post 404, with auto-attach via Attacher inserting relation row id 3. |
+| Reverse-direction diff engine works | Rows 28 and 30 (immediate follow-up saves) — `status=noop`, message: `every mapped value already matched source`. |
+
+#### Phase 3.5 hotfix — L-022 cascade asymmetry doc + noop log papercut (v0.5.1)
+
+| Assertion | Evidence |
+|---|---|
+| L-022 architectural finding: JE's `$db->update()` doesn't fire `updated-item/{slug}` hook | Multiple post→CCT pull writes throughout 0.5.0 testing produced **zero** `cascade=push_in_flight` markers in `wp_jedb_sync_log`. The recursion path doesn't exist on the JE side (vs. WC side which fires its hooks). Documented as a "no fix needed, document the asymmetry" finding. |
+| Forward push noop path still includes resolution / auto_attached metadata | Sync_Log rows from 0.5.1 onward show `resolution` and `auto_attached` keys on `noop` rows (papercut from 0.4.1 closed). |
+
+#### Phase 3.6 — Categorization layer (v0.5.2)
+
+| Assertion | Evidence |
+|---|---|
+| Static-per-bridge taxonomy assignment (D-20) | `wp_jedb_sync_log` row 33 (2026-05-06 03:30:34) — `direction=push, status=success, message="fields all noop, but 1 taxonomy term(s) changed"`, `taxonomies.terms_added=1`, `added_ids=[17]` (mosaics). |
+| Multi-taxonomy schema works at runtime | Bridge config `taxonomies[]` array with one rule decoded and applied successfully on every push. |
+| Live taxonomy / terms AJAX endpoint (D-24) | UI dropdowns populated correctly when target selected; user successfully picked `product_cat` from a live-fetched list. |
+| Reverse-pull skips taxonomies entirely (D-21) | Pull rows in `wp_jedb_sync_log` carry no `taxonomies` summary key (only push rows do). |
+
+#### Phase 3.6 hotfix — L-024 ordering bug + term_lookup zero-resolve warning (v0.5.3)
+
+| Assertion | Evidence |
+|---|---|
+| Mappings now run BEFORE taxonomies | `wp_jedb_sync_log` row at 2026-05-06 03:59:29 — `status=success, message="wrote 1 field(s) + 1 taxonomy term change(s)"`. The new combined message format only appears in the v0.5.3 status-determination refactor. |
+| Both `category_ids` (mapping) and `mosaics` (rule) end up applied | Same row: `fields=["category_ids"], terms_added=1 (added_ids=[17])`. Editor confirmed both terms visible on product 403 in WC admin. |
+| `apply_terms_inverse` removes terms even when mapping wrote them | Editor set `theme_idea = "available-sets"` (which `term_lookup` resolves and `set_category_ids()` writes) AND `apply_terms_inverse: ["available-sets"]`. After push, `available-sets` was NOT attached — inverse rule won. |
+| `term_lookup` zero-resolve warning fires | `jedb-debug.log` at 2026-05-06 04:01:39 — `[Transformer:term_lookup] resolved 0 term IDs from non-empty input ... unmatched_values:["nonexistant-cat"]` with the configured `match_by` and a hint surface. |
+| Cascade prevention still works post-refactor | Pull row at 03:59:29 — `status=skipped_locked, cascade=push_in_flight`, paired with the success push at the same timestamp. Bidirectional bridge correctly prevents ping-pong. |
+
+#### What's NOT yet verified (Phase 4 will exercise)
+
+- Bridge meta box on the Woo product edit screen (Phase 4).
+- Variation reconciliation engine + `show_when` mini-DSL (Phase 4b).
+- `term_assigned` trigger as a wakeup signal for reverse pull (Phase 4.5).
+- Custom Code Snippets runtime + `condition_snippet` evaluation (Phase 5b — currently logs `skipped_error`).
+- Setup-tab presets (Phase 6).
+- Capability hardening + REST auth + i18n (Phase 7).
 
 ---
 
@@ -1315,66 +1453,70 @@ replace any architectural pattern.
 they correct an assumption — it's the persistent memory for the
 plugin, not a transient session log.
 
-## 12. Next Action
+## 12. Next Action — Phase 4 readiness gate
 
-Phases 0, 1, 2, 2.5, 3, and 3.5 are complete (see `CHANGELOG.md` and
-the roadmap in §7). Phase 3.6 — the categorization layer (v0.5.2) —
-is the next implementation phase, with all architecture decisions
-already locked per D-20 → D-24 / L-023 / §4.11.
+Phases 0 through 3.6 are complete and verified end-to-end on
+Brick Builder HQ staging (see `CHANGELOG.md` for per-version detail
+and §7.1 for the verification log). **Phase 4 — the Bridge meta
+box on the WooCommerce product edit screen + the Bridges admin
+tab managing `jedb_bridge_types` JSON — is the next implementation
+phase.** This section is the readiness gate: what's in place, what
+Phase 4 will consume, and what Phase 4 will deliver.
 
-Per §7's Phase 3.6 spec, in implementation order:
+### What's already in place (consumed by Phase 4)
 
-1. **`term_lookup` transformer** —
-   `includes/flatten/transformers/class-transformer-term-lookup.php`.
-   New built-in registered alongside the existing nine. Push:
-   names/slugs/IDs → term_ids array. Pull: term_ids → names. Args:
-   `taxonomy`, `match_by`, `output`, `create_if_missing`.
+| Subsystem | Where | Phase 4 use |
+|---|---|---|
+| Forward + reverse flatten engines | `includes/flatten/class-flattener.php`, `class-reverse-flattener.php` | Meta box's "Sync now" button calls `apply_bridge()` directly. |
+| Sync_Guard | `includes/class-sync-guard.php` | Manual syncs from the meta box go through the same lock as auto-syncs (no special path). |
+| Sync_Log | `includes/class-sync-log.php` | Meta box can read recent rows for "last synced X ago" display. |
+| Target_Registry + four adapters | `includes/targets/` | Meta box queries adapters for `is_natively_rendered($field)` (D-16) to decide which fields it renders. |
+| `get_required_fields()` (D-15) | All four adapters | "Mandatory coverage" panel in the Bridges admin tab uses this. |
+| `JEDB_Flatten_Config_Manager` | `includes/flatten/class-flatten-config-manager.php` | Bridges admin tab CRUD layer for `jedb_bridge_types` will mirror this pattern. |
+| `JEDB_Taxonomy_Applier` (D-20–D-24) | `includes/flatten/class-taxonomy-applier.php` | Bridge type definitions can declare default `taxonomies[]` rules; meta box surfaces the applied terms. |
+| L-021 self-heal + L-022 cascade asymmetry | engine paths | No Phase 4 work needed — already correct. |
+| AJAX endpoints | `wp_ajax_jedb_flatten_get_target_schema`, `wp_ajax_jedb_flatten_get_post_type_taxonomies`, `wp_ajax_jedb_flatten_validate_condition` | Bridge meta box's CCT picker can reuse the schema endpoint shape. |
+| `jedb_bridge_types` settings option | `JEDB_OPTION_BRIDGE_TYPES` constant + empty default | Phase 4's Bridges admin tab finally populates this with real data. |
 
-2. **`taxonomies[]` schema in flatten config** —
-   `JEDB_Flatten_Config_Manager::default_config_json()` adds the new
-   array; `merge_with_defaults()` deep-merges per-rule defaults on
-   read so existing 0.5.x bridges get the new key filled in
-   automatically. Per-rule shape per §4.11's table.
+### What Phase 4 will deliver
 
-3. **`JEDB_Taxonomy_Applier`** —
-   `includes/flatten/class-taxonomy-applier.php`. Single public method
-   `apply_for_bridge( $taxonomies_array, $post_id, $context )`. Resolves
-   each rule's apply/inverse terms, calls `wp_set_object_terms()` and
-   `wp_remove_object_terms()`, returns a per-rule outcome array for
-   sync log context.
+1. **`includes/admin/class-tab-bridges.php`** — new admin tab "Bridges" between Relations and Flatten. UI to manage the `jedb_bridge_types` setting (Available Set, Mosaic, Mosaic Instructions PDF). Each bridge type definition declares: slug, label, linked source (CCT slug), linked target (post_type), `link_via`, default direction, default `taxonomies[]` rules, optional `variations[]` block (Phase 4b), optional `default_field_mappings[]` (template that the Flatten admin tab can clone from when creating a new flatten config). Export/import of the entire `jedb_bridge_types` array as JSON.
 
-4. **Forward flattener integration** —
-   `JEDB_Flattener::apply_bridge()` calls the applier between condition
-   check and field mappings. Reverse flattener skips it entirely (D-21).
+2. **`includes/admin/class-woo-product-meta-box.php`** — meta box on `product` and `product_variation` edit screens. Per L-012 / D-16: renders the Bridge Type select (populated from `jedb_bridge_types`), the linked CCT item Ajax picker, the direction toggle (CCT-canonical vs Product-canonical, per D-2), the `Sync now` button, and a status block ("Last synced 3 minutes ago via bridge id X — view sync log"). Renders inputs ONLY for fields where the target adapter's `is_natively_rendered()` returns false; native Woo fields stay in their native boxes and the sync engine talks to them via the typed-setter API.
 
-5. **Admin AJAX endpoint** —
-   `wp_ajax_jedb_flatten_get_post_type_taxonomies` in
-   `JEDB_Tab_Flatten`. Returns `{taxonomies: [{slug, label,
-   hierarchical, terms:[...]}]}` for a given post type via
-   `get_object_taxonomies()` + `get_terms()`.
+3. **Variation Scope control on the meta box** (per §4.5): radio for `Bridge the parent product` vs `Bridge a specific variation`. The variation picker only appears when the product is variable AND scope is set to `specific variation`. Hooks into `Target_Woo_Variation`.
 
-6. **Flatten admin tab UI** —
-   `templates/admin/tab-flatten.php` gets a new "Taxonomies"
-   collapsible section visible only when `target_target` is `posts::*`.
-   Per-rule UI per §4.11. JS in `assets/js/flatten-admin.js` queries
-   the new endpoint when the target post type changes.
+4. **CCT-single → linked-post redirect shim** (per §4.6 — target-agnostic): on `template_redirect`, if the current request is a JE CCT single page AND the CCT row has a linked post via any active bridge AND the bridge type has `cct_single_redirect: true`, do a `wp_safe_redirect( get_permalink( $linked_post_id ), 301 )`. The linked post can be a `product`, a `story_bricks` CPT, or any other post type — the shim resolves through the bridge's `link_via`, no Woo dependency. This is what makes "Has Single Page = the linked post" work without building a separate CCT single template.
 
-7. **Sync log context enhancement** — flatten apply records
-   `taxonomies_applied` (count) and per-rule outcome
-   (`{taxonomy, added: [...], removed: [...], created: [...]}`)
-   in `context_json`.
+5. **Stored product-side meta** per §4.5 D-10:
+   - `_jedb_bridge_type` — the slug of the governing bridge type.
+   - `_jedb_bridge_locked` — bool, "freeze sync for this product."
+   - `_jedb_bridge_direction` — per-product override of the bridge type's default direction.
+   - **NO** `_jedb_bridge_cct_id` — link lives in JE Relations only (D-10).
 
-8. **Version bump + docs** — bootstrap to 0.5.2, CHANGELOG entry,
-   README + readme.txt + workspace docs, BUILD-PLAN status update,
-   commit + push.
+6. **End-to-end verification** on Brick Builder HQ staging — replicate the existing flatten-config-only setup as bridge-type-driven, prove parity, then migrate.
 
-All architectural decisions Phase 3.6 / Phase 4 need are locked
-(D-1 through D-24, with L-021 / L-022 / L-023 refinements). All
-known JE / WC / WP caveats are documented (L-001 through L-023).
-The forward + reverse flatteners, sync guard, sync log, transformer
-registry, condition evaluator, adapter-owned `is_natively_rendered` /
-`get_required_fields` methods, and now the locked-in taxonomy
-schema are all ready for Phase 4's Bridge meta box to consume.
+### Phase 4 exit criterion
+
+Editing the Available Sets CCT updates the matching simple Woo product (via the bridge type's mappings), and editing the same product back updates the CCT — same engine paths as today, just configured through the Bridges admin tab and meta box rather than raw Flatten configs. The CCT single URL redirects to the product permalink. Sync log records every operation with `bridge_type` slug populated.
+
+### Phase 4 estimate
+
+Per §7's roadmap: ~3 days. Sub-day breakdown:
+
+- Day 1: Bridges admin tab CRUD on `jedb_bridge_types` + JSON import/export + manage UI.
+- Day 2: Bridge meta box on product / variation edit screens (incl. live AJAX picker, status block, native-field detection, direction toggle).
+- Day 3: Redirect shim + integration testing + verification log entry in §7.1.
+
+### What stays NOT in Phase 4
+
+- Variation reconciliation engine + `show_when` mini-DSL — Phase 4b.
+- `term_assigned` trigger — Phase 4.5.
+- Custom Code Snippets runtime — Phase 5b.
+- Setup tab presets — Phase 6.
+- Capability gating beyond `manage_options`, REST auth hardening, i18n .pot — Phase 7.
+
+All architectural decisions Phase 4 needs are locked: D-1 through D-24, with L-021 / L-022 / L-023 / L-024 refinements all in. All known JE / WC / WP caveats are documented (L-001 through L-024). The forward + reverse flatteners, sync guard, sync log, transformer registry, condition evaluator, adapter-owned `is_natively_rendered` / `get_required_fields` methods, taxonomy applier, and live-querying admin AJAX endpoints are all production-verified and ready for the meta box to consume.
 
 ## 13. Historical reference: original "Next Action" notes from §8 lock-in
 

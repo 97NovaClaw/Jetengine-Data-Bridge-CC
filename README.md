@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.5.3 — Phases 3, 3.5, and 3.6 complete. Bidirectional sync + categorization layer work end-to-end. Editing a CCT pushes mapped fields onto the linked Woo / CPT record AND assigns configured taxonomies on push; editing the post propagates fields back to the CCT (taxonomies are push-only per D-21). v0.5.3 fixes the L-024 engine-ordering bug where a `taxonomies[]` rule and a `term_lookup` mapping both targeting the same taxonomy slot could silently clobber each other; mappings now run BEFORE taxonomies so taxonomy rules get the final word. `term_lookup` now logs a warning when input non-empty but resolves to zero IDs (catches the `match_by` / value-shape mismatch that's the #1 misconfig). Phase 4 (Bridge meta box on Woo product edit screen) is the next implementation phase.
+**Status:** v0.6.0-alpha.1 — Phases 0 through 3.6 complete and **verified end-to-end on Brick Builder HQ staging**, plus **Phase 4 Day 1 in progress**. Day 1 ships the Bridges admin tab + `JEDB_Bridge_Types_Manager`, finally giving the long-reserved `jedb_bridge_types` site option a UI. Bridge types are *templates* — Phase 4 Day 2 (the Bridge meta box on the Woo product edit screen) will clone them into concrete flatten configs when an editor wires up an individual product. **No engine code was touched in this release** — the flattener / reverse flattener / sync guard / taxonomy applier behave identically to v0.5.3. See [`CHANGELOG.md`](./CHANGELOG.md) for the full v0.6.0-alpha.1 entry and [`BUILD-PLAN.md`](./BUILD-PLAN.md) §12 for the Phase 4 readiness gate.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -16,10 +16,11 @@ The plugin's documentation is split across four files, each with a specific job.
 
 | Doc | Purpose | Read when |
 |---|---|---|
-| [`BUILD-PLAN.md`](./BUILD-PLAN.md) | Authoritative architecture spec. Every section, sub-system, decision, and phase deliverable. **17 locked decisions (D-1 through D-19)** are the contracts the plugin honors. | Always — before starting any new work. |
-| [`LESSONS-LEARNED.md`](./LESSONS-LEARNED.md) | 20 entries (L-001 through L-020) capturing every false assumption, API surprise, and architectural correction we've made. Each entry: context, wrong, evidence, reality, affected code, fix shipped, prevention rule. | Before touching CCT/CPT/Woo data adapters, the JE config-storage resolver, the relation-attachment subsystem, sync direction, snippet runtime, or table-prefix discipline. |
+| [`BUILD-PLAN.md`](./BUILD-PLAN.md) | Authoritative architecture spec. Every section, sub-system, decision, and phase deliverable. **24 locked decisions (D-1 through D-24)** are the contracts the plugin honors. §7.1 contains the staging verification log; §12 is the Phase 4 readiness gate. | Always — before starting any new work. |
+| [`LESSONS-LEARNED.md`](./LESSONS-LEARNED.md) | 24 entries (L-001 through L-024) capturing every false assumption, API surprise, and architectural correction we've made. Each entry: context, wrong, evidence, reality, affected code, fix shipped, prevention rule. | Before touching CCT/CPT/Woo data adapters, the JE config-storage resolver, the relation-attachment subsystem, sync direction, taxonomy applier, transformer ordering, snippet runtime, or table-prefix discipline. |
 | [`CHANGELOG.md`](./CHANGELOG.md) | Per-version delta. Each release lists Added / Fixed / Changed with cross-references to L-NNN and D-NN identifiers. | When you need to know what changed between two versions. |
 | `README.md` *(this file)* | Capability snapshot, install instructions, doc map, current roadmap status. | First read for new contributors; ongoing reference for "what does this thing actually do right now". |
+| `readme.txt` | WP.org-style readme used by WP-Admin updater. Mirrors the most-recent two minor versions of CHANGELOG. | When publishing or shipping a release. |
 
 The `Refrence but block from git/` folder at the workspace root contains the three reference plugins (Jet Engine Relation Injector, PAC Vehicle Data Manager, JFB WC Quotes Advanced) we ported and learned from. It's gitignored at the workspace level — those plugins live in their own repos.
 
@@ -32,6 +33,7 @@ This plugin consolidates three earlier bespoke plugins (Jet Engine Relation Inje
 - **Relation pre-attachment** on CCT edit screens — pick a related parent before the CCT row is saved (the "save twice" UX problem JetEngine has natively, eliminated).
 - **PULL/PUSH field flattening** between related records, so derived fields stay in sync without editor effort. **Bidirectional but explicitly asymmetric** per D-17 — JE handles auto-create one direction, our plugin handles the other.
 - **Field locker** — fields whose value is sourced from another record render greyed-out with a "source" tooltip.
+- **Generic record-store bridges** — the engine speaks four adapter kinds: `cct::*` (JE CCTs), `posts::{post_type}` (CPTs), `posts::product` (HPOS-safe Woo product), `posts::product_variation` (HPOS-safe Woo variation). Any source ↔ target pair is supported (CCT↔Woo, CCT↔CPT, CPT↔CCT, CCT↔CCT, CPT↔CPT). The CCT ↔ Woo product example below is the headline use case for Brick Builder HQ — not a constraint of the engine. See BUILD-PLAN §4.5.1 for the full source/target compatibility matrix.
 - **WooCommerce product bridge** — a CCT row and a Woo product (or a specific variation) can be linked 1:1 via JE Relations (D-10 — JE Relations primary, no parallel `_jedb_bridge_cct_id` meta), edited from either side, and kept in sync via HPOS-safe writes.
 - **Variation reconciliation** — a bridge type can declare variations with `show_when` rules so toggles like "Has Instructions PDF" automatically materialize the right Woo variation.
 - **Conditional sync** — multiple bridge configs can share a source target with disjoint conditions (D-14). Trigger taxonomy (D-18) handles the *when* axis; condition DSL or snippet handles the *whether* axis.
@@ -41,9 +43,9 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.5.3)
+## What's actually shipped right now (v0.6.0-alpha.1)
 
-**Functional capabilities (cumulative through Phase 3):**
+**Functional capabilities (cumulative through Phase 3.6 + Phase 4 Day 1):**
 
 - ✅ **Custom plugin tables created on activation** (`wp_jedb_relation_configs`, `wp_jedb_flatten_configs`, `wp_jedb_sync_log`, `wp_jedb_snippets`).
 - ✅ **Snippets uploads folder** (`wp-content/uploads/jedb-snippets/`) with `.htaccess` (`deny from all`) + silent `index.php`.
@@ -61,6 +63,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 - ✅ **`term_lookup` transformer** (Phase 3.6, v0.5.2) — push: names/slugs/IDs → term IDs (array); pull: term IDs → names/slugs. Use to map a CCT string field onto a Woo taxonomy field like `category_ids` via the existing per-mapping transformer chain. Composes with the `taxonomies[]` array.
 - ✅ **`taxonomies[]` array on flatten configs** (Phase 3.6, v0.5.2) — bridge configs carry per-bridge taxonomy rules with per-rule merge strategy (append/replace), explicit term removal via `apply_terms_inverse`, optional `create_if_missing`, and a forward-compat `snippet` slot for Phase 5b. Push-only semantics in v1 per D-21.
 - ✅ **Live taxonomy UI** (Phase 3.6, v0.5.2) — Flatten admin tab gains a Taxonomies section visible only when `target_target` is `posts::*`. Dropdowns are populated via the new `wp_ajax_jedb_flatten_get_post_type_taxonomies` endpoint; editors pick from registered taxonomies + existing terms instead of typing slugs by hand. `JEDB_TAX_TERMS_LIMIT` (default 100) caps the per-taxonomy term return count.
+- ✅ **Bridges admin tab + `JEDB_Bridge_Types_Manager`** (Phase 4 Day 1, v0.6.0-alpha.1) — the long-reserved `jedb_bridge_types` site option finally gets a UI. Each bridge type is a template that declares source / target / direction / link_via / default mappings / default taxonomies / `cct_single_redirect` opt-in. CRUD wrapper validates uniqueness on save, fires `jedb/bridge_types/changed` on every write. Tab includes JSON export (browser download) and import (paste with optional replace-all). Live JE Relation picker scoped to the chosen source/target via new `wp_ajax_jedb_bridges_get_relations_for_pair` endpoint.
 - ✅ **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 - ✅ **Sync Log** — every bridge invocation writes a row to `wp_jedb_sync_log` with status from the BUILD-PLAN §4.9 taxonomy (`success`, `partial`, `errored`, `skipped_condition`, `skipped_error`, `skipped_locked`, `skipped_no_target`, `noop`).
 - ✅ **Transformer registry** — 9 built-in transformers (`passthrough`, `yes_no_to_bool`, `regex_replace`, `format_number`, `lookup_table`, `name_builder`, `truncate_words`, `strip_html`, `year_expander`). Per D-11 / L-010 each transformer defines push and pull explicitly.
@@ -71,15 +74,36 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 **What's NOT shipped yet (Phase 4+):**
 
 - ❌ Snippet-mode for `condition_snippet` — bridges that set it log `skipped_error` until Phase 5b ships the snippet runtime. Declarative DSL conditions work fully.
-- ❌ Bridge meta box on Woo product edit screen — Phase 4.
-- ❌ Variation reconciliation engine — Phase 4b.
+- ❌ Bridge meta box on Woo product edit screen — Phase 4 Day 2 (next).
+- ❌ CCT-single → linked-post redirect shim (BUILD-PLAN §4.6 — target-agnostic; works for any bridged post type) — Phase 4 Day 3.
+- ❌ Variation reconciliation engine + `show_when` mini-DSL — Phase 4b.
+- ❌ `term_assigned` trigger (D-18) — Phase 4.5.
 - ❌ Custom Code Snippets runtime — Phase 5b. Settings table reserved.
 - ❌ Setup-tab presets — Phase 6.
 - ❌ Capability gating beyond `manage_options`, REST endpoint hardening, i18n .pot — Phase 7.
 
 ---
 
-## Current file tree (v0.5.3)
+## Verification snapshot (Brick Builder HQ staging)
+
+Each phase that ships runtime behavior is verified end-to-end on `bbhq.legworklabs.com` before being marked complete. Every assertion below cites the actual sync_log row, debug log line, or SQL inspection that proved it.
+
+| Phase | Version | Verified behavior | Top evidence |
+|---|---|---|---|
+| 2 | v0.3.0 | Picker UI attaches relations on save | `wp_jet_rel_8` row created with `parent=1, child=395` after first picker save. |
+| 2.5 | v0.3.1 | Picker sees products created by JE auto-create (L-017) | Picker dropdown lists products created by raw `wp_insert_post` after switching to `WP_Query` direct. |
+| 3 | v0.4.0 | Forward push at hook priority 20 (D-19); diff engine NOOPs cleanly | `wp_jedb_sync_log` row id 6, status=success, fields=["regular_price"]. Rows 2/3/5: status=noop. |
+| 3 hotfix | v0.4.1 | L-021 self-heal auto-attaches missing relation rows via `cct_single_post_id` fallback | `[Flattener] auto-attached JE relation via cct_single_post_id fallback` at 2026-05-05 23:28:42. |
+| 3.5 | v0.5.0 | Reverse pull engine fires on `woocommerce_update_product`; D-17 auto-create works | Sync_log row at 2026-05-06 00:20:12 — `direction=pull, auto_created=true, target_id=405`. |
+| 3.5 hotfix | v0.5.1 | L-022 architectural finding: JE's `$db->update()` doesn't fire its hooks; cascade asymmetry is benign | Zero `cascade=push_in_flight` markers ever appeared on pull writes through 0.5.0/0.5.1 testing. |
+| 3.6 | v0.5.2 | Static `taxonomies[]` rules apply on push; reverse pull skips taxonomies (D-21) | Sync_log row id 33 at 2026-05-06 03:30:34 — `terms_added=1, added_ids=[17]`. |
+| 3.6 hotfix | v0.5.3 | L-024 ordering: mappings run BEFORE taxonomies so rules get the final word | Sync_log row at 2026-05-06 03:59:29 — `wrote 1 field(s) + 1 taxonomy term change(s)`, both `category_ids` and term 17 applied. `apply_terms_inverse` correctly removes a term written by a `term_lookup` mapping. |
+
+Full verification log with per-phase assertion tables lives in [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7.1.
+
+---
+
+## Current file tree (v0.6.0-alpha.1)
 
 ```
 je-data-bridge-cc/
@@ -87,7 +111,7 @@ je-data-bridge-cc/
 ├── uninstall.php                            Drops tables, removes options
 ├── README.md / readme.txt                   This file + WP.org-style readme
 ├── BUILD-PLAN.md                            Authoritative architecture spec
-├── LESSONS-LEARNED.md                       L-001 through L-020
+├── LESSONS-LEARNED.md                       L-001 through L-024
 ├── CHANGELOG.md                             Per-version delta
 ├── LICENSE                                  GPL v2
 │
@@ -143,9 +167,11 @@ je-data-bridge-cc/
 │   │
 │   └── admin/
 │       ├── class-admin-shell.php            Top-level menu + tab router
+│       ├── class-bridge-types-manager.php   Phase 4 Day 1 — CRUD on jedb_bridge_types option
 │       ├── class-tab-targets.php            Targets inventory tab
 │       ├── class-tab-relations.php          Relations picker config tab
 │       ├── class-tab-flatten.php            Forward-flatten bridge editor (Phase 3)
+│       ├── class-tab-bridges.php            Phase 4 Day 1 — Bridge-type definitions tab
 │       └── class-tab-debug.php              Debug log viewer + diagnostics
 │
 ├── templates/admin/
@@ -154,16 +180,18 @@ je-data-bridge-cc/
 │   ├── tab-targets.php                      Targets inventory
 │   ├── tab-relations.php                    Relations config + per-CCT cards
 │   ├── tab-flatten.php                      Flatten bridge list + add/edit form
+│   ├── tab-bridges.php                      Phase 4 Day 1 — Bridge-type definitions
 │   ├── relation-config-card.php             Single CCT's relation config
 │   └── tab-debug.php                        Log viewer + Discovery / CCT diagnostics
 │
 └── assets/
     ├── css/
-    │   ├── admin.css                        Admin-shell + tab styling (incl. Flatten)
+    │   ├── admin.css                        Admin-shell + tab styling (incl. Flatten + Bridges)
     │   └── relation-injector.css            Picker block + modal + relation cards
     └── js/
         ├── relation-injector.js             Picker UI on CCT edit screens
-        └── flatten-admin.js                 Mapping editor + transformer args + condition validate
+        ├── flatten-admin.js                 Mapping editor + transformer args + condition validate
+        └── bridges-admin.js                 Phase 4 Day 1 — bridge-types editor + JSON export/import
 ```
 
 ### Custom tables created on activation
@@ -224,7 +252,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers + L-021 self-heal | **✅ Complete** (v0.4.0 → v0.4.1) |
 | 3.5 | Reverse-direction flatten (post → CCT) + bidirectional bridges + auto-create CCT (D-17) per BUILD-PLAN §4.10 + L-022 cascade-asymmetry doc | **✅ Complete** (v0.5.0 → v0.5.1, verified on staging) |
 | 3.6 | Categorization layer: `term_lookup` transformer + `taxonomies[]` array + post-only push semantics (D-20 → D-24, L-023, BUILD-PLAN §4.11) | **✅ Complete** (v0.5.2 → v0.5.3, L-024 ordering fix) |
-| 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | **▶ Next up** |
+| 4  | Bridge meta box on Woo product edit screen + Bridges admin tab | **▶ In progress** — Day 1 Bridges admin tab + `JEDB_Bridge_Types_Manager` shipped in v0.6.0-alpha.1; Day 2 (meta box) + Day 3 (redirect shim) pending |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
 | 4.5 | `term_assigned` trigger (term changes as wakeup events for reverse engine; D-18 trigger taxonomy implementation) | Pending |
 | 5  | Settings API + debug log viewer enhancements + utilities export/import | Pending |

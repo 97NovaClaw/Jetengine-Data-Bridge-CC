@@ -39,13 +39,16 @@ class JEDB_Admin_Shell {
 	}
 
 	private function load_tabs() {
+		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-bridge-types-manager.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-targets.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-relations.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-flatten.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-bridges.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-tab-debug.php';
 		JEDB_Tab_Targets::instance();
 		JEDB_Tab_Relations::instance();
 		JEDB_Tab_Flatten::instance();
+		JEDB_Tab_Bridges::instance();
 		JEDB_Tab_Debug::instance();
 	}
 
@@ -81,6 +84,16 @@ class JEDB_Admin_Shell {
 			wp_enqueue_script(
 				'jedb-flatten-admin',
 				JEDB_PLUGIN_URL . 'assets/js/flatten-admin.js',
+				array( 'jquery' ),
+				JEDB_VERSION,
+				true
+			);
+		}
+
+		if ( 'bridges' === $current_tab ) {
+			wp_enqueue_script(
+				'jedb-bridges-admin',
+				JEDB_PLUGIN_URL . 'assets/js/bridges-admin.js',
 				array( 'jquery' ),
 				JEDB_VERSION,
 				true
