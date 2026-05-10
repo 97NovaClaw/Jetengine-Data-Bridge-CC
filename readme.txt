@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.1
+Stable tag: 0.6.0-alpha.2
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.1) ==
+== Current Capability (v0.6.0-alpha.2) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -41,7 +41,7 @@ This is an in-progress port consolidating three earlier private plugins. Functio
 * **Auto-create CCT row** (v0.5.0, D-17 opt-in) — when a post saves with no linked CCT row, the reverse engine can optionally create a fresh CCT row in the bridge's source target and auto-attach the relation. Default OFF; opt-in per bridge.
 * **Categorization layer** (Phase 3.6, v0.5.2) — bridges can categorize posts on push via two complementary mechanisms: a new `term_lookup` transformer for per-row dynamic categorization (composes with the existing per-mapping transformer chain), and a new `taxonomies[]` array on flatten configs for static-per-bridge multi-taxonomy assignment with per-rule merge strategy (append/replace), explicit term removal via `apply_terms_inverse`, optional `create_if_missing`, and forward-compat with Phase 5b snippets. Push-only semantics in v1 (D-21).
 * **Live taxonomy UI** (Phase 3.6, v0.5.2) — Flatten admin tab gains a Taxonomies section visible only when `target_target` is `posts::*`. Editors pick from registered taxonomies + existing terms via dropdowns instead of typing slugs.
-* **Bridges admin tab + Bridge Types Manager** (Phase 4 Day 1, v0.6.0-alpha.1) — the long-reserved `jedb_bridge_types` site option finally has a UI. Bridge types are templates (source/target/direction/link_via/default mappings/default taxonomies) that the Phase 4 Day 2 Bridge meta box will clone into concrete flatten configs when an editor wires up an individual product. Includes JSON export/import.
+* **Bridges admin tab + Bridge Types Manager** (Phase 4 Day 1, v0.6.0-alpha.1 → alpha.2) — the long-reserved `jedb_bridge_types` site option finally has a UI. Bridge types are templates with admin metadata (slug/label/source/target/direction) plus a `flatten_defaults` sub-object whose shape mirrors the flatten config payload exactly — pasting raw flatten "Advanced JSON" into the Bridges admin tab works verbatim (per L-025). Includes JSON export/import. Phase 4 Day 2 Bridge meta box on Woo product edit screens will clone bridge types into concrete flatten configs.
 * **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 * **Sync Log** — every bridge invocation writes a row with status from the `success / partial / errored / skipped_condition / skipped_error / skipped_locked / skipped_no_target / noop` taxonomy.
 * **Transformer registry** — 9 built-ins (passthrough, yes_no_to_bool, regex_replace, format_number, lookup_table, name_builder, truncate_words, strip_html, year_expander). Each defines push and pull explicitly.
@@ -93,6 +93,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.6.0-alpha.2 =
+* Phase 4 / Day 1 hotfix — bridge type schema realigned with flatten config (L-025). Pasting a working flatten config's "Advanced JSON" into the Bridges admin tab "Defaults JSON" textarea now Just Works — the textarea accepts a raw flatten config payload verbatim. Cause: alpha.1 used `default_field_mappings`, `default_taxonomies`, `default_condition`, `default_priority` keys at the top level. Flatten configs use `mappings`, `taxonomies`, `condition`, `priority`. The schema mismatch silently dropped the user's pasted values. Fix: bridge types now wrap the flatten config payload in a `flatten_defaults` sub-object whose keys match `JEDB_Flatten_Config_Manager::default_config_json()` exactly. Top-level metadata (slug, label, description, source/target/direction, enabled, cct_single_redirect, variations) stays at the top of the bridge type entry. NO engine code touched. Silent on-read migration for any alpha.1 entries — no editor action required.
+
 = 0.6.0-alpha.1 =
 * Phase 4 / Day 1 — Bridges admin tab + JEDB_Bridge_Types_Manager. The long-reserved `jedb_bridge_types` site option finally gets a UI. Bridge types are templates (source/target/direction/link_via/default mappings/default taxonomies/cct_single_redirect opt-in) that the Phase 4 Day 2 Bridge meta box on Woo product edit screens will clone into concrete flatten configs when an editor wires up an individual product. New AJAX endpoints `jedb_bridges_export` and `jedb_bridges_get_relations_for_pair`. New form actions `jedb_bridges_save`/`toggle`/`delete`/`import` with optional replace-all on import. NO engine code touched — flattener / reverse flattener / sync guard / taxonomy applier are byte-identical to v0.5.3. This is alpha.1 because Phase 4 isn't feature-complete; Day 2 (meta box) and Day 3 (redirect shim) follow.
 
@@ -128,6 +131,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.2 =
+Schema realignment for bridge types — alpha.1 entries silently migrate on read. No editor action required. Pasting raw flatten config "Advanced JSON" into the Bridges admin tab now works verbatim (L-025). NO engine code touched.
 
 = 0.6.0-alpha.1 =
 Phase 4 / Day 1 — Bridges admin tab + Bridge Types Manager. No schema migration; no behavior change for existing 0.5.x sites. Engine code is byte-identical to v0.5.3 — this release adds the configuration template layer; the Phase 4 Day 2 Bridge meta box (next release) is the consumer.

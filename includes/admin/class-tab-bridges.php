@@ -73,48 +73,119 @@ class JEDB_Tab_Bridges {
 	 * Form handlers
 	 * -------------------------------------------------------------------- */
 
+	/**
+	 * Per L-025: the textarea is a *flatten config payload*, not a fragment
+	 * of the bridge type. So decoded JSON goes under `flatten_defaults`,
+	 * top-level metadata comes from form fields, and form fields for things
+	 * the flatten config also tracks (priority, condition, link_via,
+	 * auto_create_target_when_unlinked) override what's in the JSON for
+	 * those specific keys.
+	 *
+	 * Pasting raw flatten "Advanced JSON" works verbatim.
+	 */
 	public function handle_save() {
 
 		$this->guard( 'jedb_bridges_save' );
 
 		$original_slug = isset( $_POST['original_slug'] ) ? sanitize_key( wp_unslash( $_POST['original_slug'] ) ) : '';
 
-		$config_raw = isset( $_POST['bridge_type_json'] ) ? (string) wp_unslash( $_POST['bridge_type_json'] ) : '';
-		$decoded    = json_decode( $config_raw, true );
-		if ( ! is_array( $decoded ) ) {
-			$decoded = array();
+		$json_raw = isset( $_POST['flatten_defaults_json'] ) ? (string) wp_unslash( $_POST['flatten_defaults_json'] ) : '';
+		$pasted   = json_decode( $json_raw, true );
+		if ( ! is_array( $pasted ) ) {
+			$pasted = array();
 		}
+		$pasted = $this->unwrap_flatten_payload( $pasted );
 
-		$decoded['slug']                             = isset( $_POST['slug'] )              ? sanitize_key( wp_unslash( $_POST['slug'] ) )                                       : '';
-		$decoded['label']                            = isset( $_POST['label'] )             ? sanitize_text_field( wp_unslash( $_POST['label'] ) )                              : '';
-		$decoded['description']                      = isset( $_POST['description'] )       ? sanitize_textarea_field( wp_unslash( $_POST['description'] ) )                    : '';
-		$decoded['source_target']                    = isset( $_POST['source_target'] )     ? sanitize_text_field( wp_unslash( $_POST['source_target'] ) )                       : '';
-		$decoded['target_target']                    = isset( $_POST['target_target'] )     ? sanitize_text_field( wp_unslash( $_POST['target_target'] ) )                       : '';
-		$decoded['default_direction']                = isset( $_POST['default_direction'] ) ? sanitize_key( wp_unslash( $_POST['default_direction'] ) )                          : 'push';
-		$decoded['default_priority']                 = isset( $_POST['default_priority'] )  ? (int) $_POST['default_priority']                                                  : 100;
-		$decoded['default_condition']                = isset( $_POST['default_condition'] ) ? (string) wp_unslash( $_POST['default_condition'] )                                : '';
-		$decoded['enabled']                          = isset( $_POST['enabled'] );
-		$decoded['auto_create_target_when_unlinked'] = isset( $_POST['auto_create_target_when_unlinked'] );
-		$decoded['cct_single_redirect']              = isset( $_POST['cct_single_redirect'] );
-
-		$decoded['link_via'] = array(
-			'type'                    => isset( $_POST['link_via_type'] )                    ? sanitize_key( wp_unslash( $_POST['link_via_type'] ) )                                  : 'je_relation',
-			'relation_id'             => isset( $_POST['link_via_relation_id'] )             ? (string) wp_unslash( $_POST['link_via_relation_id'] )                                  : '',
-			'side'                    => isset( $_POST['link_via_side'] )                    ? sanitize_key( wp_unslash( $_POST['link_via_side'] ) )                                  : 'auto',
-			'fallback_to_single_page' => isset( $_POST['link_via_fallback_to_single_page'] ),
-			'auto_attach_relation'    => isset( $_POST['link_via_auto_attach_relation'] ),
+		$bt = array(
+			'slug'                => isset( $_POST['slug'] )                ? sanitize_key( wp_unslash( $_POST['slug'] ) )                : '',
+			'label'               => isset( $_POST['label'] )               ? sanitize_text_field( wp_unslash( $_POST['label'] ) )        : '',
+			'description'         => isset( $_POST['description'] )         ? sanitize_textarea_field( wp_unslash( $_POST['description'] ) ) : '',
+			'source_target'       => isset( $_POST['source_target'] )       ? sanitize_text_field( wp_unslash( $_POST['source_target'] ) ) : '',
+			'target_target'       => isset( $_POST['target_target'] )       ? sanitize_text_field( wp_unslash( $_POST['target_target'] ) ) : '',
+			'direction'           => isset( $_POST['direction'] )           ? sanitize_key( wp_unslash( $_POST['direction'] ) )           : 'push',
+			'enabled'             => isset( $_POST['enabled'] ),
+			'cct_single_redirect' => isset( $_POST['cct_single_redirect'] ),
+			'variations'          => isset( $pasted['variations'] ) && is_array( $pasted['variations'] ) ? $pasted['variations'] : array(),
 		);
 
-		$result = JEDB_Bridge_Types_Manager::instance()->upsert( $decoded, $original_slug );
+		// Build flatten_defaults: start from pasted, then form-field overrides.
+		$fd = $pasted;
+		// Strip non-flatten-payload keys that the user may have pasted from
+		// a wider JSON dump — the manager will normalize unknown keys away
+		// but we filter the obvious bridge-type-level keys for clarity.
+		$bt_top_level_keys = array( 'slug', 'label', 'description', 'source_target', 'target_target', 'direction', 'enabled', 'cct_single_redirect', 'variations', 'created_at', 'updated_at' );
+		foreach ( $bt_top_level_keys as $k ) {
+			unset( $fd[ $k ] );
+		}
+
+		// Form field overrides for things both the form AND the flatten payload
+		// can specify. Form wins.
+		if ( isset( $_POST['priority'] ) ) {
+			$fd['priority'] = (int) $_POST['priority'];
+		}
+		if ( isset( $_POST['condition'] ) ) {
+			$fd['condition'] = (string) wp_unslash( $_POST['condition'] );
+		}
+		if ( isset( $_POST['auto_create_target_when_unlinked'] ) ) {
+			$fd['auto_create_target_when_unlinked'] = true;
+		} elseif ( isset( $_POST['auto_create_present'] ) ) {
+			// The form was rendered (auto_create_present hidden field present)
+			// but the checkbox wasn't ticked → false. This avoids treating an
+			// absent form submission as "use whatever was pasted".
+			$fd['auto_create_target_when_unlinked'] = false;
+		}
+
+		// link_via: form is the source of truth (Day 1 — picker UI lives here).
+		// We always overwrite from form fields when the form submitted them.
+		if ( isset( $_POST['link_via_type'] ) ) {
+			$fd['link_via'] = array(
+				'type'                    => sanitize_key( wp_unslash( $_POST['link_via_type'] ) ),
+				'relation_id'             => isset( $_POST['link_via_relation_id'] ) ? (string) wp_unslash( $_POST['link_via_relation_id'] ) : '',
+				'side'                    => isset( $_POST['link_via_side'] ) ? sanitize_key( wp_unslash( $_POST['link_via_side'] ) ) : 'auto',
+				'fallback_to_single_page' => isset( $_POST['link_via_fallback_to_single_page'] ),
+				'auto_attach_relation'    => isset( $_POST['link_via_auto_attach_relation'] ),
+			);
+		}
+
+		$bt['flatten_defaults'] = $fd;
+
+		$result = JEDB_Bridge_Types_Manager::instance()->upsert( $bt, $original_slug );
 
 		if ( ! $result['ok'] ) {
 			$this->redirect_back( 'save_failed', array(
-				'edit'  => $original_slug !== '' ? $original_slug : $decoded['slug'],
+				'edit'  => $original_slug !== '' ? $original_slug : $bt['slug'],
 				'error' => $this->stash_error( $result['error'] ),
 			) );
 		}
 
 		$this->redirect_back( 'config_saved', array( 'edit' => $result['bridge_type']['slug'] ) );
+	}
+
+	/**
+	 * Per L-025: editors might paste any of three shapes into the textarea:
+	 *
+	 *   1. A raw flatten config inner block (most common — copy from the
+	 *      Flatten admin tab's "Advanced JSON" details).
+	 *   2. A wrapper like { "flatten_defaults": { ... } } (from a bridge
+	 *      type export).
+	 *   3. An entire bridge type entry (from a bridge_types export).
+	 *
+	 * Unwrap to the inner flatten payload regardless of which they pasted.
+	 *
+	 * @param array $pasted
+	 * @return array
+	 */
+	private function unwrap_flatten_payload( array $pasted ) {
+
+		if ( isset( $pasted['flatten_defaults'] ) && is_array( $pasted['flatten_defaults'] ) ) {
+			return $pasted['flatten_defaults'];
+		}
+
+		// Heuristic for "this looks like a bridge type entry": has slug/label
+		// AND has flatten_defaults. The first branch already handled that.
+		// Other shapes pass through as-is.
+
+		return $pasted;
 	}
 
 	public function handle_toggle() {

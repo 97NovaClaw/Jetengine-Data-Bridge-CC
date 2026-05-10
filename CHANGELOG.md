@@ -2,6 +2,110 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.2] — 2026-05-10
+
+**Phase 4 / Day 1 hotfix — bridge type schema realigned with flatten config (L-025).**
+
+Staging testing surfaced a UX trap in alpha.1: pasting a working flatten
+config's "Advanced JSON" into the Bridges admin tab "Defaults JSON"
+textarea would save successfully but silently drop every mapping and
+taxonomy rule. Cause: alpha.1 used `default_field_mappings`,
+`default_taxonomies`, `default_condition`, `default_priority` keys at
+the top level of a bridge type. Flatten configs use `mappings`,
+`taxonomies`, `condition`, `priority` (no prefix). When the user
+pasted, `wp_parse_args` sanitization was looking for the prefixed keys,
+didn't find them, and silently fell back to the empty defaults.
+
+The fix locks in the architectural principle: **a bridge type IS a
+flatten config template; their inner shapes must mirror each other.**
+Documented as L-025.
+
+### Changed (schema)
+
+- **`JEDB_Bridge_Types_Manager::default_bridge_type()`** restructured.
+  The bridge type now has top-level metadata (`slug`, `label`,
+  `description`, `source_target`, `target_target`, `direction`,
+  `enabled`, `cct_single_redirect`, `variations`, timestamps) plus a
+  single `flatten_defaults` sub-object that mirrors
+  `JEDB_Flatten_Config_Manager::default_config_json()` EXACTLY —
+  same keys, same shapes (`mappings`, `taxonomies`, `condition`,
+  `condition_snippet`, `priority`, `trigger`, `link_via`,
+  `auto_create_target_when_unlinked`, `required_overrides`,
+  `origin_tag`).
+- **Top-level field renames:**
+  `default_direction` → `direction`.
+- **Moved into `flatten_defaults` sub-object:**
+  `default_field_mappings` → `flatten_defaults.mappings`,
+  `default_taxonomies` → `flatten_defaults.taxonomies`,
+  `default_condition` → `flatten_defaults.condition`,
+  `default_priority` → `flatten_defaults.priority`,
+  `link_via` → `flatten_defaults.link_via`,
+  `auto_create_target_when_unlinked` →
+  `flatten_defaults.auto_create_target_when_unlinked`.
+
+### Added
+
+- **`JEDB_Bridge_Types_Manager::default_flatten_defaults()`** — public
+  static helper returning the inner block defaults. Delegates to
+  `JEDB_Flatten_Config_Manager::default_config_json()` when that class
+  is loaded; otherwise returns a hard-coded mirror. Single source of
+  truth for the inner shape.
+- **`JEDB_Bridge_Types_Manager::upgrade_alpha1_shape()`** — silent on-read
+  back-compat migration. Detects alpha.1-shaped entries (top-level
+  `default_*` keys) and lifts them into `flatten_defaults` without
+  any user action. Idempotent. Persists in alpha.2 shape on the
+  next save. No data loss for editors who already created bridge
+  types under alpha.1.
+- **`JEDB_Tab_Bridges::unwrap_flatten_payload()`** — accepts three
+  paste shapes for the JSON textarea:
+  (1) raw flatten config inner block (most common — copy from the
+  Flatten admin tab's Advanced JSON),
+  (2) `{ "flatten_defaults": { ... } }` wrapper from a bridge type
+  export,
+  (3) full bridge type entry (the inner `flatten_defaults` is
+  unwrapped automatically).
+  All three round-trip cleanly.
+- **Form fields for `priority` and `condition`** added to the bridge
+  type editor. Both write into `flatten_defaults.*` and override
+  what's in the pasted JSON for those specific keys (form is the
+  source of truth for keys it manages).
+
+### Fixed
+
+- **L-025: silent data loss** when pasting raw flatten "Advanced JSON"
+  into the Bridges admin tab. Root cause was the alpha.1
+  `default_*` key naming. After this release the textarea accepts
+  raw flatten payloads verbatim.
+
+### Behavior unchanged
+
+- **Still no engine code touched.** `JEDB_Flattener`,
+  `JEDB_Reverse_Flattener`, `JEDB_Sync_Guard`,
+  `JEDB_Taxonomy_Applier`, every transformer, condition evaluator,
+  and all four target adapters are byte-identical to v0.5.3 / alpha.1.
+- **Existing flatten configs unchanged.** `wp_jedb_flatten_configs`
+  rows from v0.4.0 → v0.5.3 keep working through the Flatten admin
+  tab as before.
+
+### Migration / upgrade notes
+
+- **Automatic migration on read.** If you saved any bridge types in
+  alpha.1, their alpha.1-shaped entries silently migrate to alpha.2
+  shape on the next read. The next save persists the new shape. No
+  manual action required. No data loss.
+- **No schema migration** for the option itself — it's still a flat
+  indexed array in `jedb_bridge_types`.
+
+### Architectural lesson locked
+
+- **L-025 (`LESSONS-LEARNED.md`):** "When system A is a template
+  for system B, A's inner shape MUST mirror B's. Don't gratuitously
+  rename keys — every rename is a paper cut every time the user
+  copy-pastes between the two surfaces, and silent renames cause
+  silent data loss."
+
+---
+
 ## [0.6.0-alpha.1] — 2026-05-06
 
 **Phase 4 / Day 1 — Bridges admin tab + `JEDB_Bridge_Types_Manager`.**

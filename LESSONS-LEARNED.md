@@ -1814,3 +1814,189 @@ This makes the user-config gotcha self-diagnosing.
    Always log a warning with enough context to fix it.
 
 ---
+
+## L-025: Bridge type and flatten config inner shapes MUST mirror each other — gratuitous key renames between a template and its instance cause silent data loss
+
+**Discovered:** 2026-05-10 (Phase 4 / Day 1, version 0.6.0-alpha.1 → alpha.2)
+**Severity:** High (silent data loss, save reports success)
+**Category:** Architecture / Schema design
+
+### Context
+Phase 4 Day 1 introduced the Bridges admin tab and `JEDB_Bridge_Types_Manager`,
+which manages a list of *bridge type templates* in the `jedb_bridge_types`
+site option. Each bridge type is meant to be a template that the Phase 4
+Day 2 Bridge meta box clones into a concrete `wp_jedb_flatten_configs`
+row when an editor wires up an individual product.
+
+Editors had a perfectly natural workflow expectation:
+1. Build a working bridge in the Flatten admin tab manually (mappings,
+   taxonomies, condition, trigger, etc.).
+2. Click "Show advanced JSON" on that flatten config to see the raw
+   payload.
+3. Copy it.
+4. Paste it into a bridge type's "Defaults JSON" textarea.
+5. Save. Future products linked to this bridge type now start from
+   that proven baseline.
+
+### Wrong
+The alpha.1 bridge type schema gave the inner config keys a
+`default_` prefix to signal "these are templates that get cloned":
+
+```
+flatten config (wp_jedb_flatten_configs.config_json):
+  mappings, taxonomies, condition, condition_snippet, priority,
+  trigger, link_via, auto_create_target_when_unlinked,
+  required_overrides, origin_tag
+
+bridge type (alpha.1):
+  default_field_mappings  ←  not "mappings"
+  default_taxonomies      ←  not "taxonomies"
+  default_condition       ←  not "condition"
+  default_priority        ←  not "priority"
+  default_direction       ←  (top-level rename)
+  link_via                ←  same name (good)
+  auto_create_target_when_unlinked  ←  same name (good)
+  (no trigger, condition_snippet, required_overrides, origin_tag)
+```
+
+Every key the user paste-tested with had a different name in the
+bridge type schema. `wp_parse_args( $input, $defaults )` saw a payload
+of `mappings` / `taxonomies` / `condition` / `priority` and the
+defaults of `default_field_mappings` / `default_taxonomies` etc.,
+silently kept the user's keys as "extra fields" but ALSO filled in
+the empty defaults for the prefixed keys. Then the per-key
+sanitizers ran on the prefixed keys (which were empty) and stored
+empty arrays. The user's pasted values were never written to any
+field the manager would later read.
+
+### Evidence
+The user's report:
+> "I tried copying the raw config (advanced) JSON from flatten tab and
+> pasting it into a bridges defaults json and when i clicked save, it
+> didn't actually save it."
+
+The bridge type save flow:
+1. JSON textarea → `$decoded` array with keys `mappings`, `taxonomies`, …
+2. Form fields override `slug`, `label`, `source_target`, `target_target`,
+   `default_direction`, `default_priority`, `default_condition`, etc.
+   (form ALWAYS writes to the prefixed keys).
+3. `prepare_for_storage()` calls `wp_parse_args()` which keeps
+   `mappings` / `taxonomies` as extra keys but also adds empty
+   `default_field_mappings: []` / `default_taxonomies: []` from defaults.
+4. `sanitize_mappings()` is called on `$bt['default_field_mappings']`
+   → empty in, empty out. **The user's `mappings` array is now an
+   orphan with no sanitizer touching it.**
+5. The manager-level `merge_with_defaults()` is the read path —
+   it only knows `default_field_mappings`. The orphan `mappings`
+   key is never read back.
+6. Reload form → the `default_field_mappings` slot is empty, which
+   the template renders as an empty array. **User sees: "the JSON
+   I pasted didn't save."**
+
+### Reality
+The save did persist the row. It even persisted the user's pasted
+keys (under their original names — `mappings`, `taxonomies`). But
+**nothing in the manager's read path or render path knew to look
+for those names.** The data was orphaned the moment it hit storage.
+
+This is the same shape of bug as L-024 (silent data loss disguised
+as success), but with a different root cause: instead of "ordering
+clobbers data," it's "schema mismatch silently drops data."
+
+### Fix shipped in
+v0.6.0-alpha.2 (this release).
+
+**Schema realignment:** the bridge type's inner config block was
+restructured to match the flatten config's `config_json` shape
+EXACTLY. New shape:
+
+```
+bridge_type (alpha.2):
+  slug, label, description,                     (admin metadata)
+  source_target, target_target, direction,      (relationship metadata)
+  enabled, cct_single_redirect, variations,     (toggles + Phase 4b)
+  flatten_defaults: {
+    mappings, taxonomies, condition, condition_snippet,
+    priority, trigger, link_via,
+    auto_create_target_when_unlinked,
+    required_overrides, origin_tag,             (← matches flatten config)
+  },
+  created_at, updated_at,
+```
+
+The Bridge meta box's clone operation (Day 2) becomes a one-liner:
+`$flatten_config['config'] = $bridge_type['flatten_defaults']`.
+No translation table, no key remapping.
+
+**Back-compat:** `JEDB_Bridge_Types_Manager::upgrade_alpha1_shape()`
+runs on every read. If an entry has alpha.1 top-level keys
+(`default_field_mappings`, `default_taxonomies`, etc.), they're
+silently lifted into `flatten_defaults` and the prefixed keys are
+removed. Idempotent. Persists in alpha.2 shape on the next save.
+No editor action required.
+
+**Paste-shape tolerance:** the save handler's
+`unwrap_flatten_payload()` accepts three textarea shapes:
+1. Raw flatten config inner block (most common — copy from
+   Flatten admin tab's Advanced JSON).
+2. Wrapper `{ "flatten_defaults": { ... } }` (from a bridge type
+   export).
+3. Full bridge type entry (the inner `flatten_defaults` is auto-unwrapped).
+
+All three round-trip cleanly. Pasting raw flatten "Advanced JSON"
+verbatim now Just Works.
+
+### Affected code
+- `includes/admin/class-bridge-types-manager.php` —
+  `default_bridge_type()`, `default_flatten_defaults()`,
+  `prepare_for_storage()`, `sanitize_flatten_defaults()`,
+  `upgrade_alpha1_shape()`, `merge_with_defaults()`. Schema
+  refactor + back-compat migration.
+- `includes/admin/class-tab-bridges.php` — `handle_save()` rewritten
+  around the new shape; new `unwrap_flatten_payload()` helper.
+- `templates/admin/tab-bridges.php` — form field renames
+  (`default_direction` → `direction`, `default_priority` → `priority`,
+  `default_condition` → `condition`), Defaults JSON textarea shows
+  the `flatten_defaults` block directly with the new "this IS a
+  flatten config payload" framing, list-table column derivations
+  read from `$bt['flatten_defaults']` instead of top-level keys.
+- `LESSONS-LEARNED.md` (this entry).
+
+### Prevention
+1. **When System A is a template for System B, A's inner shape MUST
+   mirror B's.** Don't gratuitously rename keys to "signal that A
+   is a template" — every rename is a paper cut every time someone
+   copy-pastes between the two surfaces, and silent renames cause
+   silent data loss. If you need to flag "this is a template,"
+   wrap the payload in a sub-object (`flatten_defaults`) or add
+   metadata at a higher level — don't rename the keys themselves.
+2. **Make the copy-paste workflow a first-class design criterion.**
+   "Can I paste a raw flatten payload into the bridge type editor
+   and have it Just Work?" was a workflow the user discovered on
+   their own. The schema should welcome it, not punish it.
+3. **`wp_parse_args` is permissive — sanitizers must be too.**
+   `wp_parse_args` doesn't drop unknown keys (it merges them in).
+   So if the sanitizer only touches known keys, unknown keys
+   silently survive. Either:
+   - Whitelist the keys the sanitizer cares about and explicitly
+     drop everything else (so unknown input fails loudly), OR
+   - Match the schema such that the keys the user is likely to
+     send ARE the keys the sanitizer expects (this lesson's fix).
+4. **Save → reload → re-edit is the integration test for any
+   config UI.** When a user reports "I saved this but it didn't
+   stick," it's almost always either:
+   - A schema mismatch between the form and storage (this lesson), or
+   - A sanitizer that strips the value too aggressively, or
+   - An asymmetry between write and read paths.
+   Test the full round-trip on every config form, with realistic
+   editor-pasted payloads, before considering a feature shipped.
+5. **Phase 4 `flatten_defaults` block is now load-bearing — keep it
+   in sync with `JEDB_Flatten_Config_Manager::default_config_json()`.**
+   `JEDB_Bridge_Types_Manager::default_flatten_defaults()` delegates
+   to that method when the class is loaded; otherwise it returns
+   a hard-coded mirror. If the flatten config schema ever grows
+   a new key, both surfaces must be updated together — and the
+   alpha.1 → alpha.2 migration template (`upgrade_alpha1_shape()`)
+   becomes the prototype for any future schema migrations.
+
+---

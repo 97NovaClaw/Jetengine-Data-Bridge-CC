@@ -30,6 +30,11 @@ $editing       = '' !== $edit_slug ? $manager->get_by_slug( $edit_slug ) : null;
 $is_edit       = (bool) $editing;
 $bridge_type   = $editing ? $editing : JEDB_Bridge_Types_Manager::default_bridge_type();
 
+// Defensive: ensure flatten_defaults is an array even on a fresh form.
+$flatten_defaults = isset( $bridge_type['flatten_defaults'] ) && is_array( $bridge_type['flatten_defaults'] )
+	? $bridge_type['flatten_defaults']
+	: JEDB_Bridge_Types_Manager::default_flatten_defaults();
+
 $all_types       = $manager->get_all();
 $target_options  = $tab->get_eligible_targets();
 
@@ -114,8 +119,10 @@ endif;
 			</thead>
 			<tbody>
 			<?php foreach ( $all_types as $bt ) :
-				$mappings_count = is_array( $bt['default_field_mappings'] ) ? count( $bt['default_field_mappings'] ) : 0;
-				$tax_count      = is_array( $bt['default_taxonomies'] )     ? count( $bt['default_taxonomies'] )     : 0;
+				$bt_fd          = isset( $bt['flatten_defaults'] ) && is_array( $bt['flatten_defaults'] ) ? $bt['flatten_defaults'] : array();
+				$bt_link_via    = isset( $bt_fd['link_via'] ) && is_array( $bt_fd['link_via'] ) ? $bt_fd['link_via'] : array();
+				$mappings_count = isset( $bt_fd['mappings'] )   && is_array( $bt_fd['mappings'] )   ? count( $bt_fd['mappings'] )   : 0;
+				$tax_count      = isset( $bt_fd['taxonomies'] ) && is_array( $bt_fd['taxonomies'] ) ? count( $bt_fd['taxonomies'] ) : 0;
 				$is_on          = ! empty( $bt['enabled'] );
 			?>
 				<tr>
@@ -129,11 +136,11 @@ endif;
 					</td>
 					<td><code><?php echo esc_html( $bt['source_target'] ); ?></code></td>
 					<td><code><?php echo esc_html( $bt['target_target'] ); ?></code></td>
-					<td><code><?php echo esc_html( $bt['default_direction'] ); ?></code></td>
+					<td><code><?php echo esc_html( $bt['direction'] ); ?></code></td>
 					<td>
-						<code><?php echo esc_html( $bt['link_via']['type'] ); ?></code>
-						<?php if ( 'je_relation' === $bt['link_via']['type'] && '' !== $bt['link_via']['relation_id'] ) : ?>
-							<br><small>rel #<?php echo esc_html( $bt['link_via']['relation_id'] ); ?></small>
+						<code><?php echo esc_html( $bt_link_via['type'] ?? 'je_relation' ); ?></code>
+						<?php if ( ( $bt_link_via['type'] ?? '' ) === 'je_relation' && ! empty( $bt_link_via['relation_id'] ) ) : ?>
+							<br><small>rel #<?php echo esc_html( $bt_link_via['relation_id'] ); ?></small>
 						<?php endif; ?>
 					</td>
 					<td>
@@ -243,44 +250,49 @@ endif;
 				</td>
 			</tr>
 			<tr>
-				<th><?php esc_html_e( 'Default direction', 'je-data-bridge-cc' ); ?></th>
+				<th><?php esc_html_e( 'Direction', 'je-data-bridge-cc' ); ?></th>
 				<td>
-					<label><input type="radio" name="default_direction" value="push"          <?php checked( $bridge_type['default_direction'], 'push' ); ?> /> <?php esc_html_e( 'Push (source → target)', 'je-data-bridge-cc' ); ?></label><br>
-					<label><input type="radio" name="default_direction" value="pull"          <?php checked( $bridge_type['default_direction'], 'pull' ); ?> /> <?php esc_html_e( 'Pull (target → source)', 'je-data-bridge-cc' ); ?></label><br>
-					<label><input type="radio" name="default_direction" value="bidirectional" <?php checked( $bridge_type['default_direction'], 'bidirectional' ); ?> /> <?php esc_html_e( 'Bidirectional', 'je-data-bridge-cc' ); ?></label>
+					<label><input type="radio" name="direction" value="push"          <?php checked( $bridge_type['direction'], 'push' ); ?> /> <?php esc_html_e( 'Push (source → target)', 'je-data-bridge-cc' ); ?></label><br>
+					<label><input type="radio" name="direction" value="pull"          <?php checked( $bridge_type['direction'], 'pull' ); ?> /> <?php esc_html_e( 'Pull (target → source)', 'je-data-bridge-cc' ); ?></label><br>
+					<label><input type="radio" name="direction" value="bidirectional" <?php checked( $bridge_type['direction'], 'bidirectional' ); ?> /> <?php esc_html_e( 'Bidirectional', 'je-data-bridge-cc' ); ?></label>
 					<p class="description"><?php esc_html_e( 'Per-product override is exposed in the Bridge meta box (Day 2).', 'je-data-bridge-cc' ); ?></p>
 				</td>
 			</tr>
 			<tr>
-				<th><label for="jedb_bridges_priority"><?php esc_html_e( 'Default priority', 'je-data-bridge-cc' ); ?></label></th>
+				<th><label for="jedb_bridges_priority"><?php esc_html_e( 'Priority', 'je-data-bridge-cc' ); ?></label></th>
 				<td>
-					<input id="jedb_bridges_priority" name="default_priority" type="number" class="small-text" min="0" max="999" value="<?php echo esc_attr( (int) $bridge_type['default_priority'] ); ?>" />
-					<p class="description"><?php esc_html_e( 'Lower runs first when multiple bridges share the same source.', 'je-data-bridge-cc' ); ?></p>
+					<input id="jedb_bridges_priority" name="priority" type="number" class="small-text" min="0" max="999" value="<?php echo esc_attr( (int) ( $flatten_defaults['priority'] ?? 100 ) ); ?>" />
+					<p class="description"><?php esc_html_e( 'Lower runs first when multiple bridges share the same source. Stored as flatten_defaults.priority.', 'je-data-bridge-cc' ); ?></p>
 				</td>
 			</tr>
 			<tr>
-				<th><label for="jedb_bridges_default_condition"><?php esc_html_e( 'Default condition', 'je-data-bridge-cc' ); ?></label></th>
+				<th><label for="jedb_bridges_condition"><?php esc_html_e( 'Condition (optional)', 'je-data-bridge-cc' ); ?></label></th>
 				<td>
-					<textarea id="jedb_bridges_default_condition" name="default_condition" rows="2" cols="80" class="large-text code" placeholder='{source.display_price_publicly} == "yes"'><?php echo esc_textarea( $bridge_type['default_condition'] ); ?></textarea>
-					<p class="description"><?php esc_html_e( 'Optional. Cloned into the flatten config on first link. Editors can override per-product later. v1 DSL — see BUILD-PLAN §3.5.', 'je-data-bridge-cc' ); ?></p>
+					<textarea id="jedb_bridges_condition" name="condition" rows="2" cols="80" class="large-text code" placeholder='{source.display_price_publicly} == "yes"'><?php echo esc_textarea( $flatten_defaults['condition'] ?? '' ); ?></textarea>
+					<p class="description"><?php esc_html_e( 'Optional. Cloned into the flatten config on first link. v1 DSL — see BUILD-PLAN §3.5. Stored as flatten_defaults.condition.', 'je-data-bridge-cc' ); ?></p>
 				</td>
 			</tr>
+			<?php
+			$lv = isset( $flatten_defaults['link_via'] ) && is_array( $flatten_defaults['link_via'] )
+				? $flatten_defaults['link_via']
+				: JEDB_Bridge_Types_Manager::default_flatten_defaults()['link_via'];
+			?>
 			<tr>
 				<th><?php esc_html_e( 'Link via', 'je-data-bridge-cc' ); ?></th>
 				<td>
-					<label><input type="radio" name="link_via_type" value="je_relation"        <?php checked( $bridge_type['link_via']['type'], 'je_relation' ); ?> /> <?php esc_html_e( 'JetEngine Relation', 'je-data-bridge-cc' ); ?></label>
+					<label><input type="radio" name="link_via_type" value="je_relation"        <?php checked( $lv['type'], 'je_relation' ); ?> /> <?php esc_html_e( 'JetEngine Relation', 'je-data-bridge-cc' ); ?></label>
 					&nbsp;&nbsp;
-					<label><input type="radio" name="link_via_type" value="cct_single_post_id" <?php checked( $bridge_type['link_via']['type'], 'cct_single_post_id' ); ?> /> <?php esc_html_e( '"Has Single Page" post ID (cct_single_post_id)', 'je-data-bridge-cc' ); ?></label>
+					<label><input type="radio" name="link_via_type" value="cct_single_post_id" <?php checked( $lv['type'], 'cct_single_post_id' ); ?> /> <?php esc_html_e( '"Has Single Page" post ID (cct_single_post_id)', 'je-data-bridge-cc' ); ?></label>
 
 					<div id="jedb_bridges_relation_picker_wrap" style="margin-top:12px;">
 						<label for="jedb_bridges_link_via_relation_id"><?php esc_html_e( 'Relation:', 'je-data-bridge-cc' ); ?></label>
-						<select id="jedb_bridges_link_via_relation_id" name="link_via_relation_id" data-current-id="<?php echo esc_attr( $bridge_type['link_via']['relation_id'] ); ?>">
+						<select id="jedb_bridges_link_via_relation_id" name="link_via_relation_id" data-current-id="<?php echo esc_attr( $lv['relation_id'] ); ?>">
 							<option value=""><?php esc_html_e( '— Select source + target first, then pick —', 'je-data-bridge-cc' ); ?></option>
-							<?php if ( '' !== $bridge_type['link_via']['relation_id'] ) : ?>
-								<option value="<?php echo esc_attr( $bridge_type['link_via']['relation_id'] ); ?>" selected>
+							<?php if ( '' !== $lv['relation_id'] ) : ?>
+								<option value="<?php echo esc_attr( $lv['relation_id'] ); ?>" selected>
 									<?php
 									/* translators: %s = relation ID */
-									printf( esc_html__( 'Relation #%s (current — refresh after save to verify endpoints)', 'je-data-bridge-cc' ), esc_html( $bridge_type['link_via']['relation_id'] ) );
+									printf( esc_html__( 'Relation #%s (current — refresh after save to verify endpoints)', 'je-data-bridge-cc' ), esc_html( $lv['relation_id'] ) );
 									?>
 								</option>
 							<?php endif; ?>
@@ -294,7 +306,7 @@ endif;
 							<?php esc_html_e( 'Self-heal options (when JE Relation is the link type)', 'je-data-bridge-cc' ); ?>
 						</legend>
 						<label style="display:block;margin:6px 0;">
-							<input type="checkbox" name="link_via_fallback_to_single_page" value="1" <?php checked( ! empty( $bridge_type['link_via']['fallback_to_single_page'] ) ); ?> />
+							<input type="checkbox" name="link_via_fallback_to_single_page" value="1" <?php checked( ! empty( $lv['fallback_to_single_page'] ) ); ?> />
 							<?php esc_html_e( 'Fall back to cct_single_post_id when no relation row exists', 'je-data-bridge-cc' ); ?>
 							<br>
 							<small style="color:#646970;display:block;margin-left:24px;">
@@ -302,7 +314,7 @@ endif;
 							</small>
 						</label>
 						<label style="display:block;margin:6px 0;">
-							<input type="checkbox" name="link_via_auto_attach_relation" value="1" <?php checked( ! empty( $bridge_type['link_via']['auto_attach_relation'] ) ); ?> />
+							<input type="checkbox" name="link_via_auto_attach_relation" value="1" <?php checked( ! empty( $lv['auto_attach_relation'] ) ); ?> />
 							<?php esc_html_e( 'Auto-attach the missing relation row when the fallback fires', 'je-data-bridge-cc' ); ?>
 							<br>
 							<small style="color:#646970;display:block;margin-left:24px;">
@@ -315,12 +327,13 @@ endif;
 			<tr>
 				<th><?php esc_html_e( 'Reverse-direction options', 'je-data-bridge-cc' ); ?></th>
 				<td>
+					<input type="hidden" name="auto_create_present" value="1" />
 					<label>
-						<input type="checkbox" name="auto_create_target_when_unlinked" value="1" <?php checked( ! empty( $bridge_type['auto_create_target_when_unlinked'] ) ); ?> />
+						<input type="checkbox" name="auto_create_target_when_unlinked" value="1" <?php checked( ! empty( $flatten_defaults['auto_create_target_when_unlinked'] ) ); ?> />
 						<?php esc_html_e( 'Default: auto-create source CCT row when an unlinked post saves (D-17)', 'je-data-bridge-cc' ); ?>
 					</label>
 					<p class="description" style="margin-left:24px;">
-						<?php esc_html_e( 'Cloned into the flatten config as default. Editors can flip per-product later. Default OFF because the action creates data.', 'je-data-bridge-cc' ); ?>
+						<?php esc_html_e( 'Cloned into the flatten config as default. Editors can flip per-product later. Default OFF because the action creates data. Stored as flatten_defaults.auto_create_target_when_unlinked.', 'je-data-bridge-cc' ); ?>
 					</p>
 				</td>
 			</tr>
@@ -347,29 +360,22 @@ endif;
 				</td>
 			</tr>
 			<tr>
-				<th><label for="jedb_bridges_json"><?php esc_html_e( 'Defaults JSON', 'je-data-bridge-cc' ); ?></label></th>
+				<th><label for="jedb_bridges_json"><?php esc_html_e( 'Flatten defaults (JSON)', 'je-data-bridge-cc' ); ?></label></th>
 				<td>
 					<details <?php echo $is_edit ? 'open' : ''; ?>>
-						<summary style="cursor:pointer;font-weight:600;"><?php esc_html_e( 'Default field mappings, taxonomies, variations (raw JSON)', 'je-data-bridge-cc' ); ?></summary>
-						<p class="description" style="margin-top:8px;">
-							<?php esc_html_e( 'Phase 4 Day 1 ships the "shape" — the Bridge meta box (Day 2) reads this JSON when an editor first links a product, clones it into a flatten config, then editors fine-tune per-product in the Flatten admin tab. For now, the easiest workflow is:', 'je-data-bridge-cc' ); ?>
-							<br>
-							1. <?php esc_html_e( 'Configure one bridge in the Flatten admin tab manually (mappings + taxonomies).', 'je-data-bridge-cc' ); ?>
-							<br>
-							2. <?php esc_html_e( 'Copy its mappings[] and taxonomies[] arrays into this JSON.', 'je-data-bridge-cc' ); ?>
-							<br>
-							3. <?php esc_html_e( 'Save the bridge type. Future products linked to this type will start from those defaults.', 'je-data-bridge-cc' ); ?>
+						<summary style="cursor:pointer;font-weight:600;"><?php esc_html_e( 'mappings, taxonomies, trigger, required_overrides (raw JSON — same shape as a flatten config)', 'je-data-bridge-cc' ); ?></summary>
+						<p class="description" style="margin-top:8px;max-width:760px;">
+							<strong><?php esc_html_e( 'This block IS a flatten config payload.', 'je-data-bridge-cc' ); ?></strong>
+							<?php esc_html_e( 'Same key names, same shapes. The Bridge meta box (Phase 4 Day 2) will literally copy this JSON into a new flatten config row when an editor wires up a product.', 'je-data-bridge-cc' ); ?>
 						</p>
-						<textarea id="jedb_bridges_json" name="bridge_type_json" rows="14" cols="100" class="large-text code"><?php
-							$json_payload = array(
-								'default_field_mappings' => $bridge_type['default_field_mappings'],
-								'default_taxonomies'     => $bridge_type['default_taxonomies'],
-								'variations'             => $bridge_type['variations'],
-							);
-							echo esc_textarea( wp_json_encode( $json_payload, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) );
+						<p class="description" style="margin-top:6px;max-width:760px;">
+							<?php esc_html_e( 'Recommended workflow: configure one working bridge in the Flatten admin tab (mappings + taxonomies + condition + trigger), then copy that bridge\'s "Advanced JSON" verbatim into this textarea. Form fields above (priority, condition, link_via, auto_create) override anything in the JSON for those specific keys.', 'je-data-bridge-cc' ); ?>
+						</p>
+						<textarea id="jedb_bridges_json" name="flatten_defaults_json" rows="18" cols="100" class="large-text code"><?php
+							echo esc_textarea( wp_json_encode( $flatten_defaults, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE ) );
 						?></textarea>
 						<p class="description">
-							<?php esc_html_e( 'Top-level keys: default_field_mappings (array), default_taxonomies (array), variations (array — Phase 4b). Other top-level keys (slug, label, source_target, target_target, default_direction, etc.) are read from the form fields above and override anything you put in the JSON.', 'je-data-bridge-cc' ); ?>
+							<?php esc_html_e( 'Accepted shapes: a raw flatten config payload (mappings, taxonomies, condition, condition_snippet, priority, trigger, link_via, auto_create_target_when_unlinked, required_overrides, origin_tag), OR a wrapper { "flatten_defaults": { ... } } from a bridge type export, OR a full bridge type entry (the inner flatten_defaults block is unwrapped on save).', 'je-data-bridge-cc' ); ?>
 						</p>
 					</details>
 				</td>
@@ -410,9 +416,9 @@ endif;
 
 <script type="application/json" id="jedb-bridges-bootstrap"><?php
 echo wp_json_encode( array(
-	'ajax_url'       => admin_url( 'admin-ajax.php' ),
-	'nonce'          => wp_create_nonce( 'jedb_bridges_admin' ),
-	'editing_slug'   => $is_edit ? $bridge_type['slug'] : '',
-	'current_link_via_relation_id' => (string) $bridge_type['link_via']['relation_id'],
+	'ajax_url'                     => admin_url( 'admin-ajax.php' ),
+	'nonce'                        => wp_create_nonce( 'jedb_bridges_admin' ),
+	'editing_slug'                 => $is_edit ? $bridge_type['slug'] : '',
+	'current_link_via_relation_id' => isset( $flatten_defaults['link_via']['relation_id'] ) ? (string) $flatten_defaults['link_via']['relation_id'] : '',
 ) );
 ?></script>
