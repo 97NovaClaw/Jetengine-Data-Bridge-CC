@@ -2,6 +2,64 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.5] — 2026-05-11
+
+**Phase 4 / Day 2 follow-up — Bridge meta box surface mechanics decoupled from sync mechanics + data-loss bug fix.**
+
+Staging testing of alpha.4's Bridge meta box surfaced two real issues the user identified:
+
+1. **Surfacing required a `target_field`** even when the editor's intent was purely "edit this CCT field from the product page" (no sync side effect needed). Adding a fake target like `_jedb_demo_field` was the awkward workaround.
+2. **Data-loss bug**: after the meta box save wrote to source, the next product save's reverse-pull engine would diff against stale target values and clobber the source. The alpha.4 pull-lock hack only protected within the current request; subsequent requests would still desync.
+
+alpha.5 fixes both. The mapping schema now supports three modes (pure-surface / native-overlay / sync-and-surface) that decouple "where to render the editor UI" from "what data must live where."
+
+### Changed
+
+- **`JEDB_Woo_Product_Meta_Box::build_surfaced_groups()`** restructured.
+  - **Dropped the D-16 native-rendering skip for surface.** Editor's `surface_on_target` tick is now authoritative. If they want to render an editable `mosaic_name` input alongside Woo's native title input, they can — CCT-canonical (D-2) handles conflicts.
+  - **Dropped the empty-`target_field` skip.** A mapping with `source_field` set, `target_field=''`, `surface_on_target=true` now renders as a "pure-surface" editor — saves write back to source, no target shadow data created, no push/pull on this mapping.
+  - **Tracks skipped mappings** with reasons (disabled, no source_field, etc.) so the template can show useful "you ticked this box, here's why it didn't render" diagnostics instead of a blank-state message that wrongly implies you forgot to tick.
+  - **Returns `{groups, skipped}`** instead of just the groups array.
+  - Each rendered field gets a `mode` annotation: `pure_surface` / `native_overlay` / `sync_and_surface`. The template renders a small uppercase pill next to each field so editors see at a glance what the field does.
+- **`JEDB_Woo_Product_Meta_Box::apply_surfaced_edits_for_bridge()`** — replaced the alpha.4 pull-lock hack with an explicit forward-push call after the source write. Now:
+  - Source adapter write.
+  - Sync log row 1: meta_box_inline_save.
+  - **`JEDB_Flattener::apply_bridge()` invoked synchronously** with origin tag `meta_box_post_save_push`. This acquires the push lock, runs all mappings (propagating new source values to target), runs taxonomy rules. The reverse pull that fires later in the same request on `woocommerce_update_product` sees the push lock at its cascade check and bails with `skipped_locked, cascade=push_in_flight`. Clean.
+  - Sync log row 2: meta_box_post_save_push (logged by apply_bridge itself).
+  - If the push status is not success/noop, the engine logs a warning to `jedb-debug.log` flagging that the next product save's reverse pull may clobber source — gives editors a diagnostic trail.
+- **`templates/admin/meta-box-bridge.php`** — three new presentation states:
+  - **Mode pills** next to each rendered field: `surface only` (info), `native overlay` (warn), or no pill for the default sync+surface mode. Hovering shows a tooltip explaining the semantics.
+  - **Skipped-mapping diagnostic** when `$surfaced_groups` is empty but `$surface_skipped` has entries — explicitly lists each `source_field → target_field` that was skipped + reason.
+  - **Pure-surface label fallback** — uses source schema label when no target schema is resolvable; falls back to the field name if both schemas are unavailable.
+- **`assets/css/bridge-meta-box.css`** — added styles for `.jedb-surfaced-mode-pill`, `.jedb-surfaced-fields-empty`, `.jedb-surface-skipped-list`, `.jedb-surface-skipped-reason`.
+
+### Why "double work" in the meta box save is bounded but unavoidable for now
+
+L-022 documents that `Target_CCT::update()` writes via `$db->update()` directly, which does NOT fire JE's `updated-item/{slug}` hook. So the natural engine pathway ("CCT save → forward push fires → target stays in sync") does NOT activate from our adapter writes. To prevent the data-loss bug, the meta box must explicitly invoke `apply_bridge()` after the source write.
+
+The architecturally correct fix (make `Target_CCT::update()` fire JE's hooks so the engine pathway works naturally) is bigger than alpha.5 scope. L-022's "no fix needed" disposition was based on the broken-hooks side-effect preventing some cascade scenarios; fixing it requires rebalancing the cascade-prevention story across every CCT writer. Deferred to Phase 5+.
+
+The explicit `apply_bridge()` call is bounded to one code path (the meta box save handler), annotated with an L-022 reference so future readers know why it's there.
+
+### Engine behavior unchanged
+
+- `JEDB_Flattener::apply_bridge()` already skips mappings with empty `source_field` OR empty `target_field` (lines 375). Pure-surface mappings are silently ignored by forward push — no engine code change needed.
+- `JEDB_Reverse_Flattener::apply_bridge()` already skips mappings with empty `source_field` OR empty `target_field` (line 365). Same — pure-surface mappings are silently ignored by reverse pull. No engine code change needed.
+- All other engine paths byte-identical to alpha.4.
+
+### Migration / upgrade notes
+
+- **Automatic.** No schema migration. Existing alpha.4 flatten configs work unchanged. The new `mode` field is derived at render time, not stored.
+- **Test recipe simplifies dramatically.** No more `_jedb_demo_field` fake mapping needed. Just tick "Target" on your real `mosaic_name → name` mapping in the Flatten tab — the input now renders correctly with a "native overlay" pill explaining the dual-input UX.
+- **For pure-surface use**: add a mapping with `source_field` set, leave `target_field` empty, tick "Target" surface. The input renders in the meta box, edits write to source CCT only, no product shadow data is created.
+
+### Day 2 limitations carried forward
+
+- Editor edits surfaced field AND Woo-native field in same save: the forward-push-after-meta-box-save still runs, but Woo-native field changes that aren't in bridge mappings still pull on the next save normally. No change from alpha.4.
+- Multi-bridge conflict warnings still deferred to Day 4 Field Presets.
+
+---
+
 ## [0.6.0-alpha.4] — 2026-05-10
 
 **Phase 4 / Day 2 — Bridge meta box on Woo product / variation edit screens (D-27).**

@@ -15,6 +15,7 @@
  *   @var array                  $source_data
  *   @var string                 $source_label
  *   @var array                  $surfaced_groups   array<int,array{label:string,fields:array<int,array>}>
+ *   @var array                  $surface_skipped   array<int,array{source_field:string,target_field:string,reason:string}>
  *   @var array                  $recent_log        Top-3 sync_log rows.
  *   @var bool                   $lock_value        Current `_jedb_bridge_locked` post meta.
  *   @var string                 $override_value    Current `_jedb_bridge_direction_override` post meta.
@@ -65,7 +66,17 @@ $ajax_url      = admin_url( 'admin-post.php' );
 		</p>
 	</div>
 
-	<?php /* ----- Surfaced fields ----- */ ?>
+	<?php
+	/* ----- Surfaced fields -----
+	 * alpha.5: three rendering modes per the build_surfaced_groups()
+	 * design — pure_surface (no target), sync_and_surface (target set,
+	 * not natively rendered), native_overlay (target IS natively
+	 * rendered — editor opted in by ticking; D-2 governs conflict).
+	 * Skipped mappings (e.g. missing source_field) get surfaced as a
+	 * diagnostic so editors aren't left wondering "I ticked the box,
+	 * why isn't it here?"
+	 */
+	?>
 	<?php if ( ! empty( $surfaced_groups ) ) : ?>
 		<div class="jedb-surfaced-fields">
 			<?php foreach ( $surfaced_groups as $group ) : ?>
@@ -76,8 +87,9 @@ $ajax_url      = admin_url( 'admin-post.php' );
 						$input_name  = sprintf( 'jedb_surfaced[%d][%s]', $bridge_id, $field['source_field'] );
 						$field_type  = isset( $field['type'] ) ? (string) $field['type'] : 'text';
 						$value       = $field['value'];
+						$mode        = isset( $field['mode'] ) ? (string) $field['mode'] : 'sync_and_surface';
 					?>
-						<div class="jedb-surfaced-row">
+						<div class="jedb-surfaced-row" data-mode="<?php echo esc_attr( $mode ); ?>">
 							<label for="<?php echo esc_attr( $input_id ); ?>"><?php echo esc_html( $field['label'] ); ?></label>
 							<?php if ( 'textarea' === $field_type || 'wysiwyg' === $field_type ) : ?>
 								<textarea id="<?php echo esc_attr( $input_id ); ?>" name="<?php echo esc_attr( $input_name ); ?>" rows="3" class="widefat"><?php echo esc_textarea( is_scalar( $value ) ? (string) $value : '' ); ?></textarea>
@@ -91,16 +103,51 @@ $ajax_url      = admin_url( 'admin-post.php' );
 								<p class="description"><?php echo esc_html( $field['note'] ); ?></p>
 							<?php endif; ?>
 							<p class="jedb-surfaced-meta">
-								<code><?php echo esc_html( $field['source_field'] ); ?></code>
-								→
-								<code><?php echo esc_html( $field['target_field'] ); ?></code>
+								<?php if ( 'pure_surface' === $mode ) : ?>
+									<span class="jedb-surfaced-mode-pill jedb-pill jedb-pill-info" title="<?php esc_attr_e( 'Pure-surface — edits write back to the source CCT only. No target shadow data.', 'je-data-bridge-cc' ); ?>"><?php esc_html_e( 'surface only', 'je-data-bridge-cc' ); ?></span>
+									<code><?php echo esc_html( $field['source_field'] ); ?></code>
+									<small><?php esc_html_e( '(no target field — edits write to CCT only)', 'je-data-bridge-cc' ); ?></small>
+								<?php elseif ( 'native_overlay' === $mode ) : ?>
+									<span class="jedb-surfaced-mode-pill jedb-pill jedb-pill-warn" title="<?php esc_attr_e( 'Native overlay — Woo also renders this field natively. CCT-canonical (D-2) wins on conflict.', 'je-data-bridge-cc' ); ?>"><?php esc_html_e( 'native overlay', 'je-data-bridge-cc' ); ?></span>
+									<code><?php echo esc_html( $field['source_field'] ); ?></code>
+									→
+									<code><?php echo esc_html( $field['target_field'] ); ?></code>
+									<small><?php esc_html_e( '(Woo also has its own input — CCT wins on conflict)', 'je-data-bridge-cc' ); ?></small>
+								<?php else : ?>
+									<code><?php echo esc_html( $field['source_field'] ); ?></code>
+									→
+									<code><?php echo esc_html( $field['target_field'] ); ?></code>
+								<?php endif; ?>
 							</p>
 						</div>
 					<?php endforeach; ?>
 				</fieldset>
 			<?php endforeach; ?>
 			<p class="description" style="max-width:760px;">
-				<?php esc_html_e( 'These fields are sourced from the linked CCT row. Edits saved here write back through the reverse-pull engine — same code path as a normal CCT edit.', 'je-data-bridge-cc' ); ?>
+				<?php esc_html_e( 'These fields are sourced from the linked CCT row. Edits saved here write back to the CCT, then trigger a forward push so the product stays in sync.', 'je-data-bridge-cc' ); ?>
+			</p>
+		</div>
+	<?php elseif ( ! empty( $surface_skipped ) ) : ?>
+		<div class="jedb-surfaced-fields jedb-surfaced-fields-empty">
+			<p class="description">
+				<strong><?php esc_html_e( 'Mappings flagged for surface but skipped:', 'je-data-bridge-cc' ); ?></strong>
+			</p>
+			<ul class="jedb-surface-skipped-list">
+				<?php foreach ( $surface_skipped as $sk ) :
+					$lbl_src = '' !== $sk['source_field'] ? $sk['source_field'] : __( '(empty)', 'je-data-bridge-cc' );
+					$lbl_tgt = '' !== $sk['target_field'] ? $sk['target_field'] : __( '(empty)', 'je-data-bridge-cc' );
+				?>
+					<li>
+						<code><?php echo esc_html( $lbl_src ); ?></code>
+						→
+						<code><?php echo esc_html( $lbl_tgt ); ?></code>
+						—
+						<span class="jedb-surface-skipped-reason"><?php echo esc_html( $sk['reason'] ); ?></span>
+					</li>
+				<?php endforeach; ?>
+			</ul>
+			<p class="description">
+				<?php esc_html_e( 'Fix the source_field (or other skip reason) in the Flatten admin tab to surface these fields here.', 'je-data-bridge-cc' ); ?>
 			</p>
 		</div>
 	<?php else : ?>

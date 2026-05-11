@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.4
+Stable tag: 0.6.0-alpha.5
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.4) ==
+== Current Capability (v0.6.0-alpha.5) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -94,6 +94,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.6.0-alpha.5 =
+* Phase 4 Day 2 hardening — Bridge meta box surface mechanics decoupled from sync mechanics. A mapping flagged `surface_on_target` now renders in the meta box regardless of whether `target_field` is set (pure-surface mode) or whether the target is Woo-native (native overlay — editor opted in by ticking, CCT-canonical D-2 wins on conflict). Mode pill on each field tells editors what the input actually does. Data-loss bug fixed: meta box save now explicitly invokes `JEDB_Flattener::apply_bridge()` after the source write to keep target in sync (working around L-022 within bounded scope). When surface flags are ticked but no fields render, the panel shows per-mapping skip reasons instead of a misleading blank-state message. Engine code unchanged from alpha.4.
+
 = 0.6.0-alpha.4 =
 * Phase 4 Day 2 — Bridge meta box on Woo product / variation edit screens (D-27). New JEDB_Woo_Product_Meta_Box class hooked on add_meta_boxes for product + product_variation post types. Reads wp_jedb_flatten_configs directly per D-27 — no template layer. Resolves which bridge(s) govern THIS specific product via the existing JEDB_Reverse_Flattener::resolve_source_id() in read-only mode. Linked panel surfaces editable inputs for mappings flagged surface_on_target=true (grouped by freeform group label), shows last 3 sync_log rows pill-coded, exposes per-product Lock + Direction override (writes the alpha.3 post meta the engine guards consume), provides Sync now + Unlink action buttons. Unlinked panel includes a live CCT search (debounced 250ms, reuses Phase 2 wp_ajax_jedb_relation_search_items) + Link button calling JEDB_Relation_Attacher::attach(). Save handler acquires Sync_Guard pull lock around source-side writes so the reverse pull engine on the subsequent woocommerce_update_product bails at its same-direction acquire (prevents stale-post-value pull-back). All engine code untouched. WC-active gate: only loaded when class_exists('WooCommerce'). Known minor limitation: editing a surfaced field AND a Woo-native field in the same save defers the native-field reverse pull by one save cycle.
 
@@ -138,6 +141,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.5 =
+Phase 4 Day 2 hardening — fixes a data-loss bug in alpha.4 where surfaced-field edits could be clobbered by the reverse pull on the next product save. Also decouples surface from sync — mappings can now surface in the meta box without requiring a target_field. No schema migration. Test recipe simplified: just tick "Target" on your real mappings instead of inventing fake target meta keys.
 
 = 0.6.0-alpha.4 =
 Phase 4 Day 2 — Bridge meta box on Woo product / variation edit screens. The meta box appears automatically for any product whose post type has an enabled flatten config targeting it. Surfaces flagged CCT fields on the product edit screen with two-way sync. No schema migration; no engine code change. WC-active gate (only loaded when WooCommerce is present).

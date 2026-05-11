@@ -112,6 +112,49 @@
 	background: rgba( 0, 0, 0, 0.04 );
 }
 
+.jedb-surfaced-meta small {
+	margin-left: 4px;
+	color: #909195;
+	font-style: italic;
+}
+
+.jedb-surfaced-mode-pill {
+	font-size: 9px;
+	padding: 1px 6px;
+	margin-right: 6px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+}
+
+.jedb-surfaced-fields-empty {
+	padding: 12px 14px;
+	background: #f6f7f7;
+	border: 1px dashed #c3c4c7;
+	border-radius: 4px;
+}
+
+.jedb-surface-skipped-list {
+	margin: 6px 0 6px 18px;
+	padding: 0;
+	list-style: disc;
+	font-size: 12px;
+}
+
+.jedb-surface-skipped-list li {
+	margin: 4px 0;
+	color: #50575e;
+}
+
+.jedb-surface-skipped-list code {
+	font-size: 11px;
+	padding: 1px 5px;
+}
+
+.jedb-surface-skipped-reason {
+	color: #8a6d00;
+	font-style: italic;
+}
+
 /* -------------------------------------------------------------------------
  * Per-product overrides
  * --------------------------------------------------------------------- */

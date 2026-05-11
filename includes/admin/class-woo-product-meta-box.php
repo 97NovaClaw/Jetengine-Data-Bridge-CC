@@ -266,15 +266,23 @@ class JEDB_Woo_Product_Meta_Box {
 		$bridge_label  = $this->bridge_display_label( $bridge );
 		$panel_title   = ! empty( $meta_box_cfg['title'] ) ? (string) $meta_box_cfg['title'] : $bridge_label;
 
-		// Build the surfaced-field display rows: only mappings where
-		// surface_on_target=true AND target adapter doesn't natively
-		// render the field (D-16).
+		// Build the surfaced-field display rows. Per alpha.5 design
+		// (response to user's "does it need a target field?" finding):
+		// surface_on_target is decoupled from target_field requirement
+		// AND from the D-16 native-rendering skip. Editor's tick is the
+		// authoritative signal — the meta box trusts their intent.
+		// build_surfaced_groups returns both the rendered groups AND a
+		// diagnostic list of any mappings that COULDN'T surface (e.g.
+		// missing source_field) so the template can show useful "why
+		// not?" messages instead of a misleading blank state.
 		$target_adapter   = $resolution['target_adapter'];
 		$source_adapter   = $resolution['source_adapter'];
 		$source_id        = (int) $resolution['source_id'];
 		$source_data      = $resolution['source_data'];
 		$source_label     = $this->source_record_label( $source_adapter, $source_id, $source_data );
-		$surfaced_groups  = $this->build_surfaced_groups( $mappings, $target_adapter, $source_adapter, $source_data, $meta_box_cfg );
+		$surface_result   = $this->build_surfaced_groups( $mappings, $target_adapter, $source_adapter, $source_data, $meta_box_cfg );
+		$surfaced_groups  = $surface_result['groups'];
+		$surface_skipped  = $surface_result['skipped'];
 		$recent_log       = $this->recent_log_for_post( $bridge, $post->ID );
 		$last_manual_id   = (int) get_post_meta( $post->ID, self::META_LAST_MANUAL, true );
 
@@ -415,61 +423,100 @@ class JEDB_Woo_Product_Meta_Box {
 
 	/**
 	 * Compute the surfaced-field groups payload that the linked-panel
-	 * template iterates over. Returns an ordered array of group blocks,
-	 * each with a label and an array of mapping-rows where:
-	 *   - surface_on_target === true on the mapping
-	 *   - target_adapter->is_natively_rendered($target_field) === false
+	 * template iterates over.
+	 *
+	 * Per alpha.5 (response to user's "does it need a target field?"
+	 * finding): surface is decoupled from sync. A mapping is surfaced
+	 * when `surface_on_target=true`, regardless of whether `target_field`
+	 * is set or whether the target adapter natively renders the field.
+	 *
+	 *   - `source_field` set, `target_field=''`     → "pure-surface": renders an editor for the source field only. No sync side effects.
+	 *   - both set, target natively rendered (D-16) → "sync + surface" — editor opted in by ticking the box; D-2 (CCT-canonical) resolves any conflict if they also use Woo's native input.
+	 *   - both set, target NOT natively rendered   → "sync + surface" — standard alpha.4 behavior.
+	 *
+	 * Mappings that can't be rendered get logged into the `skipped[]`
+	 * array with a reason so the template can show "why didn't my
+	 * flagged field render?" diagnostics instead of a blank state.
 	 *
 	 * Groups are ordered per the bridge config's `meta_box.groups[]`
 	 * list (explicit ordering), then alphabetically for any unlisted
 	 * groups, with an unnamed group ("") going last and labeled
 	 * "Ungrouped".
 	 *
-	 * @return array<int,array{label:string,fields:array<int,array>}>
+	 * @return array{groups:array<int,array{label:string,fields:array<int,array>}>,skipped:array<int,array{source_field:string,target_field:string,reason:string}>}
 	 */
 	private function build_surfaced_groups( array $mappings, $target_adapter, $source_adapter, array $source_data, array $meta_box_cfg ) {
 
-		if ( ! $target_adapter ) {
-			return array();
-		}
+		$groups  = array();
+		$skipped = array();
 
-		$groups = array();
 		foreach ( $mappings as $m ) {
 			if ( ! is_array( $m ) ) {
 				continue;
 			}
-			if ( empty( $m['enabled'] ) ) {
-				continue;
-			}
 			if ( empty( $m['surface_on_target'] ) ) {
+				// Not surfaced at all — don't even record as skipped.
 				continue;
 			}
+
 			$tgt_field = isset( $m['target_field'] ) ? (string) $m['target_field'] : '';
 			$src_field = isset( $m['source_field'] ) ? (string) $m['source_field'] : '';
-			if ( '' === $tgt_field ) {
+
+			$skip_entry = array(
+				'source_field' => $src_field,
+				'target_field' => $tgt_field,
+			);
+
+			if ( empty( $m['enabled'] ) ) {
+				$skip_entry['reason'] = __( 'mapping is disabled', 'je-data-bridge-cc' );
+				$skipped[] = $skip_entry;
 				continue;
 			}
-			// Skip fields the target adapter natively renders — Woo's
-			// own UI already has them (D-16).
-			if ( method_exists( $target_adapter, 'is_natively_rendered' ) && $target_adapter->is_natively_rendered( $tgt_field ) ) {
+
+			if ( '' === $src_field ) {
+				$skip_entry['reason'] = __( 'no source_field set — surface needs a source value to read/write', 'je-data-bridge-cc' );
+				$skipped[] = $skip_entry;
 				continue;
 			}
+
+			// alpha.5: surface_on_target works WITHOUT a target_field
+			// (pure-surface mode) AND for target fields that Woo natively
+			// renders. The editor's tick is authoritative.
 
 			$group_key = isset( $m['group'] ) ? trim( (string) $m['group'] ) : '';
-			$schema    = $this->find_schema_entry( $target_adapter, $tgt_field );
 
-			$current_source_value = '';
-			if ( '' !== $src_field && array_key_exists( $src_field, $source_data ) ) {
-				$current_source_value = $source_data[ $src_field ];
+			// Label / type lookup: prefer target schema (if target_field
+			// set and resolvable), fall back to source schema, fall back
+			// to whichever field name is non-empty.
+			$schema = null;
+			if ( '' !== $tgt_field && $target_adapter ) {
+				$schema = $this->find_schema_entry( $target_adapter, $tgt_field );
 			}
+			if ( ! $schema && $source_adapter ) {
+				$schema = $this->find_schema_entry( $source_adapter, $src_field );
+			}
+
+			$label_fallback = '' !== $tgt_field ? $tgt_field : $src_field;
+
+			$current_source_value = array_key_exists( $src_field, $source_data ) ? $source_data[ $src_field ] : '';
+
+			// Annotate the mode for the template (renders a small hint
+			// next to each field — useful for editors to understand what
+			// this input actually does).
+			$mode = '' === $tgt_field
+				? 'pure_surface'
+				: ( ( $target_adapter && method_exists( $target_adapter, 'is_natively_rendered' ) && $target_adapter->is_natively_rendered( $tgt_field ) )
+					? 'native_overlay'
+					: 'sync_and_surface' );
 
 			$row = array(
 				'source_field' => $src_field,
 				'target_field' => $tgt_field,
-				'label'        => isset( $schema['label'] ) && '' !== $schema['label'] ? (string) $schema['label'] : $tgt_field,
+				'label'        => isset( $schema['label'] ) && '' !== $schema['label'] ? (string) $schema['label'] : $label_fallback,
 				'type'         => isset( $schema['type'] ) ? (string) $schema['type'] : 'text',
 				'note'         => isset( $m['note'] ) ? (string) $m['note'] : '',
 				'value'        => $current_source_value,
+				'mode'         => $mode,
 			);
 
 			$gk = '' === $group_key ? '__ungrouped__' : $group_key;
@@ -492,7 +539,6 @@ class JEDB_Woo_Product_Meta_Box {
 				unset( $groups[ $name ] );
 			}
 		}
-		// Sort remaining (excluding ungrouped) alphabetically by label.
 		$ungrouped = null;
 		if ( isset( $groups['__ungrouped__'] ) ) {
 			$ungrouped = $groups['__ungrouped__'];
@@ -508,7 +554,10 @@ class JEDB_Woo_Product_Meta_Box {
 			$ordered[] = $ungrouped;
 		}
 
-		return $ordered;
+		return array(
+			'groups'  => $ordered,
+			'skipped' => $skipped,
+		);
 	}
 
 	/**
@@ -669,46 +718,36 @@ class JEDB_Woo_Product_Meta_Box {
 
 		$target_target = isset( $bridge['target_target'] ) ? (string) $bridge['target_target'] : '';
 
-		// Acquire a 'pull' lock for the duration of this write so the
-		// reverse pull engine that fires LATER in this same request
-		// (on `woocommerce_update_product` at priority 20) bails out at
-		// its own same-direction acquire() — otherwise it would read
-		// the stale post.name (we only touched the CCT side), diff
-		// against the fresh CCT.mosaic_name we just wrote, and try to
-		// pull the stale post value back, clobbering our edit.
+		// alpha.5 — Replaces the pull-lock hack that was in alpha.4 (D-27,
+		// L-022 interaction).
 		//
-		// The reverse engine's same-direction lock check is at
-		// class-reverse-flattener.php ~342. It logs `skipped_locked,
-		// "sync_guard already locked — same-direction cycle detected"`
-		// — semantically correct: a meta box surfaced-field edit IS a
-		// pull-direction effect, and the reverse engine running afterward
-		// would be a redundant duplicate pull.
+		// Why we need to explicitly call apply_bridge after the source
+		// write: per L-022, `Target_CCT::update()` writes via
+		// `$db->update()` directly, which does NOT fire JE's
+		// `updated-item/{slug}` hook. So the natural engine pathway
+		// ("CCT save → forward push fires → target stays in sync") does
+		// NOT activate from our adapter writes. Without this manual
+		// push, target stays stale, and the NEXT product save's reverse
+		// pull would diff against the stale target and clobber our
+		// fresh source write. (This is the data-loss bug the user
+		// identified after alpha.4 shipped.)
 		//
-		// KNOWN LIMITATION (Day 2): if the editor edits BOTH a surfaced
-		// field AND a Woo-native field (e.g. regular_price) in the same
-		// save, the native-field change won't pull back to CCT until the
-		// next product save fires the reverse engine again. Eventually
-		// consistent on the second save; acceptable for Phase 4.
-		$guard = JEDB_Sync_Guard::instance();
-		$guard->acquire(
-			'pull',
-			$source_target,
-			$source_id,
-			$target_target,
-			(int) $post->ID,
-			'meta_box_inline_save'
-		);
-
-		// NOTE: no release() here. The static lock dissolves at end of
-		// request; the transient has a short TTL. Releasing mid-request
-		// would re-open the cascade hole.
+		// "Double work" framing — yes, we're orchestrating what JE would
+		// have done if it fired hooks from adapter writes. This is the
+		// minimum-scope fix until a future release tackles L-022
+		// architecturally. Bounded to this one call site.
+		//
+		// `apply_bridge()` acquires the push lock internally and runs
+		// all the bridge's mappings. The reverse pull that fires later
+		// in the same request (on `woocommerce_update_product` priority
+		// 20) sees the push lock at its cascade check
+		// (class-reverse-flattener.php ~274) and bails with
+		// `skipped_locked, cascade=push_in_flight`. No data loss.
 		$source_adapter->update( $source_id, $payload );
 
-		// Mirror Phase 3.5 sync log shape so the meta box's "Last syncs"
-		// reader picks this up. Origin tag distinguishes from automatic
-		// reverse pulls. Direction is `pull` because semantically the
-		// data flowed from the meta box (post-side edit surface) back
-		// into the source CCT — same direction the reverse engine writes.
+		// Sync log row 1: record the meta box write itself. Direction
+		// is `pull` because semantically the data flowed from the
+		// product edit surface back into the source CCT.
 		if ( class_exists( 'JEDB_Sync_Log' ) ) {
 			JEDB_Sync_Log::instance()->record( array(
 				'direction'     => 'pull',
@@ -720,12 +759,39 @@ class JEDB_Woo_Product_Meta_Box {
 				'status'        => JEDB_Sync_Log::STATUS_SUCCESS,
 				'message'       => sprintf( 'wrote %d surfaced field(s) from meta box', count( $payload ) ),
 				'context'       => array(
-					'bridge_id'    => $bridge_id,
-					'bridge_slug'  => isset( $bridge['config_slug'] ) ? $bridge['config_slug'] : '',
-					'fields'       => array_keys( $payload ),
-					'cascade_hold' => 'pull_in_flight',
+					'bridge_id'   => $bridge_id,
+					'bridge_slug' => isset( $bridge['config_slug'] ) ? $bridge['config_slug'] : '',
+					'fields'      => array_keys( $payload ),
 				),
 			) );
+		}
+
+		// Forward push: propagate the new source values back to target
+		// (and run any taxonomy rules). apply_bridge() logs its own
+		// sync row (origin = `meta_box_post_save_push`).
+		$push_status = JEDB_Flattener::instance()->apply_bridge(
+			$bridge,
+			$source_id,
+			'meta_box_post_save_push'
+		);
+
+		// If push didn't succeed (errored, condition failed, etc.),
+		// source and target diverge. Log loudly so editors know to
+		// investigate — the next product save's reverse pull WILL
+		// clobber the source unless target catches up.
+		if ( ! in_array( $push_status, array( JEDB_Sync_Log::STATUS_SUCCESS, JEDB_Sync_Log::STATUS_NOOP ), true ) ) {
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log(
+					'Meta box surfaced-field save: forward push after source write did not succeed — target may go stale, risking source clobber on next product save',
+					'warning',
+					array(
+						'bridge_id'   => $bridge_id,
+						'source_id'   => $source_id,
+						'post_id'     => $post->ID,
+						'push_status' => $push_status,
+					)
+				);
+			}
 		}
 	}
 
