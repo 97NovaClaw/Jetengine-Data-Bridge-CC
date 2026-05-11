@@ -176,5 +176,14 @@ class JEDB_Plugin {
 		require_once JEDB_PLUGIN_DIR . 'includes/admin/class-admin-shell.php';
 
 		JEDB_Admin_Shell::instance();
+
+		// Phase 4 Day 2 (D-27): Bridge meta box on Woo product /
+		// variation edit screens. Reads flatten configs directly — no
+		// template layer. Only loaded when WooCommerce is present
+		// since the meta box targets product post types.
+		if ( class_exists( 'WooCommerce' ) ) {
+			require_once JEDB_PLUGIN_DIR . 'includes/admin/class-woo-product-meta-box.php';
+			JEDB_Woo_Product_Meta_Box::instance();
+		}
 	}
 }

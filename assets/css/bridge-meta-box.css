@@ -1,0 +1,246 @@
+/**
+ * Bridge meta box — Phase 4 / Day 2 (D-27).
+ *
+ * Styling for the JEDB Bridge meta box on Woo product / variation
+ * edit screens. Scoped to .jedb-meta-box-wrap so it doesn't bleed into
+ * Woo's own meta boxes or the editor screen.
+ *
+ * @package JEDB
+ */
+
+.jedb-meta-box-wrap {
+	font-size: 13px;
+}
+
+.jedb-bridge-panel {
+	margin: 0 0 24px 0;
+	padding: 16px 18px;
+	background: #fff;
+	border: 1px solid #c3c4c7;
+	border-radius: 6px;
+}
+
+.jedb-bridge-panel + .jedb-bridge-panel {
+	margin-top: 12px;
+}
+
+.jedb-bridge-panel-title {
+	margin: 0 0 12px 0;
+	font-size: 15px;
+	font-weight: 600;
+	color: #1d2327;
+}
+
+.jedb-bridge-panel-title .jedb-bridge-panel-status {
+	margin-left: 8px;
+	font-size: 10px;
+	vertical-align: middle;
+}
+
+.jedb-bridge-panel-meta {
+	font-size: 12px;
+	color: #50575e;
+	margin-bottom: 16px;
+	padding-bottom: 14px;
+	border-bottom: 1px solid #dcdcde;
+}
+
+.jedb-bridge-panel-meta p {
+	margin: 4px 0;
+}
+
+.jedb-bridge-panel-meta code {
+	font-size: 11px;
+	padding: 1px 5px;
+}
+
+.jedb-bridge-resolution {
+	margin-left: 8px;
+	color: #646970;
+}
+
+/* -------------------------------------------------------------------------
+ * Surfaced fields
+ * --------------------------------------------------------------------- */
+
+.jedb-surfaced-fields {
+	margin: 14px 0 18px 0;
+}
+
+.jedb-surfaced-group {
+	margin: 0 0 14px 0;
+	padding: 10px 14px;
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+}
+
+.jedb-surfaced-group legend {
+	font-weight: 600;
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: #50575e;
+	padding: 0 6px;
+}
+
+.jedb-surfaced-row {
+	margin: 10px 0;
+}
+
+.jedb-surfaced-row label {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+.jedb-surfaced-row .description {
+	margin: 4px 0 0 0;
+	font-size: 12px;
+	color: #646970;
+}
+
+.jedb-surfaced-meta {
+	margin: 4px 0 0 0;
+	font-size: 11px;
+	color: #909195;
+}
+
+.jedb-surfaced-meta code {
+	font-size: 11px;
+	padding: 1px 5px;
+	background: rgba( 0, 0, 0, 0.04 );
+}
+
+/* -------------------------------------------------------------------------
+ * Per-product overrides
+ * --------------------------------------------------------------------- */
+
+.jedb-bridge-overrides {
+	margin: 16px 0;
+	padding: 12px 14px;
+	background: #fff8e1;
+	border: 1px solid #f0d77a;
+	border-radius: 4px;
+}
+
+.jedb-bridge-overrides legend {
+	font-weight: 600;
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: #8a6d00;
+	padding: 0 6px;
+}
+
+.jedb-bridge-overrides .description {
+	margin-top: 8px;
+	font-size: 12px;
+	color: #8a6d00;
+}
+
+.jedb-override-lock {
+	display: block;
+	margin: 6px 0;
+	font-weight: 600;
+}
+
+.jedb-override-direction {
+	margin: 10px 0 0 0;
+}
+
+.jedb-override-direction strong {
+	display: block;
+	margin-bottom: 4px;
+}
+
+.jedb-override-direction label {
+	display: inline-block;
+	margin-right: 12px;
+	margin-bottom: 4px;
+}
+
+/* -------------------------------------------------------------------------
+ * Recent log
+ * --------------------------------------------------------------------- */
+
+.jedb-bridge-recent-log {
+	margin: 16px 0;
+	padding: 10px 14px;
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+}
+
+.jedb-bridge-recent-log strong {
+	display: block;
+	margin-bottom: 6px;
+	font-size: 12px;
+	text-transform: uppercase;
+	letter-spacing: 0.04em;
+	color: #50575e;
+}
+
+.jedb-bridge-recent-log ul {
+	margin: 0;
+	padding: 0;
+	list-style: none;
+}
+
+.jedb-bridge-recent-log li {
+	padding: 4px 0;
+	border-bottom: 1px dotted #dcdcde;
+	font-size: 12px;
+}
+
+.jedb-bridge-recent-log li:last-child {
+	border-bottom: none;
+}
+
+.jedb-bridge-recent-log .jedb-pill {
+	font-size: 10px;
+	padding: 2px 6px;
+	margin-right: 6px;
+}
+
+.jedb-recent-msg {
+	display: inline-block;
+	margin-top: 2px;
+	color: #50575e;
+	font-style: italic;
+}
+
+/* -------------------------------------------------------------------------
+ * Action buttons + unlinked picker
+ * --------------------------------------------------------------------- */
+
+.jedb-bridge-actions {
+	margin-top: 16px;
+	padding-top: 12px;
+	border-top: 1px solid #dcdcde;
+}
+
+.jedb-link-picker {
+	margin: 12px 0;
+}
+
+.jedb-link-picker label {
+	display: block;
+	font-weight: 600;
+	margin-bottom: 4px;
+}
+
+.jedb-link-results {
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+	font-size: 12px;
+}
+
+.jedb-link-status:empty {
+	display: none;
+}
+
+.jedb-link-status {
+	margin: 6px 0 0 0;
+	font-size: 12px;
+	color: #646970;
+}

@@ -2,6 +2,150 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.4] — 2026-05-10
+
+**Phase 4 / Day 2 — Bridge meta box on Woo product / variation edit screens (D-27).**
+
+The meta box reads flatten configs directly (no template layer per
+D-25/D-27). Resolves at render time which bridge(s) govern THIS
+specific product by walking `wp_jedb_flatten_configs` for rows whose
+`target_target` matches the post type, then running
+`JEDB_Reverse_Flattener::resolve_source_id()` in read-only mode per
+candidate. One panel rendered per resolved bridge (linked or
+unlinked).
+
+This is the killer-feature deliverable for Phase 4 — surfaces
+CCT-managed fields on the Woo product edit screen so editors don't
+have to context-switch to JE's CCT admin for fields that are
+operationally meaningful while looking at a product.
+
+### Added
+
+- **`includes/admin/class-woo-product-meta-box.php`** — new class
+  `JEDB_Woo_Product_Meta_Box`. Singleton. Hooks on `add_meta_boxes`
+  for `product` and `product_variation` post types (`normal`
+  context, `default` priority). Save handler hooks on
+  `save_post_product` and `save_post_product_variation` at priority
+  20. Three action handlers on `admin_post_*` for Sync now, Unlink,
+  Link. Admin notices renderer for post-action feedback.
+- **`templates/admin/meta-box-bridge.php`** — linked-state template.
+  Renders: linked source row label + via-method, bridge config slug
+  + deep link to Flatten admin tab, surfaced field inputs grouped by
+  freeform `group` label (D-26), per-product Lock checkbox +
+  Direction override radios (writing to the `_jedb_bridge_locked` /
+  `_jedb_bridge_direction_override` post meta the alpha.3 engine
+  guards consume), top-3 sync_log rows pill-coded by status, Sync
+  now button (forward push trigger), Unlink button.
+- **`templates/admin/meta-box-bridge-unlinked.php`** — picker
+  template. Search input + results select, Link button. Reuses the
+  existing `wp_ajax_jedb_relation_search_items` endpoint (Phase 2)
+  so the AJAX surface is shared with the CCT picker UI.
+- **`assets/js/bridge-meta-box.js`** — frontend behavior. Debounced
+  live CCT search (250ms) using the existing relation-search AJAX
+  endpoint, populates the results select, lock checkbox confirm
+  dialog with clear explanation of effect, escapeAttr/escapeText
+  helpers. Initial search-all fires on first focus (saves a typing
+  step for small CCT lists).
+- **`assets/css/bridge-meta-box.css`** — scoped styles (only inside
+  `.jedb-meta-box-wrap`) — bridge panel layout, surfaced field
+  groups, override fieldset with yellow accent, recent log pills,
+  unlinked picker styling.
+
+### Reused (no duplication — verified by the §12 audit)
+
+- `JEDB_Reverse_Flattener::resolve_source_id()` for the resolution
+  path. Called in read-only mode (explicitly clones the config with
+  `auto_create_target_when_unlinked = false` so a render never
+  creates a CCT row as a side effect).
+- `JEDB_Relation_Attacher::attach()` + `detach()` for Link / Unlink.
+  Same idempotent path L-021 self-heal uses.
+- `JEDB_Flattener::apply_bridge()` for the Sync now button. Same
+  engine path as automatic CCT saves.
+- `JEDB_Sync_Guard::acquire('pull', ...)` in `handle_save()` to
+  prevent the reverse pull engine from running redundantly on the
+  same request after a surfaced-field write (which IS a
+  pull-direction effect). Reverse engine bails at its
+  same-direction acquire with `STATUS_SKIPPED_LOCKED, "sync_guard
+  already locked — same-direction cycle detected"`.
+- `JEDB_Sync_Log::record()` for surfaced-field save audit trail.
+  Origin tag `meta_box_inline_save` distinguishes from automatic
+  reverse pulls.
+- JFB-WC meta box patterns: `add_meta_box()` registration (lines
+  ~1437–1444), 4-guard save preamble (nonce/perms/autosave/post-type,
+  lines ~1465–1481), conditional `admin_enqueue_scripts` (~1658–1661),
+  `admin_notices` for feedback (~795).
+
+### Wired
+
+- **`includes/class-plugin.php`** — `load_admin()` instantiates
+  `JEDB_Woo_Product_Meta_Box` when `class_exists( 'WooCommerce' )`.
+  Skipped on WC-less installs (the meta box has no target post
+  type to attach to without WC).
+
+### Behavior unchanged
+
+- **Engine paths byte-identical to alpha.3.** `JEDB_Flattener`,
+  `JEDB_Reverse_Flattener`, `JEDB_Sync_Guard`, `JEDB_Taxonomy_Applier`,
+  every transformer, condition evaluator, all four target adapters:
+  untouched.
+- **Existing flatten configs work unchanged.** The meta box renders
+  for any product whose post type matches an existing bridge's
+  `target_target`. Configs created in 0.5.x / alpha.3 work today.
+- **Per-product post meta** (`_jedb_bridge_locked`,
+  `_jedb_bridge_direction_override`) — read by the alpha.3 engine
+  guards, NOW WRITTEN BY THE META BOX UI. The pieces connect.
+
+### Known Day 2 limitations
+
+- **Surfaced field + Woo-native field on the same save** — if the
+  editor edits both a surfaced field (e.g. `mosaic_name`) AND a
+  Woo-native field that's in the bridge's mappings (e.g.
+  `regular_price`), the meta box's pull lock prevents the reverse
+  pull from running on the same request. The Woo-native edit
+  propagates on the NEXT product save instead. Eventually consistent
+  with one-save delay. Acceptable for Phase 4; could be tightened in
+  Phase 5+ with per-field cascade tracking.
+- **No live "this product matches multiple bridges" warning yet** —
+  if a product happens to match multiple `target_target = posts::product`
+  bridges with overlapping mappings, all panels render side by side.
+  Day 4 Field Presets work may surface a "conflict detected" warning
+  on the Mandatory coverage panel.
+- **`save_post_product_variation`** is hooked but only fires when
+  WC manages variations through the standard product editor path.
+  Bulk variation operations may not trigger the meta box save.
+  Acceptable — variations are a Phase 4b deliverable.
+
+### Migration / upgrade notes
+
+- **Automatic.** Install over alpha.3: the meta box appears on
+  product / variation edit screens for any post type that has an
+  enabled flatten config targeting it. Nothing else changes. No
+  database migrations.
+
+### Phase 4 Day 2 exit criterion (BUILD-PLAN §7) — met
+
+> *"Editing a Mosaic product on the Woo admin shows the linked CCT
+> row, surfaces the flagged fields per the flatten config, lets the
+> editor sync now / lock / unlink without leaving the screen. Reverse-pull
+> engine writes surfaced fields back to CCT."*
+
+Verified by inspection of:
+- `JEDB_Woo_Product_Meta_Box::render_meta_box()` (resolution path
+  reuses `resolve_source_id()`)
+- `templates/admin/meta-box-bridge.php` (renders surfaced fields,
+  status block, override controls, action buttons)
+- `apply_surfaced_edits_for_bridge()` (writes through
+  `JEDB_Target_*::update()`, acquires pull lock, records sync_log)
+- `handle_sync_now()` (calls `JEDB_Flattener::apply_bridge()`
+  directly)
+- `handle_unlink()` / `handle_link()` (call `JEDB_Relation_Attacher`
+  directly)
+
+Staging verification + §7.1 evidence block ship when the user
+finishes Day 2 testing.
+
+---
+
 ## [0.6.0-alpha.3] — 2026-05-10
 
 **Phase 4 / Day 1 — alpha.3 reshape: revert template layer + flatten config schema extensions + per-product engine guards (D-25 / D-26 / D-27 / L-026).**

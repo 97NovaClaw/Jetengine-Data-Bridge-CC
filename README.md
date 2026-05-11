@@ -2,7 +2,7 @@
 
 > A WordPress plugin that bridges JetEngine CCTs / CPTs / Relations and WooCommerce products with bidirectional, loop-safe sync, relation pre-attachment, field flattening, and a sandboxed custom-snippet transformer system.
 
-**Status:** v0.6.0-alpha.3 — Phases 0 through 3.6 complete and **verified end-to-end on Brick Builder HQ staging**. **Phase 4 Day 1 just shipped** (alpha.3 reshape per **D-25 / D-26 / D-27 / L-026**): the alpha.1/alpha.2 Bridges admin tab + `JEDB_Bridge_Types_Manager` template layer was retired (~1,500 lines deleted), flatten config schema extended with `meta_box` block + per-mapping `surface_*` flags + `group` + `cct_single_redirect`, engine guards added for `_jedb_bridge_locked` and `_jedb_bridge_direction_override` post meta, Field Presets manager skeleton in place. **The flatten config IS the bridge identity** — no separate template layer. Phase 4 Day 2 (Bridge meta box reading flatten config directly), Day 3 (CCT-single → linked-post redirect shim), Day 4 (Field Presets admin tab + Mandatory coverage integration) are next. **Engine paths are byte-identical to v0.5.3** outside of the new per-product guards (which are skip-only — they never modify data). Existing 0.5.x flatten configs work unchanged. See [`CHANGELOG.md`](./CHANGELOG.md) for the full alpha.3 entry, [`LESSONS-LEARNED.md`](./LESSONS-LEARNED.md) for L-026 (template-layer post-mortem), and [`BUILD-PLAN.md`](./BUILD-PLAN.md) §12 for the new 4-day Phase 4 plan.
+**Status:** v0.6.0-alpha.4 — Phases 0 through 3.6 complete and **verified end-to-end on Brick Builder HQ staging**. **Phase 4 Day 2 just shipped** (Bridge meta box on Woo product / variation edit screens, per D-27). The meta box reads flatten configs directly — no template layer — and surfaces CCT-managed fields on the Woo product edit screen so editors don't have to context-switch to JE's CCT admin for fields that are operationally meaningful while looking at a product. Linked-state panel: surfaced field inputs grouped by `group` label, per-product Lock + Direction override (writes the post meta the alpha.3 engine guards consume), Last 3 sync rows pill-coded by status, Sync now + Unlink action buttons. Unlinked-state panel: live CCT search reusing the Phase 2 relation-search AJAX endpoint + Link button. Phase 4 Day 1 (alpha.3 reshape) is in place underneath: bridge type template layer retired, flatten config schema extended with `meta_box` block + per-mapping `surface_*` flags + `group` + `cct_single_redirect`, engine guards for `_jedb_bridge_locked` and `_jedb_bridge_direction_override`. Phase 4 Day 3 (CCT-single → linked-post redirect shim) and Day 4 (Field Presets admin tab + Mandatory coverage integration) are next. **Engine paths are byte-identical to v0.5.3** outside the alpha.3 per-product guards (which are skip-only). Existing 0.5.x flatten configs work unchanged. See [`CHANGELOG.md`](./CHANGELOG.md) for the full alpha.4 entry, [`LESSONS-LEARNED.md`](./LESSONS-LEARNED.md) for L-026 (template-layer post-mortem that drove the Phase 4 reshape), and [`BUILD-PLAN.md`](./BUILD-PLAN.md) §12 for the 4-day Phase 4 plan.
 
 **Author:** Legwork Media · GPL v2 or later
 **Min versions:** WordPress 6.0 · PHP 7.4 · JetEngine 3.3.1
@@ -43,9 +43,9 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 
 ---
 
-## What's actually shipped right now (v0.6.0-alpha.3)
+## What's actually shipped right now (v0.6.0-alpha.4)
 
-**Functional capabilities (cumulative through Phase 3.6 + Phase 4 Day 1 alpha.3):**
+**Functional capabilities (cumulative through Phase 3.6 + Phase 4 Day 1 alpha.3 + Phase 4 Day 2 alpha.4):**
 
 - ✅ **Custom plugin tables created on activation** (`wp_jedb_relation_configs`, `wp_jedb_flatten_configs`, `wp_jedb_sync_log`, `wp_jedb_snippets`).
 - ✅ **Snippets uploads folder** (`wp-content/uploads/jedb-snippets/`) with `.htaccess` (`deny from all`) + silent `index.php`.
@@ -64,6 +64,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) for the full architecture, file-level mig
 - ✅ **`taxonomies[]` array on flatten configs** (Phase 3.6, v0.5.2) — bridge configs carry per-bridge taxonomy rules with per-rule merge strategy (append/replace), explicit term removal via `apply_terms_inverse`, optional `create_if_missing`, and a forward-compat `snippet` slot for Phase 5b. Push-only semantics in v1 per D-21.
 - ✅ **Live taxonomy UI** (Phase 3.6, v0.5.2) — Flatten admin tab gains a Taxonomies section visible only when `target_target` is `posts::*`. Dropdowns are populated via the new `wp_ajax_jedb_flatten_get_post_type_taxonomies` endpoint; editors pick from registered taxonomies + existing terms instead of typing slugs by hand. `JEDB_TAX_TERMS_LIMIT` (default 100) caps the per-taxonomy term return count.
 - ✅ **Phase 4 Day 1 alpha.3 reshape (v0.6.0-alpha.3)** — the alpha.1/alpha.2 Bridges admin tab + `JEDB_Bridge_Types_Manager` template layer was retired (~1,500 lines deleted) per D-25 / L-026. In its place: flatten config schema extended with a `meta_box` block (title, position, groups), per-mapping `surface_on_target` / `surface_on_source` flags + freeform `group` label, and a top-level `cct_single_redirect` opt-in. New `JEDB_OPTION_FIELD_PRESETS` site option + read-only `JEDB_Field_Presets_Manager` skeleton (full UI ships Phase 4 Day 4). New `STATUS_SKIPPED_DIRECTION_OVERRIDE` sync_log constant. Per-product engine guards in both flatteners read `_jedb_bridge_locked` and `_jedb_bridge_direction_override` post meta to allow editor-set freezing / direction constraint without touching the bridge config. Existing 0.5.x flatten configs work unchanged (back-compat handled in `merge_with_defaults()`).
+- ✅ **Phase 4 Day 2 — Bridge meta box on Woo product / variation edit screens (v0.6.0-alpha.4)** — new `JEDB_Woo_Product_Meta_Box` class hooked on `add_meta_boxes` for `product` + `product_variation` post types. Reads `wp_jedb_flatten_configs` directly per D-27 — no template layer involved. At render time, walks the bridges whose `target_target` matches the current post type, runs `JEDB_Reverse_Flattener::resolve_source_id()` in read-only mode per candidate to determine which bridges govern THIS specific post, renders one panel per resolved bridge (linked or unlinked). Linked panel surfaces editable inputs for mappings flagged `surface_on_target=true` (grouped by freeform `group` label), shows Last 3 sync_log rows pill-coded by status, exposes per-product Lock + Direction override controls that write the post meta the alpha.3 engine guards consume, and provides Sync now + Unlink action buttons. Unlinked panel includes a live CCT search (debounced 250ms, reuses the Phase 2 `wp_ajax_jedb_relation_search_items` AJAX endpoint) + Link button calling `JEDB_Relation_Attacher::attach()`. Save handler acquires a Sync_Guard `pull` lock around source-side writes so the reverse pull engine that fires later on `woocommerce_update_product` bails at its same-direction acquire (prevents the stale-post-value pull-back cycle). All engine code untouched — meta box is a pure UI layer on top of the alpha.3 schema + guards. WC-active gate: only loaded when `class_exists('WooCommerce')`.
 - ✅ **Sync Guard** — per-request + transient locks with origin tagging prevent recursive saves.
 - ✅ **Sync Log** — every bridge invocation writes a row to `wp_jedb_sync_log` with status from the BUILD-PLAN §4.9 taxonomy (`success`, `partial`, `errored`, `skipped_condition`, `skipped_error`, `skipped_locked`, `skipped_no_target`, `noop`).
 - ✅ **Transformer registry** — 9 built-in transformers (`passthrough`, `yes_no_to_bool`, `regex_replace`, `format_number`, `lookup_table`, `name_builder`, `truncate_words`, `strip_html`, `year_expander`). Per D-11 / L-010 each transformer defines push and pull explicitly.
@@ -103,7 +104,7 @@ Full verification log with per-phase assertion tables lives in [`BUILD-PLAN.md`]
 
 ---
 
-## Current file tree (v0.6.0-alpha.3)
+## Current file tree (v0.6.0-alpha.4)
 
 ```
 je-data-bridge-cc/
@@ -171,7 +172,8 @@ je-data-bridge-cc/
 │       ├── class-tab-targets.php            Targets inventory tab
 │       ├── class-tab-relations.php          Relations picker config tab
 │       ├── class-tab-flatten.php            Forward-flatten bridge editor (Phase 3+) — extended in alpha.3 with Meta box settings + per-mapping surface flags
-│       └── class-tab-debug.php              Debug log viewer + diagnostics
+│       ├── class-tab-debug.php              Debug log viewer + diagnostics
+│       └── class-woo-product-meta-box.php   Phase 4 Day 2 alpha.4 — Bridge meta box on Woo product/variation edit screens
 │
 ├── templates/admin/
 │   ├── shell.php                            Outer page with tabs nav
@@ -180,15 +182,19 @@ je-data-bridge-cc/
 │   ├── tab-relations.php                    Relations config + per-CCT cards
 │   ├── tab-flatten.php                      Flatten bridge list + add/edit form (alpha.3: Meta box section, per-mapping surface flags, cct_single_redirect)
 │   ├── relation-config-card.php             Single CCT's relation config
-│   └── tab-debug.php                        Log viewer + Discovery / CCT diagnostics
+│   ├── tab-debug.php                        Log viewer + Discovery / CCT diagnostics
+│   ├── meta-box-bridge.php                  Phase 4 Day 2 alpha.4 — linked-state Bridge meta box template
+│   └── meta-box-bridge-unlinked.php         Phase 4 Day 2 alpha.4 — unlinked-state Bridge meta box (CCT picker)
 │
 └── assets/
     ├── css/
     │   ├── admin.css                        Admin-shell + tab styling
+    │   ├── bridge-meta-box.css              Phase 4 Day 2 alpha.4 — Bridge meta box scoped styles
     │   └── relation-injector.css            Picker block + modal + relation cards
     └── js/
         ├── relation-injector.js             Picker UI on CCT edit screens
-        └── flatten-admin.js                 Mapping editor + transformer args + condition validate (alpha.3: meta box settings + surface flags)
+        ├── flatten-admin.js                 Mapping editor + transformer args + condition validate (alpha.3: meta box settings + surface flags)
+        └── bridge-meta-box.js               Phase 4 Day 2 alpha.4 — CCT picker AJAX + lock confirm
 ```
 
 ### Custom tables created on activation
@@ -251,7 +257,7 @@ See [`BUILD-PLAN.md`](./BUILD-PLAN.md) §7 for the full eight-phase plan and exi
 | 3  | Flattener (forward direction): wp_jedb_flatten_configs admin tab + push engine + transformers + L-021 self-heal | **✅ Complete** (v0.4.0 → v0.4.1) |
 | 3.5 | Reverse-direction flatten (post → CCT) + bidirectional bridges + auto-create CCT (D-17) per BUILD-PLAN §4.10 + L-022 cascade-asymmetry doc | **✅ Complete** (v0.5.0 → v0.5.1, verified on staging) |
 | 3.6 | Categorization layer: `term_lookup` transformer + `taxonomies[]` array + post-only push semantics (D-20 → D-24, L-023, BUILD-PLAN §4.11) | **✅ Complete** (v0.5.2 → v0.5.3, L-024 ordering fix) |
-| 4  | Bridge meta box on Woo product edit screen + Field Presets (4 days, reshaped per D-25 / D-26 / D-27 / L-026) | **▶ In progress** — Day 1 alpha.3 SHIPPED in v0.6.0-alpha.3 (revert + flatten config schema extensions + engine guards + Field Presets manager skeleton); Day 2 meta box reads flatten configs directly; Day 3 redirect shim; Day 4 Field Presets admin tab + Mandatory coverage integration. |
+| 4  | Bridge meta box on Woo product edit screen + Field Presets (4 days, reshaped per D-25 / D-26 / D-27 / L-026) | **▶ In progress** — Day 1 alpha.3 SHIPPED in v0.6.0-alpha.3 (revert + flatten config schema extensions + engine guards + Field Presets manager skeleton); **Day 2 alpha.4 SHIPPED in v0.6.0-alpha.4 (Bridge meta box on Woo product / variation edit screens, reads flatten configs directly)**; Day 3 redirect shim; Day 4 Field Presets admin tab + Mandatory coverage integration. |
 | 4b | Variation bridging + reconciliation engine + `show_when` mini-DSL | Pending |
 | 4.5 | `term_assigned` trigger (term changes as wakeup events for reverse engine; D-18 trigger taxonomy implementation) | Pending |
 | 5  | Settings API + debug log viewer enhancements + utilities export/import | Pending |
