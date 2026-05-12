@@ -76,6 +76,10 @@ class JEDB_Woo_Product_Meta_Box {
 
 	private function hooks() {
 
+		// Field-preview helper — used by the meta box template's
+		// read-only field rendering (alpha.6).
+		require_once JEDB_PLUGIN_DIR . 'includes/helpers/field-preview.php';
+
 		add_action( 'add_meta_boxes',                          array( $this, 'register_meta_boxes' ) );
 		add_action( 'save_post_product',                       array( $this, 'handle_save' ), 20, 1 );
 		add_action( 'save_post_product_variation',             array( $this, 'handle_save' ), 20, 1 );
@@ -86,6 +90,15 @@ class JEDB_Woo_Product_Meta_Box {
 
 		add_action( 'admin_enqueue_scripts',                   array( $this, 'maybe_enqueue_assets' ) );
 		add_action( 'admin_notices',                           array( $this, 'maybe_render_notice' ) );
+
+		// alpha.6 (L-027): when the JE CCT edit page is opened in our
+		// modal iframe with `?jedb_chrome=stripped`, inject CSS that
+		// hides WP chrome + a "Done · Return to product" button that
+		// postMessages the parent window to close the modal and reload.
+		// Hooked at admin_head so we run before JE's own admin_head
+		// emissions; check_chrome_stripping_request() bails fast on
+		// any page other than jet-cct-* with the query param.
+		add_action( 'admin_head',                              array( $this, 'maybe_inject_cct_chrome_strip' ) );
 	}
 
 	/* -----------------------------------------------------------------------
@@ -181,6 +194,179 @@ class JEDB_Woo_Product_Meta_Box {
 			JEDB_VERSION,
 			true
 		);
+
+		// alpha.6: pass the modal-reopen marker to JS so a previous-save
+		// flagged "open the CCT editor for bridge X" can auto-launch the
+		// modal on this page render. Transient is keyed per user+post
+		// for safety and TTL=60s so it can't dangle.
+		$post_id = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : 0; // phpcs:ignore WordPress.Security.NonceVerification.Recommended
+		$reopen  = 0;
+		if ( $post_id ) {
+			$key    = 'jedb_reopen_cct_' . get_current_user_id() . '_' . (int) $post_id;
+			$reopen = (int) get_transient( $key );
+			if ( $reopen ) {
+				delete_transient( $key );
+			}
+		}
+
+		wp_localize_script(
+			'jedb-bridge-meta-box',
+			'jedbMetaBoxBootstrap',
+			array(
+				'reopenBridgeId' => (int) $reopen,
+				'postId'         => (int) $post_id,
+				'i18n'           => array(
+					'closeConfirmDirty' => __( 'You have unsaved changes in the CCT editor. Close anyway?', 'je-data-bridge-cc' ),
+					'closeButtonLabel'  => __( 'Done · Return to product', 'je-data-bridge-cc' ),
+					'cancelButtonLabel' => __( 'Cancel · Discard CCT changes', 'je-data-bridge-cc' ),
+					'modalTitleFormat'  => __( 'Edit: %s', 'je-data-bridge-cc' ),
+				),
+			)
+		);
+	}
+
+	/* -----------------------------------------------------------------------
+	 * Chrome-strip for the JE CCT edit page (alpha.6 / L-027)
+	 * --------------------------------------------------------------------
+	 *
+	 * When the JE CCT edit page is loaded inside our modal iframe with
+	 * `?jedb_chrome=stripped`, we hide the WP admin bar / sidebar /
+	 * footer so the iframe shows only the CCT edit form. A "Done" button
+	 * appears top-right that postMessages the parent window to close
+	 * the modal and reload the product edit page (so it picks up any
+	 * pushed-back values from JE's save → forward push flow).
+	 *
+	 * JE's save form is a standard HTML POST to `?cct_action=save-item`.
+	 * After save, JE redirects to the edit URL again (or to the list
+	 * page). We don't need to detect save success programmatically —
+	 * the editor clicks "Done" when they're satisfied. Much simpler than
+	 * fragile DOM observation.
+	 */
+
+	public function maybe_inject_cct_chrome_strip() {
+
+		if ( ! is_admin() ) {
+			return;
+		}
+
+		// Fast gate: only fire on jet-cct-* pages with our query param.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended
+		$page   = isset( $_GET['page'] )         ? sanitize_text_field( wp_unslash( $_GET['page'] ) )         : '';
+		$chrome = isset( $_GET['jedb_chrome'] )  ? sanitize_key( wp_unslash( $_GET['jedb_chrome'] ) )         : '';
+		$return = isset( $_GET['jedb_return'] )  ? absint( $_GET['jedb_return'] )                             : 0;
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		if ( '' === $page || 0 !== strpos( $page, 'jet-cct-' ) ) {
+			return;
+		}
+		if ( 'stripped' !== $chrome ) {
+			return;
+		}
+		if ( ! current_user_can( JEDB_CAPABILITY ) ) {
+			return;
+		}
+
+		$return_url = $return ? get_edit_post_link( $return, 'raw' ) : '';
+		?>
+		<style id="jedb-cct-chrome-strip">
+			html.wp-toolbar { padding-top: 0 !important; }
+			#wpadminbar, #adminmenuwrap, #adminmenuback, #adminmenu, #wpfooter, #screen-meta, #screen-meta-links { display: none !important; }
+			#wpcontent, #wpbody-content { margin-left: 0 !important; padding-top: 0 !important; }
+			#wpbody { padding-top: 0 !important; }
+			body.wp-admin { background: #f6f7f7; }
+			/* Reserve room for the floating Done bar at the top. */
+			.wrap { padding-top: 56px !important; }
+			.jedb-cct-frame-bar {
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 48px;
+				background: #1d2327;
+				color: #fff;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 0 16px;
+				z-index: 99999;
+				box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+				font-size: 13px;
+			}
+			.jedb-cct-frame-bar .jedb-cct-frame-title { font-weight: 600; }
+			.jedb-cct-frame-bar .jedb-cct-frame-actions { display: flex; gap: 8px; }
+			.jedb-cct-frame-bar button {
+				background: #2271b1;
+				color: #fff;
+				border: 1px solid transparent;
+				padding: 6px 14px;
+				border-radius: 3px;
+				cursor: pointer;
+				font-size: 13px;
+				font-weight: 500;
+			}
+			.jedb-cct-frame-bar button.jedb-cct-frame-cancel {
+				background: transparent;
+				border-color: rgba(255,255,255,0.3);
+			}
+			.jedb-cct-frame-bar button:hover { opacity: 0.9; }
+		</style>
+		<script id="jedb-cct-chrome-strip-js">
+			(function () {
+				if ( window.top === window.self ) {
+					// Not actually in an iframe — abort, this query param
+					// only makes sense when loaded inside the parent's modal.
+					return;
+				}
+
+				document.addEventListener( 'DOMContentLoaded', function () {
+					var bar = document.createElement( 'div' );
+					bar.className = 'jedb-cct-frame-bar';
+
+					var title = document.createElement( 'span' );
+					title.className = 'jedb-cct-frame-title';
+					title.textContent = <?php echo wp_json_encode( __( 'Editing linked CCT row — save in the JetEngine form below, then click Done.', 'je-data-bridge-cc' ) ); ?>;
+
+					var actions = document.createElement( 'span' );
+					actions.className = 'jedb-cct-frame-actions';
+
+					var doneBtn = document.createElement( 'button' );
+					doneBtn.type = 'button';
+					doneBtn.textContent = <?php echo wp_json_encode( __( 'Done · Return to product', 'je-data-bridge-cc' ) ); ?>;
+					doneBtn.addEventListener( 'click', function () {
+						try {
+							window.parent.postMessage(
+								{ type: 'jedb:cct-modal-close', reload: true },
+								window.location.origin
+							);
+						} catch ( e ) {
+							// Same-origin should always allow postMessage. Fallback: direct navigate.
+							<?php if ( $return_url ) : ?>
+							window.parent.location = <?php echo wp_json_encode( $return_url ); ?>;
+							<?php endif; ?>
+						}
+					} );
+
+					var cancelBtn = document.createElement( 'button' );
+					cancelBtn.type = 'button';
+					cancelBtn.className = 'jedb-cct-frame-cancel';
+					cancelBtn.textContent = <?php echo wp_json_encode( __( 'Cancel', 'je-data-bridge-cc' ) ); ?>;
+					cancelBtn.addEventListener( 'click', function () {
+						try {
+							window.parent.postMessage(
+								{ type: 'jedb:cct-modal-close', reload: false },
+								window.location.origin
+							);
+						} catch ( e ) {}
+					} );
+
+					actions.appendChild( cancelBtn );
+					actions.appendChild( doneBtn );
+					bar.appendChild( title );
+					bar.appendChild( actions );
+
+					document.body.insertBefore( bar, document.body.firstChild );
+				} );
+			})();
+		</script>
+		<?php
 	}
 
 	/* -----------------------------------------------------------------------
@@ -656,142 +842,25 @@ class JEDB_Woo_Product_Meta_Box {
 			}
 		}
 
-		// Surfaced field inline edits: each writes back to the source
-		// CCT row via the source adapter. Posted as
-		// jedb_surfaced[<bridge_id>][<source_field>] = value.
-		$surfaced_raw = isset( $_POST['jedb_surfaced'] ) ? wp_unslash( $_POST['jedb_surfaced'] ) : array();
-		if ( ! is_array( $surfaced_raw ) ) {
-			return;
-		}
-
-		foreach ( $surfaced_raw as $bridge_id => $field_map ) {
-			if ( ! is_array( $field_map ) || empty( $field_map ) ) {
-				continue;
-			}
-			$this->apply_surfaced_edits_for_bridge( $post, (int) $bridge_id, $field_map );
-		}
-	}
-
-	/**
-	 * Write back surfaced-field edits for one bridge → its linked CCT
-	 * source row.
-	 *
-	 * @param WP_Post $post
-	 * @param int     $bridge_id
-	 * @param array   $field_map  source_field => value
-	 */
-	private function apply_surfaced_edits_for_bridge( $post, $bridge_id, array $field_map ) {
-
-		$bridge = JEDB_Flatten_Config_Manager::instance()->get_by_id( $bridge_id );
-		if ( ! $bridge ) {
-			return;
-		}
-
-		$resolution = $this->resolve_for_post( $bridge, $post );
-		if ( empty( $resolution['source_id'] ) || ! $resolution['source_adapter'] ) {
-			return;
-		}
-
-		$source_id      = (int) $resolution['source_id'];
-		$source_adapter = $resolution['source_adapter'];
-		$source_data    = $resolution['source_data'];
-		$source_target  = isset( $bridge['source_target'] ) ? (string) $bridge['source_target'] : '';
-
-		$payload = array();
-		foreach ( $field_map as $source_field => $value ) {
-			$source_field = sanitize_text_field( (string) $source_field );
-			if ( '' === $source_field ) {
-				continue;
-			}
-			// Skip if unchanged — the reverse pull engine's diff would
-			// catch it too, but avoiding the write is cheaper.
-			$current = array_key_exists( $source_field, $source_data ) ? $source_data[ $source_field ] : null;
-			if ( (string) $current === (string) $value ) {
-				continue;
-			}
-			$payload[ $source_field ] = is_array( $value ) ? $value : (string) wp_unslash( $value );
-		}
-
-		if ( empty( $payload ) ) {
-			return;
-		}
-
-		$target_target = isset( $bridge['target_target'] ) ? (string) $bridge['target_target'] : '';
-
-		// alpha.5 — Replaces the pull-lock hack that was in alpha.4 (D-27,
-		// L-022 interaction).
+		// alpha.6: the meta box no longer writes to source from inline
+		// edits — those are now delegated to JE's CCT edit page via the
+		// modal-iframe flow (L-027). The only thing handle_save still
+		// does is persist per-product override post meta (lock and
+		// direction override) which are pure product-side concerns.
 		//
-		// Why we need to explicitly call apply_bridge after the source
-		// write: per L-022, `Target_CCT::update()` writes via
-		// `$db->update()` directly, which does NOT fire JE's
-		// `updated-item/{slug}` hook. So the natural engine pathway
-		// ("CCT save → forward push fires → target stays in sync") does
-		// NOT activate from our adapter writes. Without this manual
-		// push, target stays stale, and the NEXT product save's reverse
-		// pull would diff against the stale target and clobber our
-		// fresh source write. (This is the data-loss bug the user
-		// identified after alpha.4 shipped.)
-		//
-		// "Double work" framing — yes, we're orchestrating what JE would
-		// have done if it fired hooks from adapter writes. This is the
-		// minimum-scope fix until a future release tackles L-022
-		// architecturally. Bounded to this one call site.
-		//
-		// `apply_bridge()` acquires the push lock internally and runs
-		// all the bridge's mappings. The reverse pull that fires later
-		// in the same request (on `woocommerce_update_product` priority
-		// 20) sees the push lock at its cascade check
-		// (class-reverse-flattener.php ~274) and bails with
-		// `skipped_locked, cascade=push_in_flight`. No data loss.
-		$source_adapter->update( $source_id, $payload );
-
-		// Sync log row 1: record the meta box write itself. Direction
-		// is `pull` because semantically the data flowed from the
-		// product edit surface back into the source CCT.
-		if ( class_exists( 'JEDB_Sync_Log' ) ) {
-			JEDB_Sync_Log::instance()->record( array(
-				'direction'     => 'pull',
-				'source_target' => $source_target,
-				'source_id'     => (string) $source_id,
-				'target_target' => $target_target,
-				'target_id'     => (string) $post->ID,
-				'origin'        => 'meta_box_inline_save',
-				'status'        => JEDB_Sync_Log::STATUS_SUCCESS,
-				'message'       => sprintf( 'wrote %d surfaced field(s) from meta box', count( $payload ) ),
-				'context'       => array(
-					'bridge_id'   => $bridge_id,
-					'bridge_slug' => isset( $bridge['config_slug'] ) ? $bridge['config_slug'] : '',
-					'fields'      => array_keys( $payload ),
-				),
-			) );
-		}
-
-		// Forward push: propagate the new source values back to target
-		// (and run any taxonomy rules). apply_bridge() logs its own
-		// sync row (origin = `meta_box_post_save_push`).
-		$push_status = JEDB_Flattener::instance()->apply_bridge(
-			$bridge,
-			$source_id,
-			'meta_box_post_save_push'
-		);
-
-		// If push didn't succeed (errored, condition failed, etc.),
-		// source and target diverge. Log loudly so editors know to
-		// investigate — the next product save's reverse pull WILL
-		// clobber the source unless target catches up.
-		if ( ! in_array( $push_status, array( JEDB_Sync_Log::STATUS_SUCCESS, JEDB_Sync_Log::STATUS_NOOP ), true ) ) {
-			if ( function_exists( 'jedb_log' ) ) {
-				jedb_log(
-					'Meta box surfaced-field save: forward push after source write did not succeed — target may go stale, risking source clobber on next product save',
-					'warning',
-					array(
-						'bridge_id'   => $bridge_id,
-						'source_id'   => $source_id,
-						'post_id'     => $post->ID,
-						'push_status' => $push_status,
-					)
-				);
-			}
+		// One forward-compat marker we DO store here: if the editor
+		// clicked "Save & edit CCT row" on a specific bridge, the form
+		// submits with `_jedb_reopen_cct_bridge` set so the next page
+		// render can auto-open the modal. We just persist that to a
+		// short-lived user transient so the bootstrap reads it on the
+		// next request without polluting the post or its URL.
+		$reopen_bridge_id = isset( $_POST['_jedb_reopen_cct_bridge'] ) ? absint( $_POST['_jedb_reopen_cct_bridge'] ) : 0;
+		if ( $reopen_bridge_id > 0 ) {
+			set_transient(
+				'jedb_reopen_cct_' . get_current_user_id() . '_' . (int) $post_id,
+				(int) $reopen_bridge_id,
+				60
+			);
 		}
 	}
 

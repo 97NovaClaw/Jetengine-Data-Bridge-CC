@@ -2,6 +2,64 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.6] — 2026-05-15
+
+**Phase 4 / Day 2 architectural pivot — delegate CCT editing to JE itself via a chrome-stripped modal iframe; field-type-aware read-only previews on the product edit screen; alpha.5 explicit-`apply_bridge` workaround retired (L-027).**
+
+Staging testing of alpha.5 surfaced one final issue: the inline editable inputs in the meta box didn't honor JE field types. A CCT `select` rendered as a plain text input. Media fields rendered as text. WYSIWYG rendered as plain textarea. Editors expected the same UI affordances JE gives them on its CCT edit page. The natural next step looked like "build a renderer for each JE field type" — but the user proposed (and we agreed) a much cleaner architecture: **render type-aware read-only previews on the product edit screen, then launch JE's actual CCT edit page in a chrome-stripped modal iframe when the editor wants to edit**. Every field type renders correctly because JE itself is rendering it. Zero reimplementation burden, no ongoing maintenance cost as JE adds field types.
+
+Bonus payoff: the alpha.5 explicit-`apply_bridge` workaround for L-022 disappears. The meta box no longer writes to source — JE's own save form does — so the natural `updated-item/{slug}` → forward push pathway runs without our intervention.
+
+### Added
+
+- **`includes/helpers/field-preview.php`** — new helper `jedb_render_field_preview( $value, $field_type, $field )` returning HTML-safe read-only previews for ~15 JE-style field types: text, textarea, wysiwyg, checkbox, boolean, switch, select, radio, media, gallery, date, time, datetime, number, repeater, posts, and url/email links. Each branch escapes per-context (the helper is the trust boundary).
+- **`JEDB_Woo_Product_Meta_Box::maybe_inject_cct_chrome_strip()`** — hooks `admin_head`. When the current page is `?page=jet-cct-*&jedb_chrome=stripped` AND the user can manage JEDB, emits:
+  - CSS hiding `#wpadminbar`, `#adminmenu*`, `#wpfooter`, `#screen-meta*`, plus `body.wp-admin` background adjustments.
+  - A 48-px floating top bar with two buttons: **Done · Return to product** and **Cancel**. Both `postMessage` the parent window with `{type:'jedb:cct-modal-close', reload:true|false}` on click.
+  - The bar's JS aborts if not actually in an iframe (`window.top === window.self` guard) so direct visits with the query param don't break.
+- **`JEDB_Woo_Product_Meta_Box::maybe_enqueue_assets()`** extension — reads the 60-second transient `jedb_reopen_cct_{user}_{post}` and passes it to JS as `jedbMetaBoxBootstrap.reopenBridgeId`. Used by the JS to auto-launch the modal after a "Save & edit" submission completes.
+- **Meta box template** — a "Save & edit \"{label}\" in JetEngine" button per linked bridge. Constructs the CCT edit URL with `?jedb_chrome=stripped&jedb_return={post_id}` and a data attribute for the JS click handler to consume.
+- **`assets/js/bridge-meta-box.js`** — modal subsystem:
+  - `ensureModal()` lazy-creates the overlay + iframe + close-button structure on first use.
+  - `openModal(url)` / `closeModal(shouldReload, confirmDirty)` orchestrate visibility and source URL.
+  - `window.addEventListener('message')` handler accepts `jedb:cct-modal-close` events from same-origin only, closes modal, optionally reloads the parent product edit page.
+  - `.jedb-open-cct-modal` click handler with dirty-form detection: if the product form is dirty, asks the editor to save first; on confirm, stamps `_jedb_reopen_cct_bridge` hidden marker and triggers `#publish`.
+  - Auto-launch logic: if `jedbMetaBoxBootstrap.reopenBridgeId > 0`, finds the matching button and triggers click after a 250 ms paint settle.
+  - Escape key handler closes the modal.
+- **`assets/css/bridge-meta-box.css`** — modal overlay (z-index 160001 above WP admin bar 99999), 92vh × min(1400px, 95vw) frame, close button styling, body.jedb-cct-modal-open scroll lock. Plus a complete suite of read-only preview styles per field type (`.jedb-preview-bool-on/off`, `.jedb-preview-wysiwyg`, `.jedb-preview-media-thumb`, `.jedb-preview-gallery`, `.jedb-preview-select`, `.jedb-preview-multi`, `.jedb-preview-date`, `.jedb-preview-link`, etc.). New `.jedb-bridge-cct-edit-launch` panel for the "Save & edit" button group.
+- **L-027 in LESSONS-LEARNED.md** — "Don't rebuild every JE field type. Delegate editing to JE itself via a chrome-stripped modal iframe." Captures the false start (per-type renderers), the evidence, the reality (JE's own CCT edit page is the right surface), the bonus payoff (L-022 stops mattering), and six prevention rules.
+
+### Removed
+
+- **`JEDB_Woo_Product_Meta_Box::apply_surfaced_edits_for_bridge()`** — the alpha.5 method that wrote surfaced-field edits back to source and then explicitly invoked `apply_bridge()`. Replaced by JE's native save flow inside the modal iframe.
+- **`jedb_surfaced[<bridge_id>][<source_field>]` form posting** — the meta box no longer submits any field values from the inline editor (there's no inline editor anymore). The `handle_save()` body shrunk from ~50 lines of surfaced-field iteration to ~10 lines of pure post-meta handling.
+- **The `meta_box_inline_save` sync_log origin tag** — no inline saves happen here anymore. (The constant in `JEDB_Sync_Log` stays for historical sync_log row readability; no new rows get written with it.)
+- **The `meta_box_post_save_push` origin tag in active use** — the explicit `apply_bridge()` call that emitted this tag is gone. JE's natural save now uses whatever origin the existing Phase 3 hook subscribers tag with (typically `cct_updated_item_hook` or similar).
+- **Mode pills in the meta box** — `pure_surface` / `native_overlay` / `sync_and_surface` mode pills are no longer rendered because there's no rendering distinction anymore (everything is read-only preview). The `.jedb-surfaced-mode-pill` CSS class is removed.
+
+### Changed
+
+- **`templates/admin/meta-box-bridge.php`** — rewritten surfaced-fields rendering. Each field becomes a `.jedb-surfaced-readonly` row containing label + `jedb_render_field_preview()` output + source/target field meta. No `<input>` / `<textarea>` / `<select>` elements anywhere in the linked panel.
+- **`JEDB_Woo_Product_Meta_Box::hooks()`** — requires `includes/helpers/field-preview.php` and registers the new `admin_head` chrome-strip hook.
+- **`JEDB_Woo_Product_Meta_Box::handle_save()`** — slimmed dramatically. Now writes only `_jedb_bridge_locked` + `_jedb_bridge_direction_override` (unchanged) and optionally writes the `jedb_reopen_cct_{user}_{post}` transient if `_jedb_reopen_cct_bridge` was posted.
+
+### Migration notes
+
+No schema changes. No flatten config migration needed. Existing bridge configs continue to work — the `surface_on_target` flag now controls "show this field's READ-ONLY PREVIEW on the product edit screen" instead of "render an editable input." Mappings with `target_field` empty still render a preview (showing the source value); previously these were the "pure-surface" inline editors.
+
+### Verification checklist
+
+1. Open a Woo product that's linked to a CCT row via a bridge.
+2. Meta box renders surfaced field previews (text, boolean pill, media thumb, etc.) instead of editable inputs.
+3. Click "Save & edit \"{label}\" in JetEngine" — if the form is dirty, confirm dialog appears; on confirm, page saves and reloads with the modal auto-opened.
+4. Modal contains the JE CCT edit page with no WP admin bar / sidebar / footer visible — just the JE form and our top bar.
+5. Edit a CCT field of any type (select, media, WYSIWYG, gallery, etc.) — all render natively in JE.
+6. Click Save in JE's form. Page inside iframe reloads (or shows JE's "Saved" notice).
+7. Click "Done · Return to product" in our top bar. Modal closes, parent page reloads.
+8. Updated preview values visible on the product edit screen.
+9. `wp_jedb_sync_log` shows a forward push row from the JE-natural-hook source (NOT `meta_box_post_save_push` anymore — that origin should not appear in any new rows).
+10. Per-product lock + direction override post meta still respected by both engines (unchanged from alpha.3 guards).
+
 ## [0.6.0-alpha.5] — 2026-05-11
 
 **Phase 4 / Day 2 follow-up — Bridge meta box surface mechanics decoupled from sync mechanics + data-loss bug fix.**

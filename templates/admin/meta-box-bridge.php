@@ -2,8 +2,19 @@
 /**
  * Linked-state template for one bridge in the Woo product Bridge meta box.
  *
- * Phase 4 / Day 2 (D-27). Rendered by JEDB_Woo_Product_Meta_Box::
- * render_linked_panel(). Variables in scope (set by the caller):
+ * Phase 4 / Day 2 (D-27), rewritten alpha.6 (modal-iframe architecture
+ * per L-027): no editable inputs are rendered here. Each surfaced
+ * mapping becomes a read-only, type-aware preview. Editing is
+ * delegated to JE's actual CCT edit page via a chrome-stripped modal
+ * iframe — every JE field type (select / media / gallery / WYSIWYG /
+ * repeater / etc.) works because JE itself renders them. JE's normal
+ * save fires its `updated-item/{slug}` hook, which triggers the
+ * forward push engine naturally, so the alpha.5 explicit-apply_bridge
+ * workaround is no longer needed (L-022's "broken-hook" disposition
+ * becomes a non-issue for this flow).
+ *
+ * Rendered by JEDB_Woo_Product_Meta_Box::render_linked_panel().
+ * Variables in scope (set by the caller):
  *
  *   @var WP_Post                $post              The product / variation being edited.
  *   @var array                  $bridge            Decoded flatten config row.
@@ -67,54 +78,42 @@ $ajax_url      = admin_url( 'admin-post.php' );
 	</div>
 
 	<?php
-	/* ----- Surfaced fields -----
-	 * alpha.5: three rendering modes per the build_surfaced_groups()
-	 * design — pure_surface (no target), sync_and_surface (target set,
-	 * not natively rendered), native_overlay (target IS natively
-	 * rendered — editor opted in by ticking; D-2 governs conflict).
-	 * Skipped mappings (e.g. missing source_field) get surfaced as a
-	 * diagnostic so editors aren't left wondering "I ticked the box,
-	 * why isn't it here?"
+	/* ----- Surfaced fields — READ-ONLY previews (alpha.6) -----
+	 * Per the modal-iframe architecture: the meta box no longer renders
+	 * editable inputs for CCT fields. Instead, each surfaced field is a
+	 * type-aware READ-ONLY PREVIEW. Editing happens by clicking the
+	 * "Save & edit CCT row" button below, which launches a modal with
+	 * the JE CCT edit page chrome-stripped — every JE field type works
+	 * natively because JE itself is doing the rendering.
+	 *
+	 * This eliminates:
+	 *   - The alpha.5 explicit-apply_bridge hack (no source writes from
+	 *     meta box, so L-022 doesn't bite — JE's normal save fires its
+	 *     `updated-item/{slug}` hook and forward push runs naturally).
+	 *   - The need to reimplement every JE field type.
+	 *   - The "double work" concern the user raised in alpha.5 review.
 	 */
 	?>
 	<?php if ( ! empty( $surfaced_groups ) ) : ?>
-		<div class="jedb-surfaced-fields">
+		<div class="jedb-surfaced-fields jedb-surfaced-fields-readonly">
 			<?php foreach ( $surfaced_groups as $group ) : ?>
 				<fieldset class="jedb-surfaced-group">
 					<legend><?php echo esc_html( $group['label'] ); ?></legend>
 					<?php foreach ( $group['fields'] as $field ) :
-						$input_id    = sprintf( 'jedb-surfaced-%d-%s', $bridge_id, sanitize_html_class( $field['source_field'] ) );
-						$input_name  = sprintf( 'jedb_surfaced[%d][%s]', $bridge_id, $field['source_field'] );
-						$field_type  = isset( $field['type'] ) ? (string) $field['type'] : 'text';
-						$value       = $field['value'];
-						$mode        = isset( $field['mode'] ) ? (string) $field['mode'] : 'sync_and_surface';
+						$field_type = isset( $field['type'] ) ? (string) $field['type'] : 'text';
+						$value      = $field['value'];
 					?>
-						<div class="jedb-surfaced-row" data-mode="<?php echo esc_attr( $mode ); ?>">
-							<label for="<?php echo esc_attr( $input_id ); ?>"><?php echo esc_html( $field['label'] ); ?></label>
-							<?php if ( 'textarea' === $field_type || 'wysiwyg' === $field_type ) : ?>
-								<textarea id="<?php echo esc_attr( $input_id ); ?>" name="<?php echo esc_attr( $input_name ); ?>" rows="3" class="widefat"><?php echo esc_textarea( is_scalar( $value ) ? (string) $value : '' ); ?></textarea>
-							<?php elseif ( 'checkbox' === $field_type || 'boolean' === $field_type ) : ?>
-								<input type="hidden" name="<?php echo esc_attr( $input_name ); ?>" value="0" />
-								<input id="<?php echo esc_attr( $input_id ); ?>" type="checkbox" name="<?php echo esc_attr( $input_name ); ?>" value="1" <?php checked( ! empty( $value ) ); ?> />
-							<?php else : ?>
-								<input id="<?php echo esc_attr( $input_id ); ?>" type="text" name="<?php echo esc_attr( $input_name ); ?>" value="<?php echo esc_attr( is_scalar( $value ) ? (string) $value : '' ); ?>" class="widefat" />
-							<?php endif; ?>
+						<div class="jedb-surfaced-row jedb-surfaced-readonly">
+							<div class="jedb-surfaced-row-label"><?php echo esc_html( $field['label'] ); ?></div>
+							<div class="jedb-surfaced-row-value">
+								<?php echo jedb_render_field_preview( $value, $field_type, $field ); // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped — helper escapes internally per field type ?>
+							</div>
 							<?php if ( '' !== (string) $field['note'] ) : ?>
 								<p class="description"><?php echo esc_html( $field['note'] ); ?></p>
 							<?php endif; ?>
 							<p class="jedb-surfaced-meta">
-								<?php if ( 'pure_surface' === $mode ) : ?>
-									<span class="jedb-surfaced-mode-pill jedb-pill jedb-pill-info" title="<?php esc_attr_e( 'Pure-surface — edits write back to the source CCT only. No target shadow data.', 'je-data-bridge-cc' ); ?>"><?php esc_html_e( 'surface only', 'je-data-bridge-cc' ); ?></span>
-									<code><?php echo esc_html( $field['source_field'] ); ?></code>
-									<small><?php esc_html_e( '(no target field — edits write to CCT only)', 'je-data-bridge-cc' ); ?></small>
-								<?php elseif ( 'native_overlay' === $mode ) : ?>
-									<span class="jedb-surfaced-mode-pill jedb-pill jedb-pill-warn" title="<?php esc_attr_e( 'Native overlay — Woo also renders this field natively. CCT-canonical (D-2) wins on conflict.', 'je-data-bridge-cc' ); ?>"><?php esc_html_e( 'native overlay', 'je-data-bridge-cc' ); ?></span>
-									<code><?php echo esc_html( $field['source_field'] ); ?></code>
-									→
-									<code><?php echo esc_html( $field['target_field'] ); ?></code>
-									<small><?php esc_html_e( '(Woo also has its own input — CCT wins on conflict)', 'je-data-bridge-cc' ); ?></small>
-								<?php else : ?>
-									<code><?php echo esc_html( $field['source_field'] ); ?></code>
+								<code><?php echo esc_html( $field['source_field'] ); ?></code>
+								<?php if ( ! empty( $field['target_field'] ) ) : ?>
 									→
 									<code><?php echo esc_html( $field['target_field'] ); ?></code>
 								<?php endif; ?>
@@ -123,9 +122,6 @@ $ajax_url      = admin_url( 'admin-post.php' );
 					<?php endforeach; ?>
 				</fieldset>
 			<?php endforeach; ?>
-			<p class="description" style="max-width:760px;">
-				<?php esc_html_e( 'These fields are sourced from the linked CCT row. Edits saved here write back to the CCT, then trigger a forward push so the product stays in sync.', 'je-data-bridge-cc' ); ?>
-			</p>
 		</div>
 	<?php elseif ( ! empty( $surface_skipped ) ) : ?>
 		<div class="jedb-surfaced-fields jedb-surfaced-fields-empty">
@@ -152,6 +148,46 @@ $ajax_url      = admin_url( 'admin-post.php' );
 		</div>
 	<?php else : ?>
 		<p class="description"><?php esc_html_e( 'No fields configured for surfacing here. Tick "Target" in the Meta box column of any mapping in the Flatten admin tab to surface a field on this screen.', 'je-data-bridge-cc' ); ?></p>
+	<?php endif; ?>
+
+	<?php
+	/* ----- "Save & edit CCT row" button (alpha.6 modal launcher) ----- */
+	$cct_edit_url = '';
+	$source_cct_slug = '';
+	if ( '' !== $source_target && 0 === strpos( $source_target, 'cct::' ) ) {
+		$source_cct_slug = substr( $source_target, 5 );
+		$cct_edit_url    = add_query_arg(
+			array(
+				'page'        => 'jet-cct-' . $source_cct_slug,
+				'cct_action'  => 'edit',
+				'item_id'     => (int) $source_id,
+				'jedb_chrome' => 'stripped',
+				'jedb_return' => (int) $post->ID,
+			),
+			admin_url( 'admin.php' )
+		);
+	}
+	?>
+	<?php if ( '' !== $cct_edit_url ) : ?>
+		<div class="jedb-bridge-cct-edit-launch">
+			<button
+				type="button"
+				class="button button-secondary jedb-open-cct-modal"
+				data-cct-edit-url="<?php echo esc_url( $cct_edit_url ); ?>"
+				data-bridge-id="<?php echo esc_attr( $bridge_id ); ?>"
+				data-source-id="<?php echo esc_attr( $source_id ); ?>"
+				data-source-label="<?php echo esc_attr( $source_label ); ?>"
+			>
+				<span class="dashicons dashicons-edit"></span>
+				<?php
+				/* translators: %s = the linked CCT row's display label */
+				printf( esc_html__( 'Save & edit "%s" in JetEngine', 'je-data-bridge-cc' ), esc_html( $source_label ) );
+				?>
+			</button>
+			<p class="description" style="margin-top:6px;">
+				<?php esc_html_e( 'Opens the linked CCT row in a focused editor. All JE field types (select, media, gallery, WYSIWYG, repeater, etc.) render natively. When you save in there, this product page reloads and the new values flow back via the existing sync engine.', 'je-data-bridge-cc' ); ?>
+			</p>
+		</div>
 	<?php endif; ?>
 
 	<?php /* ----- Per-product overrides ----- */ ?>

@@ -2101,3 +2101,68 @@ In its place:
 6. **L-025's lesson stays valid for any future case where two systems DO need to mirror each other.** Bridge presets vs flatten configs in the Phase 6 setup preset format is one such case. The lesson there is enforceable AT design time by adopting the same `default_config_json()` shape verbatim, not by inventing a parallel schema with similar-but-renamed keys.
 
 ---
+
+## L-027: Don't rebuild every JE field type. Delegate editing to JE itself via a chrome-stripped modal iframe.
+
+**Discovered:** 2026-05-15 (Phase 4 Day 2 hardening / version 0.6.0-alpha.6)
+**Severity:** High
+**Category:** Architecture / Defensive coding
+
+### Context
+After alpha.5 shipped the inline-editable surfaced fields on the Woo product meta box, the editor pointed out that **field types weren't honored**: a CCT field of type `select` rendered as a plain text input, a media field rendered as a text input, WYSIWYG rendered as a textarea, gallery as a textarea, etc. Editors expected the same UI affordances JE provides on its own CCT edit page. The natural next step looked like: "OK, render each field type properly in our meta box — `<select>` for selects, the WP media picker for media, `wp_editor()` for WYSIWYG, etc."
+
+### Wrong (the alpha.6-as-originally-planned path)
+The initial plan for alpha.6 was a `JEDB_Field_Renderer` class with type-specific renderers — render select boxes with options, integrate the WP media library JS for media fields, mount `wp_editor()` for WYSIWYG, etc. Plus a `Target_CCT::get_field_schema()` extension to surface enough metadata (option lists, glossary IDs, allowed mime types) for our renderers to do something equivalent to JE's.
+
+This was wrong for three reasons that compounded:
+
+1. **Ongoing maintenance burden.** Every new JE field type would have meant a new renderer in our plugin. JE's surface is large and grows over releases (e.g. JE 3.x added new field types). We'd be perpetually behind.
+2. **Subtle behavioral drift.** Our select would not match JE's select. Our media picker would not match JE's media picker. Our gallery picker would diverge from JE's. Editors would get two slightly-different UIs for the same data and have to track which surface they were on.
+3. **Architectural coupling we couldn't avoid.** For glossary-backed selects we'd have to call `jet_engine()->glossaries->...`. For media we'd duplicate JE's attachment handling. For conditional-field-visibility we'd need to re-implement JE's expression evaluator. Each of these is a small leak; together they make our plugin a partial reimplementation of JE itself.
+
+### Evidence
+- alpha.5 staging test: editor opens product edit screen, sees `<input type="text">` for `theme_idea` (a CCT select field), enters a value that isn't in the option list, save succeeds, JE later rejects the value silently because it didn't pass JE's own select validation.
+- alpha.5 staging test: media field rendered as text input expecting an attachment ID; pasting a URL "worked" in our text input but produced an unusable target value.
+- User feedback: "the only other issue I have now is that field type is not considered. So for example, if we are using a drop down with a select box or a media field or WYSIWYG or a gallery field… it doesn't carry over."
+- User-proposed alternative architecture (which won): "What if we showed a non editable 'Surfaced' fields in this section... But created a button that says save current progress and edit extra fields. Maybe even make it a pop up with only that CCT's edit page (so wordpress side bars don't load or anything distracting) and then if that pop up gets saved it closes and the page reloads."
+
+### Reality
+JE already has a CCT edit page that renders every field type correctly (because JE wrote it, it gets updated when JE updates, glossaries integrate natively, conditional visibility works, media library works). The CCT edit page URL is `admin.php?page=jet-cct-{slug}&cct_action=edit&item_id={id}` (verified against the RI repo's JE API reference doc and our own existing `class-target-cct.php` line 443 comment). The save form is a standard HTML form POST to `?cct_action=save-item` — not AJAX, just a regular POST that causes a page reload (verified in the RI repo's JE API reference, "Form Selector" section).
+
+The right architecture is to **delegate editing to JE entirely** and provide a one-click bridge from the product edit screen into JE's editor:
+
+1. The Bridge meta box on the product edit screen renders each surfaced mapping as a **read-only, type-aware preview** (text → escaped text, boolean → ✓/✗ pill, media → thumbnail, gallery → thumbnail grid, select → option label, etc.). This is much easier than editable rendering because we're not handling input/save semantics, just display.
+2. Below the previews, a **"Save & edit CCT row"** button per bridge. Clicking it:
+   - If the product form is dirty, asks the editor to save first. On confirm, stamps a `_jedb_reopen_cct_bridge` hidden marker and submits the WP form. After save, `handle_save()` writes a 60-second transient `jedb_reopen_cct_{user}_{post}` keyed to this user+post.
+   - On the reloaded page, the JS bootstrap reads the transient (passed via `wp_localize_script`) and auto-launches the modal for that bridge.
+3. The modal contains an iframe whose `src` is the JE CCT edit URL plus `?jedb_chrome=stripped&jedb_return={post_id}`.
+4. A new method `JEDB_Woo_Product_Meta_Box::maybe_inject_cct_chrome_strip()` hooks `admin_head`. When it sees `page=jet-cct-*` AND `jedb_chrome=stripped`, it injects CSS that hides `#wpadminbar` / `#adminmenu*` / `#wpfooter` / `#screen-meta*` AND a top bar with two buttons:
+   - **Done · Return to product** → `parent.postMessage({type:'jedb:cct-modal-close', reload:true}, origin)`.
+   - **Cancel** → `parent.postMessage({type:'jedb:cct-modal-close', reload:false}, origin)`.
+5. The parent product edit page listens for `message` events with `origin === window.location.origin` and acts on `jedb:cct-modal-close`: close the modal, reload the parent (if `reload:true`).
+6. The editor saves in JE's native UI using JE's native Save button. JE's normal save flow fires `updated-item/{slug}`. Our forward-push engine subscribes to that hook (Phase 3). Push lock prevents the reverse-pull cascade. Target gets updated values. The parent page reloads and shows the new values in its read-only previews.
+
+### Bonus payoff
+The alpha.5 explicit-`apply_bridge` workaround (the "double work" the user flagged) is no longer needed. L-022's "adapter writes don't fire JE hooks" is a real architectural quirk but it ONLY bit us in alpha.5 because the meta box was bypassing JE and writing to source directly via the adapter. In the alpha.6 model, the meta box never writes to source — the source write happens inside the modal iframe via JE's own form POST, which fires every hook JE intends to fire. The natural Phase 3 pathway works perfectly.
+
+In other words: the L-022 quirk only matters for writes that ORIGINATE from our adapter. Writes that originate from JE's own UI behave normally. By routing editing through JE's UI, we sidestep L-022 entirely.
+
+### Affected code
+- `includes/admin/class-woo-product-meta-box.php` — slim `handle_save()` (drop `apply_surfaced_edits_for_bridge()` entirely, drop the explicit `apply_bridge()` call from alpha.5, drop `jedb_surfaced[][]` form handling, drop the `meta_box_inline_save` sync_log row, drop the `meta_box_post_save_push` origin tag). Add `maybe_inject_cct_chrome_strip()` for the iframe chrome strip. Extend `maybe_enqueue_assets()` to read the 60-second `jedb_reopen_cct_{user}_{post}` transient and pass it to the JS bootstrap via `wp_localize_script`. Require `includes/helpers/field-preview.php` in `hooks()`.
+- `templates/admin/meta-box-bridge.php` — replace editable input rendering with read-only previews via `jedb_render_field_preview()`. Add the "Save & edit CCT row" button per bridge.
+- `includes/helpers/field-preview.php` — NEW. `jedb_render_field_preview()` handles ~15 JE-style field types with sane fallbacks.
+- `assets/js/bridge-meta-box.js` — modal creation, postMessage listener, dirty-form detection for the save-first flow, auto-reopen on `jedbMetaBoxBootstrap.reopenBridgeId`.
+- `assets/css/bridge-meta-box.css` — read-only preview styles per field type, modal overlay styles, "Save & edit CCT row" launch button styles. The alpha.5 `.jedb-surfaced-mode-pill` block is removed (no more modes — everything is read-only).
+
+### Fix shipped in
+v0.6.0-alpha.6.
+
+### Prevention
+1. **Before reimplementing a host plugin's UI, look for a way to delegate to its existing UI in-context.** WP admin pages can be embedded in iframes from the same origin. Chrome-stripping via a query-gated `admin_head` CSS injection is a 30-line trick that lets you reuse the host's entire renderer surface. This is dramatically cheaper than mirroring the renderer.
+2. **A meta box on screen X doesn't have to BE the editor for data Y — it can be a status display + launcher TO the editor for data Y.** Status display is much easier than editor (escape, format, dump). Launcher is one button. Together they often satisfy what looked like "we need an editor here."
+3. **If a host plugin's adapter is missing hook firings (L-022), don't bypass the adapter — route around the adapter back through the host's own UI.** This pattern preserves every hook the host intends to fire, including hooks downstream plugins may depend on. Our explicit-`apply_bridge` workaround in alpha.5 was a defensible bounded workaround; routing through JE's UI in alpha.6 is the correct long-term answer.
+4. **postMessage between same-origin iframe and parent is the right primitive for "child page wants to control parent."** Use `event.origin === window.location.origin` to authenticate. Don't store window references or use globals across frames — they survive in unexpected ways across page reloads.
+5. **Watch for "we need to do double work" smells.** When the design forces you to manually orchestrate what a host plugin would do for you if it just fired its own hooks, ask whether the design is forcing you to bypass the host. Find the path that lets the host work normally instead of working around it.
+6. **The "what does this layer let me do that the existing layer doesn't?" test (from L-026) applies here too.** A custom field-type renderer per JE type would give us… what? Theoretical control we never use in practice. Delegating to JE's renderer gives us correct rendering of every type forever. The test screams "delegate."
+
+---

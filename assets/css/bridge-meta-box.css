@@ -112,20 +112,6 @@
 	background: rgba( 0, 0, 0, 0.04 );
 }
 
-.jedb-surfaced-meta small {
-	margin-left: 4px;
-	color: #909195;
-	font-style: italic;
-}
-
-.jedb-surfaced-mode-pill {
-	font-size: 9px;
-	padding: 1px 6px;
-	margin-right: 6px;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-}
-
 .jedb-surfaced-fields-empty {
 	padding: 12px 14px;
 	background: #f6f7f7;
@@ -153,6 +139,263 @@
 .jedb-surface-skipped-reason {
 	color: #8a6d00;
 	font-style: italic;
+}
+
+/* -------------------------------------------------------------------------
+ * Read-only field previews (alpha.6 / L-027) — replaces alpha.5's
+ * inline editable inputs.
+ * --------------------------------------------------------------------- */
+
+.jedb-surfaced-fields-readonly .jedb-surfaced-row {
+	padding: 8px 10px;
+	background: rgba( 0, 0, 0, 0.015 );
+	border: 1px solid rgba( 0, 0, 0, 0.06 );
+	border-radius: 4px;
+	margin: 6px 0;
+}
+
+.jedb-surfaced-row-label {
+	font-weight: 600;
+	font-size: 12px;
+	color: #1d2327;
+	margin-bottom: 4px;
+}
+
+.jedb-surfaced-row-value {
+	font-size: 13px;
+	color: #2c3338;
+	line-height: 1.5;
+	word-break: break-word;
+}
+
+.jedb-preview-empty {
+	color: #a0a3a8;
+	font-style: italic;
+}
+
+.jedb-preview-bool {
+	display: inline-block;
+	padding: 2px 8px;
+	border-radius: 11px;
+	font-weight: 600;
+	font-size: 11px;
+}
+
+.jedb-preview-bool-on {
+	background: #e8f5e9;
+	color: #1e6b2c;
+	border: 1px solid #b8e0c1;
+}
+
+.jedb-preview-bool-off {
+	background: #f6f7f7;
+	color: #646970;
+	border: 1px solid #dcdcde;
+}
+
+.jedb-preview-wysiwyg,
+.jedb-preview-text {
+	display: inline-block;
+}
+
+.jedb-preview-wysiwyg p {
+	margin: 0 0 4px 0;
+}
+
+.jedb-preview-wysiwyg-full {
+	margin-top: 6px;
+	padding: 8px 10px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 3px;
+}
+
+.jedb-preview-textarea summary,
+.jedb-preview-text-long summary,
+.jedb-preview-wysiwyg summary {
+	cursor: pointer;
+}
+
+.jedb-preview-textarea pre,
+.jedb-preview-text-long pre {
+	margin: 6px 0 0 0;
+	padding: 8px 10px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 3px;
+	white-space: pre-wrap;
+	font-size: 12px;
+}
+
+.jedb-preview-media {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+}
+
+.jedb-preview-media-thumb {
+	width: 60px;
+	height: 60px;
+	object-fit: cover;
+	border: 1px solid #dcdcde;
+	border-radius: 3px;
+}
+
+.jedb-preview-media-id {
+	font-size: 10px;
+	color: #909195;
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
+}
+
+.jedb-preview-media-nonimage .dashicons {
+	color: #2271b1;
+}
+
+.jedb-preview-gallery {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px;
+	align-items: center;
+}
+
+.jedb-preview-gallery .jedb-preview-media-thumb {
+	width: 48px;
+	height: 48px;
+}
+
+.jedb-preview-gallery-more {
+	display: inline-block;
+	padding: 4px 8px;
+	font-size: 11px;
+	font-weight: 600;
+	color: #50575e;
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 3px;
+}
+
+.jedb-preview-multi .jedb-preview-multi-item {
+	display: inline-block;
+	margin: 2px 4px 2px 0;
+	padding: 2px 6px;
+	font-size: 11px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 2px;
+}
+
+.jedb-preview-select code,
+.jedb-preview-multi-item,
+.jedb-preview-text code {
+	background: rgba( 0, 0, 0, 0.04 );
+	padding: 1px 5px;
+	border-radius: 2px;
+}
+
+.jedb-preview-date {
+	color: #2c3338;
+}
+
+.jedb-preview-link {
+	text-decoration: none;
+	color: #2271b1;
+}
+
+.jedb-preview-link:hover {
+	text-decoration: underline;
+}
+
+.jedb-preview-repeater em,
+.jedb-preview-posts small {
+	color: #909195;
+	font-size: 11px;
+}
+
+/* -------------------------------------------------------------------------
+ * "Save & edit CCT row" launch button (alpha.6)
+ * --------------------------------------------------------------------- */
+
+.jedb-bridge-cct-edit-launch {
+	margin: 16px 0 8px 0;
+	padding: 12px 14px;
+	background: #f0f6fc;
+	border: 1px solid #c5d9ed;
+	border-radius: 4px;
+}
+
+.jedb-bridge-cct-edit-launch .button {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-weight: 600;
+}
+
+.jedb-bridge-cct-edit-launch .description {
+	margin-top: 8px;
+	color: #50575e;
+	font-size: 12px;
+}
+
+/* -------------------------------------------------------------------------
+ * Modal overlay for the chrome-stripped CCT edit iframe (alpha.6 / L-027)
+ * --------------------------------------------------------------------- */
+
+body.jedb-cct-modal-open {
+	overflow: hidden;
+}
+
+.jedb-cct-modal-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba( 29, 35, 39, 0.72 );
+	z-index: 160001; /* above WP admin bar (z-index: 99999) and modals */
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+}
+
+.jedb-cct-modal-frame {
+	position: relative;
+	width: min( 1400px, 95vw );
+	height: 92vh;
+	background: #fff;
+	border-radius: 6px;
+	box-shadow: 0 24px 60px rgba( 0, 0, 0, 0.35 );
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+
+.jedb-cct-modal-iframe {
+	flex: 1 1 auto;
+	width: 100%;
+	border: 0;
+	display: block;
+}
+
+.jedb-cct-modal-close {
+	position: absolute;
+	top: 8px;
+	right: 12px;
+	z-index: 10;
+	width: 32px;
+	height: 32px;
+	border: none;
+	background: rgba( 0, 0, 0, 0.4 );
+	color: #fff;
+	font-size: 22px;
+	line-height: 1;
+	cursor: pointer;
+	border-radius: 50%;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.jedb-cct-modal-close:hover {
+	background: rgba( 0, 0, 0, 0.6 );
 }
 
 /* -------------------------------------------------------------------------
