@@ -98,6 +98,13 @@ class JEDB_Plugin {
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flattener.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-reverse-flattener.php';
 
+		// Phase 4 / Day 3 (§4.6): CCT-single → linked-post redirect shim.
+		// Hooks `template_redirect` on the frontend only. Opt-in per
+		// bridge via the `cct_single_redirect` flag (default false).
+		// See class docblock for the detection model + interaction with
+		// the alpha.6 modal-iframe flow (none — admin URL, not frontend).
+		require_once JEDB_PLUGIN_DIR . 'includes/class-cct-single-redirect.php';
+
 		JEDB_Relation_Data_Broker::instance();
 		JEDB_Relation_Runtime_Loader::instance();
 		JEDB_Relation_Transaction_Processor::instance();
@@ -107,6 +114,7 @@ class JEDB_Plugin {
 		JEDB_Taxonomy_Applier::instance();
 		JEDB_Flattener::instance();
 		JEDB_Reverse_Flattener::instance();
+		JEDB_CCT_Single_Redirect::instance();
 	}
 
 	/**

@@ -2,6 +2,48 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.11] — 2026-05-17
+
+**Phase 4 / Day 3 — CCT-single → linked-post redirect shim shipped (§4.6).**
+
+The `cct_single_redirect` schema flag has been in place since alpha.3; this release wires the runtime behavior. When the editor toggles `cct_single_redirect=true` on an enabled push-direction bridge, visiting the source CCT's "Has Single Page" URL on the frontend now 301-redirects to the bridge's resolved linked-post permalink. Default OFF — opt in per bridge in the Flatten admin tab.
+
+### Added
+
+- **`includes/class-cct-single-redirect.php`** — new `JEDB_CCT_Single_Redirect` class. Hooks `template_redirect` at priority 5 (runs before most theme handlers so we don't waste cycles loading a template we're about to redirect away from). Singleton; registers via `JEDB_CCT_Single_Redirect::instance()` in `JEDB_Plugin::load_core()`.
+- **Detection model — reverse-lookup via `cct_single_post_id`.** At `template_redirect`, after pre-flight bail-outs (admin, AJAX, cron, REST, CLI, non-singular), the shim takes the queried post ID, walks every enabled bridge whose `cct_single_redirect=true` AND direction includes push, and queries each bridge's source CCT table for a row whose `cct_single_post_id` matches the queried post ID. First match wins. This approach is JE-version-agnostic — it works whenever JE has populated `cct_single_post_id` via its standard "Has Single Page" mechanism.
+- **Loop guard for BBHQ Pattern X.** When `cct_single_post_id` IS the bridge target (the standard pattern where JE's "Has Single Page" was configured to point at the linked product), the resolved target post ID equals the queried post ID — redirecting would loop. The shim silently no-ops in this case. Intended behavior: BBHQ-style setups can safely enable the flag without breakage; the redirect just isn't needed there.
+- **Direction guard** — only redirects for bridges where `direction` is `push` or `bidirectional`. Pull-only bridges treat the CCT as the canonical display surface; redirecting them would invert the intended flow.
+- **Admin escape hatch** — logged-in users with the `JEDB_CAPABILITY` capability can pass `?jedb_no_redirect=1` to bypass the shim and inspect the underlying CCT-single page. The capability check blocks anonymous bypass.
+- **Fresh-read source data** — the shim calls `Target_CCT::get_fresh()` (L-030) when resolving target post IDs so it doesn't act on a stale cached CCT row. Frontend visits are rare enough that the direct-SQL cost is irrelevant.
+- **Shared link resolution** — re-uses `JEDB_Flattener::resolve_target_id()` so the shim and the engine stay in lock-step. Any improvement to the resolution logic (e.g. L-021 self-heal: relation row → cct_single_post_id fallback → auto-attach) automatically benefits the shim.
+- **Debug log entry** — successful redirects emit a `jedb_log` debug entry tagged `[CCT_Single_Redirect]` with bridge_id / source_id / queried_id / target_post_id for traceability.
+
+### Engine code unchanged
+
+No changes to any flattener, transformer, condition evaluator, target adapter, taxonomy applier, sync log, or meta box render path. The shim is a new frontend-only subsystem; it consumes existing engine APIs (`JEDB_Flattener::resolve_target_id`, `Target_CCT::get_fresh`) but doesn't modify them.
+
+### Modal-iframe interaction (post L-027)
+
+The shim hooks `template_redirect`, which fires only on frontend requests. The alpha.6 modal iframe loads JE's admin CCT edit URL (`wp-admin/admin.php?page=jet-cct-{slug}&cct_action=edit`), so the modal flow is completely unaffected. The shim's main consumer is public-storefront visitors who somehow land on the public CCT single URL; editors using the alpha.9 meta box never see a frontend CCT page in their daily workflow.
+
+### Migration
+
+Zero migration. The `cct_single_redirect` flag has been in the schema since alpha.3 (default `false`). Existing bridges read it as `false` automatically via `wp_parse_args()` in `merge_with_defaults()`. To activate the new shim for a bridge, tick the "CCT-single redirect" checkbox in the Flatten admin tab and save the bridge. Toggle off to revert.
+
+### Verification
+
+1. **BBHQ Pattern X (cct_single_post_id IS the bridge target)**: enable `cct_single_redirect` on the Mosaics→Product bridge. Visit the CCT single URL. Should render the product page as before, NO redirect (loop guard kicks in). Confirm via `jedb-debug.log` — no `[CCT_Single_Redirect]` entry.
+2. **Pattern Y (cct_single_post_id is a placeholder, bridge target via JE relation to a DIFFERENT post)**: set up a bridge where the CCT row's `cct_single_post_id` points at a "placeholder" post different from the bridge's linked target. Enable `cct_single_redirect`. Visit the placeholder's permalink. Should 301-redirect to the linked target's permalink. Confirm via `jedb-debug.log` `[CCT_Single_Redirect]` entry showing both IDs.
+3. **Pull-only bridge**: same as #2 but with direction=pull. Should NOT redirect (direction guard).
+4. **Admin escape hatch**: visit the placeholder permalink while logged in as a user with the JEDB capability, with `?jedb_no_redirect=1` appended. Should render the placeholder page WITHOUT redirecting.
+5. **Anonymous escape attempt**: visit the placeholder permalink while logged OUT, with `?jedb_no_redirect=1` appended. Should still redirect (anonymous bypass blocked).
+6. **No-op on unrelated singular pages**: visit any regular product / post / CPT single that isn't a CCT-backed page. Should render normally. Performance impact: one bridge-list query + one SQL per opt-in CCT-targeting bridge per singular page render. Cached column-existence checks within the request.
+
+### Future enhancement (not blocking)
+
+For JE installs where CCT singles render WITHOUT a backing WP post (some JE versions / configurations don't populate `cct_single_post_id`), the reverse-lookup approach is a no-op. Adding a secondary JE-native detection path (e.g. via `jet_engine()->listings->data->get_current_object()` returning a CCT item) would extend coverage. Deferred until a real install requires it — the reverse-lookup model covers the standard JE "Has Single Page" pattern that BBHQ uses.
+
 ## [0.6.0-alpha.10] — 2026-05-16
 
 **Flatten admin tab UI sweep + forward-looking phase documentation. No engine code touched.**
