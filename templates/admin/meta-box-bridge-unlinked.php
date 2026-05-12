@@ -56,12 +56,23 @@ $relation_id   = isset( $link_via['relation_id'] ) ? (string) $link_via['relatio
 	</div>
 
 	<?php if ( 'je_relation' === $link_type ) : ?>
-		<form method="post" action="<?php echo esc_url( $ajax_url ); ?>" class="jedb-bridge-link-form">
-			<?php wp_nonce_field( JEDB_Woo_Product_Meta_Box::NONCE_SAVE, JEDB_Woo_Product_Meta_Box::NONCE_SAVE_FIELD ); ?>
-			<input type="hidden" name="action"    value="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_LINK ); ?>" />
-			<input type="hidden" name="post_id"   value="<?php echo (int) $post->ID; ?>" />
-			<input type="hidden" name="bridge_id" value="<?php echo (int) $bridge_id; ?>" />
-
+		<?php
+		/* alpha.6.1: NO `<form>` here — see meta-box-bridge.php for
+		 * the rationale (HTML5 forbids nested forms; meta boxes are
+		 * already inside `#post`; the broken parse pushes the WP
+		 * Update button outside any form and breaks regular product
+		 * saves). Container is a `<div>` with data attributes; the
+		 * JS handler builds the real form off-DOM on submit. */
+		?>
+		<div
+			class="jedb-bridge-link-form"
+			data-jedb-form-action="<?php echo esc_url( $ajax_url ); ?>"
+			data-jedb-nonce-field="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::NONCE_SAVE_FIELD ); ?>"
+			data-jedb-nonce-value="<?php echo esc_attr( wp_create_nonce( JEDB_Woo_Product_Meta_Box::NONCE_SAVE ) ); ?>"
+			data-jedb-post-id="<?php echo (int) $post->ID; ?>"
+			data-jedb-bridge-id="<?php echo (int) $bridge_id; ?>"
+			data-jedb-action="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_LINK ); ?>"
+		>
 			<div class="jedb-link-picker">
 				<label for="jedb-link-search-<?php echo (int) $bridge_id; ?>">
 					<?php esc_html_e( 'Search for a source CCT row:', 'je-data-bridge-cc' ); ?>
@@ -75,7 +86,7 @@ $relation_id   = isset( $link_via['relation_id'] ) ? (string) $link_via['relatio
 				/>
 				<select
 					class="jedb-link-results"
-					name="source_id"
+					data-jedb-field-name="source_id"
 					size="6"
 					required
 					style="display:block;width:100%;margin-top:6px;min-height:120px;"
@@ -86,14 +97,14 @@ $relation_id   = isset( $link_via['relation_id'] ) ? (string) $link_via['relatio
 			</div>
 
 			<p>
-				<button type="submit" class="button button-primary">
+				<button type="button" class="button button-primary jedb-bridge-link-btn">
 					<?php
 					/* translators: %s = relation id */
 					printf( esc_html__( 'Link via JE Relation #%s', 'je-data-bridge-cc' ), esc_html( $relation_id ) );
 					?>
 				</button>
 			</p>
-		</form>
+		</div>
 	<?php elseif ( 'cct_single_post_id' === $link_type ) : ?>
 		<p class="description">
 			<?php esc_html_e( 'This bridge links via "Has Single Page" — JetEngine manages the link from the CCT side. Edit the linked CCT row in JE → Custom Content Types and set its single page to this product.', 'je-data-bridge-cc' ); ?>

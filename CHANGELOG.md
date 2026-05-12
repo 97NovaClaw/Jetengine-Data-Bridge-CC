@@ -2,6 +2,42 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.6.1] — 2026-05-15
+
+**Critical hotfix — Bridge meta box was emitting `<form>` tags inside the WP `#post` form (since alpha.4); fixed product saves redirecting to `wp-admin/edit.php` and the modal launcher not working (L-028).**
+
+The Bridge meta box on the Woo product / variation edit screen has been silently breaking product saves since alpha.4 (the version that introduced it). Every "Update" click on a product redirected to `wp-admin/edit.php` instead of returning to the product edit page. Field changes weren't lost server-side, but the editor's visible flow broke completely. The alpha.6 "Save & edit CCT row" modal flow also relied on a working product-save → page-reload cycle, so it appeared broken too even though the modal code itself was correct.
+
+Cause: `templates/admin/meta-box-bridge.php` and `templates/admin/meta-box-bridge-unlinked.php` rendered three `<form action="admin-post.php">` blocks inline for Sync now / Unlink / Link actions. Meta boxes are rendered INSIDE WordPress's main `#post` form, and HTML5 forbids nested forms. Browsers parse this by **ignoring the inner `<form>` opening tag but treating the inner `</form>` closing tag as closing the OUTER `#post` form**. The WP Update button then ended up outside any form and either submitted nothing or fell through to admin-post.php with no `action`, which redirects to the admin list page. See L-028 for the full mechanism + prevention rules.
+
+### Changed
+
+- **`templates/admin/meta-box-bridge.php`** — Sync now and Unlink buttons no longer wrapped in `<form>`. They are now `<button type="button" class="jedb-bridge-action-btn" data-jedb-action="…">` elements inside a plain `<div data-jedb-form-action="…" data-jedb-nonce-field="…" data-jedb-nonce-value="…" data-jedb-post-id="…" data-jedb-bridge-id="…">` wrapper. The nonce is freshly generated per render via `wp_create_nonce()` and carried in a data attribute instead of as an inline `wp_nonce_field()` call.
+- **`templates/admin/meta-box-bridge-unlinked.php`** — Link form converted the same way. The picker `<select>` no longer carries `name="source_id"` (which would otherwise have submitted with `#post` since the inputs are now naked inside the meta box); it carries `data-jedb-field-name="source_id"` instead, and the JS handler reads that value off the picker when building the off-DOM form.
+- **`assets/js/bridge-meta-box.js`** — new `buildAndSubmitForm()` helper. Click handlers on `.jedb-bridge-action-btn` (Sync now / Unlink) and `.jedb-bridge-link-btn` (Link) build a real `<form>` element appended to `<body>` (well outside `#post`), populate it with hidden inputs from the wrapper's data attributes plus an optional `extras` map for action-specific values (e.g. `source_id` from the picker), and submit it programmatically. Same admin-post.php endpoints, same handlers, same flow — just no invalid nested-form HTML.
+- **L-028 in `LESSONS-LEARNED.md`** — "Never nest `<form>` tags inside a WordPress meta box." Full breakdown of the bug + parser behavior + prevention rules including a possible CI lint check (`rg --quiet '<form\b' templates/admin/meta-box-*.php`).
+
+### Engine code unchanged
+
+No changes to `handle_save()`, `handle_sync_now()`, `handle_unlink()`, `handle_link()`, any flattener / reverse flattener, or any other engine file. The bug was purely in the meta box's HTML emission. The Sync now / Unlink / Link admin-post.php endpoints validate their nonces and POST data exactly as before — the wire format is identical.
+
+### Migration notes
+
+Pure browser-rendering fix. No schema migration, no config migration, no engine behavior change. Existing flatten configs work unchanged. The bug was invisible to PHP — no error rows in `wp_jedb_sync_log`, no entries in `jedb-debug.log`. Only end-to-end user testing surfaced it.
+
+### Why this slipped through alpha.4 → alpha.5 → alpha.6
+
+The meta box was tested in alpha.4 staging primarily via the action buttons (Sync now / Unlink) — those buttons WORKED because clicking them submitted what the browser thought was the correct (mangled) form to admin-post.php with the right action params. The regression was visible only when the user clicked WP's main "Update" button on the product, which most staging tests didn't focus on. alpha.5's data-loss fix re-tested the meta box flow but again focused on the surfaced-field write semantics rather than the product save outcome. alpha.6's modal launcher relied on the product save → page reload cycle, which made the bug finally unmissable: the editor saved the product, expected the modal to auto-open on reload, and got dumped on the post list instead.
+
+### Verification
+
+1. Open any Woo product. Verify the meta box renders normally.
+2. Make a change to a product-level field (title, price, etc.). Click "Update."
+3. Page should return to the product edit screen (with the WP "Post updated" notice), NOT redirect to `wp-admin/edit.php`.
+4. View page source / DOM inspector. The `<div id="jedb_bridge_meta_box">` block should contain NO `<form>` tags. Outer `<form id="post">` should remain open through the entire meta box block.
+5. Click "Sync now" or "Unlink" buttons. They should POST to `admin-post.php` and redirect back to the product edit page (with our admin notice on success).
+6. Click "Save & edit \"{label}\" in JetEngine". If form was dirty, the save-first flow should now actually save the product and reload to the same product page. The modal should auto-open after reload.
+
 ## [0.6.0-alpha.6] — 2026-05-15
 
 **Phase 4 / Day 2 architectural pivot — delegate CCT editing to JE itself via a chrome-stripped modal iframe; field-type-aware read-only previews on the product edit screen; alpha.5 explicit-`apply_bridge` workaround retired (L-027).**

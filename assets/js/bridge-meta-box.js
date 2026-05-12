@@ -219,6 +219,110 @@
 		}
 
 		/* =================================================================
+		 * Bridge action buttons — Sync now / Unlink / Link
+		 * (alpha.6.1 nested-form fix; see meta-box templates for context)
+		 *
+		 * WP meta boxes render inside the `#post` form. HTML5 forbids
+		 * nested forms — the parser closes `#post` early on the inner
+		 * `</form>`, pushing the WP Update button outside any form and
+		 * breaking regular product saves (they fall through to
+		 * admin-post.php with no action and WP redirects to
+		 * wp-admin/edit.php). The templates therefore render plain
+		 * <div>s with data attributes; we build the actual <form>
+		 * here, append it to <body> (well outside `#post`), populate
+		 * it, and submit it programmatically.
+		 * ============================================================== */
+
+		function buildAndSubmitForm( config ) {
+			/* config: {
+			 *   action      : '<admin-post.php URL>',
+			 *   wpAction    : 'jedb_sync_now' | 'jedb_unlink' | 'jedb_link',
+			 *   nonceField  : '_jedb_nonce',
+			 *   nonceValue  : 'abc123…',
+			 *   postId      : 123,
+			 *   bridgeId    : 4,
+			 *   extras      : { source_id: 5 }   // optional, action-specific
+			 * }
+			 */
+			var $form = $( '<form>', {
+				method: 'post',
+				action: config.action,
+				style:  'display:none;'
+			} );
+
+			function addHidden( name, value ) {
+				$form.append( $( '<input>', { type: 'hidden', name: name, value: value } ) );
+			}
+
+			addHidden( 'action',                 config.wpAction );
+			addHidden( config.nonceField,        config.nonceValue );
+			addHidden( '_wp_http_referer',       window.location.href );
+			addHidden( 'post_id',                config.postId );
+			addHidden( 'bridge_id',              config.bridgeId );
+
+			if ( config.extras ) {
+				$.each( config.extras, function ( k, v ) {
+					addHidden( k, v );
+				} );
+			}
+
+			$( 'body' ).append( $form );
+			$form.trigger( 'submit' );
+		}
+
+		// Linked panel: Sync now / Unlink buttons
+		$( document ).on( 'click', '.jedb-bridge-action-btn', function ( e ) {
+			e.preventDefault();
+			var $btn      = $( this );
+			var $wrap     = $btn.closest( '[data-jedb-form-action]' );
+			if ( ! $wrap.length ) { return; }
+
+			var confirmMsg = String( $btn.data( 'jedb-confirm' ) || '' );
+			if ( confirmMsg && ! window.confirm( confirmMsg ) ) { return; }
+
+			buildAndSubmitForm( {
+				action:     String( $wrap.data( 'jedb-form-action' ) || '' ),
+				wpAction:   String( $btn.data( 'jedb-action' ) || '' ),
+				nonceField: String( $wrap.data( 'jedb-nonce-field' ) || '' ),
+				nonceValue: String( $wrap.data( 'jedb-nonce-value' ) || '' ),
+				postId:     parseInt( $wrap.data( 'jedb-post-id' ), 10 ) || 0,
+				bridgeId:   parseInt( $wrap.data( 'jedb-bridge-id' ), 10 ) || 0
+			} );
+		} );
+
+		// Unlinked panel: Link button — picks up the selected source_id from
+		// the picker's <select data-jedb-field-name="source_id"> element.
+		$( document ).on( 'click', '.jedb-bridge-link-btn', function ( e ) {
+			e.preventDefault();
+			var $btn  = $( this );
+			var $wrap = $btn.closest( '[data-jedb-form-action]' );
+			if ( ! $wrap.length ) { return; }
+
+			var $picker  = $wrap.find( 'select[data-jedb-field-name]' );
+			var fieldName = String( $picker.data( 'jedb-field-name' ) || 'source_id' );
+			var sourceId  = $picker.val();
+
+			if ( ! sourceId ) {
+				window.alert( 'Pick a CCT row from the search results first.' );
+				$picker.focus();
+				return;
+			}
+
+			var extras = {};
+			extras[ fieldName ] = sourceId;
+
+			buildAndSubmitForm( {
+				action:     String( $wrap.data( 'jedb-form-action' ) || '' ),
+				wpAction:   String( $wrap.data( 'jedb-action' ) || '' ),
+				nonceField: String( $wrap.data( 'jedb-nonce-field' ) || '' ),
+				nonceValue: String( $wrap.data( 'jedb-nonce-value' ) || '' ),
+				postId:     parseInt( $wrap.data( 'jedb-post-id' ), 10 ) || 0,
+				bridgeId:   parseInt( $wrap.data( 'jedb-bridge-id' ), 10 ) || 0,
+				extras:     extras
+			} );
+		} );
+
+		/* =================================================================
 		 * Unlinked panel — live CCT search (unchanged from alpha.4)
 		 * ============================================================== */
 

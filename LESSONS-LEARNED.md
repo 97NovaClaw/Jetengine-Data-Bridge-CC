@@ -2166,3 +2166,119 @@ v0.6.0-alpha.6.
 6. **The "what does this layer let me do that the existing layer doesn't?" test (from L-026) applies here too.** A custom field-type renderer per JE type would give us… what? Theoretical control we never use in practice. Delegating to JE's renderer gives us correct rendering of every type forever. The test screams "delegate."
 
 ---
+
+## L-028: Never nest `<form>` tags inside a WordPress meta box — meta boxes already live inside `#post`.
+
+**Discovered:** 2026-05-15 (Phase 4 Day 2 hotfix / version 0.6.0-alpha.6.1)
+**Severity:** Critical
+**Category:** Wrong assumption / API knowledge
+
+### Context
+Phase 4 Day 2 (alpha.4) introduced the Bridge meta box on Woo product / variation edit screens. The meta box needs three distinct action endpoints (Sync now, Unlink, Link) that hit `admin-post.php`. The natural pattern — and the one used everywhere else in the plugin's standalone admin tabs — is `<form method="post" action="<?php echo admin_url('admin-post.php'); ?>">` with hidden inputs and a submit button.
+
+We applied that pattern verbatim inside the meta box templates. It looked correct in source.
+
+### Wrong
+We had three `<form>` blocks inside `templates/admin/meta-box-bridge.php` and `templates/admin/meta-box-bridge-unlinked.php`:
+
+- Sync now (`<form action="admin-post.php">`)
+- Unlink (`<form action="admin-post.php" onsubmit="confirm(…)">`)
+- Link (`<form action="admin-post.php">` wrapping the CCT picker)
+
+Forgot that WordPress meta boxes are **rendered inside the main `#post` form** that the post edit screen builds. That makes our `<form>` tags **nested**, which HTML5 explicitly forbids.
+
+### Evidence
+End-to-end staging tests from 2026-05-12 showed: **every product save** (regular WP Update click AND clicks on our action buttons AND the alpha.6 "Save & edit CCT row" launcher) redirected to `wp-admin/edit.php` instead of returning to the product edit page. The `jedb-debug.log` showed nothing wrong server-side — hooks registered normally, no error rows in `wp_jedb_sync_log`. Pure client/browser-layer bug, invisible from PHP.
+
+The user described: *"anytime i save a product (regular save or from the JE Data bridge), it is just taking me to wp-admin/edit.php this was happening much earlier in the changes we were making i just didn't surface this issue until now because im not seeing a modal its just sending me to the page i just mentioned"*.
+
+This wasn't an alpha.6 regression — alpha.4 introduced it the moment the meta box first shipped. Three releases (alpha.4, alpha.5, alpha.6) all silently carried the bug. The user only surfaced it now because alpha.6's "Save & edit CCT row" flow made the symptom unmissable (no modal, just a redirect).
+
+### Reality
+HTML5 spec, §4.10.3: *"A form element cannot be nested in another form element."*
+
+Browser parsers handle this by:
+1. **Ignoring the inner `<form>` opening tag** — the parser knows it's invalid, drops it.
+2. **Treating the inner `</form>` closing tag as closing the OUTER form** — the parser has to balance something, and since the inner opening tag was dropped, the closing tag closes the only open form (the outer `#post`).
+
+Net DOM after parsing:
+
+```html
+<form id="post" action="post.php" method="post">
+  ... product fields ...
+  <div id="jedb_bridge_meta_box">
+    <!-- our inner <form> tag dropped -->
+    <input type="hidden" name="action" value="jedb_sync_now" />
+    <input type="hidden" name="bridge_id" value="1" />
+    <button type="submit">Sync now</button>
+  </form>  <!-- this CLOSES #post! -->
+  ... rest of product page ...
+  <button id="publish">Update</button>   <!-- now OUTSIDE any form -->
+</form> <!-- ignored, nothing to close -->
+```
+
+The WP Update button is now outside `#post`. Click behavior depends on browser:
+- **Submits nothing** — and falls through to the document's default action handler, which on many setups is `wp-admin/edit.php` via the URL bar's referrer.
+- **Submits to `admin-post.php`** — because that was the LAST `<form action="…">` the parser saw before the orphaned `<button type="submit">`. With no `action=…` POST param, `admin-post.php` does nothing useful and WordPress's fallback redirects to admin home / list.
+
+Either way, the user lands on `wp-admin/edit.php` and any pending product save is lost. Compounded silently because the field changes go to the right `<input>` elements but never get POSTed.
+
+### Affected code
+- `templates/admin/meta-box-bridge.php` lines 251-265 (alpha.4 onward) — Sync now + Unlink forms.
+- `templates/admin/meta-box-bridge-unlinked.php` lines 59-96 (alpha.4 onward) — Link form.
+
+### Fix shipped in
+v0.6.0-alpha.6.1.
+
+**Pattern: render plain `<div>`s with data attributes; let JavaScript build the real `<form>` off-DOM (appended to `<body>`) at click time and submit it programmatically.**
+
+Template side:
+```php
+<div
+    class="jedb-bridge-actions"
+    data-jedb-form-action="<?php echo esc_url( $ajax_url ); ?>"
+    data-jedb-nonce-field="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::NONCE_SAVE_FIELD ); ?>"
+    data-jedb-nonce-value="<?php echo esc_attr( wp_create_nonce( JEDB_Woo_Product_Meta_Box::NONCE_SAVE ) ); ?>"
+    data-jedb-post-id="<?php echo (int) $post->ID; ?>"
+    data-jedb-bridge-id="<?php echo (int) $bridge_id; ?>"
+>
+    <button
+        type="button"
+        class="button button-primary jedb-bridge-action-btn"
+        data-jedb-action="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_SYNC_NOW ); ?>"
+    >Sync now</button>
+</div>
+```
+
+JS side:
+```js
+function buildAndSubmitForm( config ) {
+    var $form = $( '<form>', { method:'post', action:config.action, style:'display:none;' } );
+    function addHidden( name, value ) {
+        $form.append( $( '<input>', { type:'hidden', name:name, value:value } ) );
+    }
+    addHidden( 'action',           config.wpAction );
+    addHidden( config.nonceField,  config.nonceValue );
+    addHidden( '_wp_http_referer', window.location.href );
+    addHidden( 'post_id',          config.postId );
+    addHidden( 'bridge_id',        config.bridgeId );
+    if ( config.extras ) {
+        $.each( config.extras, function ( k, v ) { addHidden( k, v ); } );
+    }
+    $( 'body' ).append( $form );
+    $form.trigger( 'submit' );
+}
+```
+
+Note: `type="button"` on the in-template `<button>` is critical — `type="submit"` (the HTML default!) would attempt to submit the OUTER `#post` form when clicked, which is exactly what we're trying to avoid for actions that aren't "save the product."
+
+### Prevention
+1. **Treat the meta box's outer container as a transparent rendering surface — assume everything you emit will be wrapped by WP in the post edit `#post` form. Never emit `<form>` tags. Never emit `<button type="submit">` for non-save actions.** Use `type="button"` and a JS handler.
+2. **Anything that needs to POST to admin-post.php from a meta box has to be built and submitted at the JS layer.** Render plain `<div>`s with data attributes; build the form in JS appended to `<body>` (or some other container guaranteed-outside `#post`) at click time.
+3. **Even `<input type="hidden" name="…">` outside any form is fine** — they just don't submit. But they DO submit if you place them inside `#post` (which is what meta box contents are). Use this carefully: for example, the meta box DOES use `<input type="hidden" name="jedb_meta_box_present" value="1">` and lock checkbox + direction radios INTENTIONALLY because we WANT those to ride along with the regular WP product save (handle_save() reads them). The distinction is: post-meta-side state goes inside #post intentionally; admin-post.php-side actions go through the JS-built off-DOM form.
+4. **When you write a meta box, view it in browser devtools' Elements panel and inspect the actual DOM tree, not just the source HTML.** The browser-corrected DOM tree will show nested-form mangling clearly: the outer `<form id="post">` will close on an unexpected line, your meta box will appear to have leaked children outside the form, the Update button will be parentless or in the wrong parent.
+5. **Lint rule for the future:** any PHP template at `templates/admin/meta-box-*.php` SHOULD NOT contain a literal `<form` token. Could be enforced by a CI check (`rg --quiet '<form\\b' templates/admin/meta-box-*.php && exit 1`).
+6. **L-022, L-027, and L-028 share a theme: assumptions about API surfaces that turn out to be invalid against the host plugin / host system.** L-022: adapter writes don't fire JE hooks. L-027: don't reimplement what JE already does. L-028: meta boxes are inside the post form. The general rule is: when working with a host system (WP, JE, Woo), verify the rendering / hook / state model with the actual host, not your mental model.
+7. **Standalone admin tab forms remain fine** — `templates/admin/tab-flatten.php`, `tab-relations.php`, `tab-debug.php`, `tab-targets.php` all use `<form>` directly. They render on their own admin pages, not inside `#post`. The bug was strictly the meta box (the only UI surface that renders inside a parent form).
+
+---

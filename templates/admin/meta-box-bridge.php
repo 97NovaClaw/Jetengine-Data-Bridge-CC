@@ -245,25 +245,45 @@ $ajax_url      = admin_url( 'admin-post.php' );
 		</div>
 	<?php endif; ?>
 
-	<?php /* ----- Action buttons (separate forms so they don't double-submit the parent product save) ----- */ ?>
-	<div class="jedb-bridge-actions">
+	<?php
+	/* ----- Action buttons (alpha.6.1 nested-form fix) -----
+	 *
+	 * IMPORTANT: WP meta boxes render INSIDE the main `#post` form. HTML5
+	 * forbids nested forms — the parser ignores the inner `<form>` open
+	 * tag but treats the inner `</form>` close tag as closing the OUTER
+	 * form. This pushes the WP Update button outside any form, breaks
+	 * the normal product save flow, and (in many cases) causes the
+	 * Update click to fall through to `admin-post.php` with no/wrong
+	 * action — which WordPress redirects to `wp-admin/edit.php`.
+	 *
+	 * Fix: render buttons with `type="button"` and data attributes
+	 * carrying the action + nonce + hidden inputs. The JS handler
+	 * (jedb-bridge-meta-box) builds a real <form> appended to the body
+	 * (OUTSIDE `#post`) on click, populates it, submits it. Same
+	 * admin-post.php endpoints, same handlers, same flow — just no
+	 * invalid nested-form HTML. */
+	?>
+	<div
+		class="jedb-bridge-actions"
+		data-jedb-form-action="<?php echo esc_url( $ajax_url ); ?>"
+		data-jedb-nonce-field="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::NONCE_SAVE_FIELD ); ?>"
+		data-jedb-nonce-value="<?php echo esc_attr( wp_create_nonce( JEDB_Woo_Product_Meta_Box::NONCE_SAVE ) ); ?>"
+		data-jedb-post-id="<?php echo (int) $post->ID; ?>"
+		data-jedb-bridge-id="<?php echo (int) $bridge_id; ?>"
+	>
+		<button
+			type="button"
+			class="button button-primary jedb-bridge-action-btn"
+			data-jedb-action="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_SYNC_NOW ); ?>"
+		><?php esc_html_e( 'Sync now (push from source)', 'je-data-bridge-cc' ); ?></button>
 
-		<form method="post" action="<?php echo esc_url( $ajax_url ); ?>" style="display:inline-block;">
-			<?php wp_nonce_field( JEDB_Woo_Product_Meta_Box::NONCE_SAVE, JEDB_Woo_Product_Meta_Box::NONCE_SAVE_FIELD ); ?>
-			<input type="hidden" name="action"    value="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_SYNC_NOW ); ?>" />
-			<input type="hidden" name="post_id"   value="<?php echo (int) $post->ID; ?>" />
-			<input type="hidden" name="bridge_id" value="<?php echo (int) $bridge_id; ?>" />
-			<button type="submit" class="button button-primary"><?php esc_html_e( 'Sync now (push from source)', 'je-data-bridge-cc' ); ?></button>
-		</form>
-
-		<form method="post" action="<?php echo esc_url( $ajax_url ); ?>" style="display:inline-block; margin-left:8px;" onsubmit="return confirm('<?php echo esc_js( __( 'Unlink this product from its source CCT row? The CCT row will not be deleted — only the JE Relation row between them. You can re-link below.', 'je-data-bridge-cc' ) ); ?>');">
-			<?php wp_nonce_field( JEDB_Woo_Product_Meta_Box::NONCE_SAVE, JEDB_Woo_Product_Meta_Box::NONCE_SAVE_FIELD ); ?>
-			<input type="hidden" name="action"    value="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_UNLINK ); ?>" />
-			<input type="hidden" name="post_id"   value="<?php echo (int) $post->ID; ?>" />
-			<input type="hidden" name="bridge_id" value="<?php echo (int) $bridge_id; ?>" />
-			<button type="submit" class="button button-link-delete"><?php esc_html_e( 'Unlink', 'je-data-bridge-cc' ); ?></button>
-		</form>
-
+		<button
+			type="button"
+			class="button button-link-delete jedb-bridge-action-btn"
+			data-jedb-action="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_UNLINK ); ?>"
+			data-jedb-confirm="<?php echo esc_attr__( 'Unlink this product from its source CCT row? The CCT row will not be deleted — only the JE Relation row between them. You can re-link below.', 'je-data-bridge-cc' ); ?>"
+			style="margin-left:8px;"
+		><?php esc_html_e( 'Unlink', 'je-data-bridge-cc' ); ?></button>
 	</div>
 
 </div>

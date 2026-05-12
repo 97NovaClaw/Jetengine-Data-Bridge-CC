@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.6
+Stable tag: 0.6.0-alpha.6.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.6) ==
+== Current Capability (v0.6.0-alpha.6.1) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -94,6 +94,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.6.0-alpha.6.1 =
+* Critical hotfix (L-028) - the Bridge meta box was emitting `<form>` tags inside WP's main `#post` form, which HTML5 forbids. Browser parsers were closing `#post` prematurely on the inner `</form>`, pushing the WP Update button outside any form, and causing every product save to redirect to `wp-admin/edit.php`. Bug existed since alpha.4 but only surfaced now because alpha.6's modal launcher made the symptom unmissable. Fixed by converting the Sync now / Unlink / Link buttons to `<button type="button">` elements with data attributes; the JS click handler builds the real `<form>` off-DOM (appended to `<body>`, outside `#post`) and submits programmatically. Same admin-post.php endpoints, same handlers, same flow - just no invalid nested-form HTML. NO engine code touched.
+
 = 0.6.0-alpha.6 =
 * Phase 4 Day 2 architectural pivot (L-027) — CCT editing on the Woo product edit screen is now delegated to JE's own CCT edit page via a chrome-stripped modal iframe. Surfaced fields render as type-aware READ-ONLY previews (text, boolean pills, media thumbnails, gallery grids, select labels, date formatting, etc.); a "Save & edit \"{label}\" in JetEngine" button per linked bridge launches the JE edit page in an iframe overlay with WP chrome hidden. Editor saves in JE's native UI (every field type works because JE renders them), clicks "Done · Return to product" in our top bar, parent product page reloads and shows the updated previews. The alpha.5 explicit-`apply_bridge` workaround for L-022 is retired — JE's natural save flow fires its hooks normally because JE itself is doing the save, not our adapter. Net result: zero per-type-renderer code, zero L-022 friction, every JE field type works correctly with no maintenance burden as JE adds field types in future releases. No schema migration; existing flatten configs work unchanged.
 
@@ -144,6 +147,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.6.1 =
+Critical hotfix - product saves were redirecting to `wp-admin/edit.php` because the Bridge meta box emitted `<form>` tags inside WP's `#post` form (invalid HTML, since alpha.4). Update IMMEDIATELY if you're on alpha.4 / alpha.5 / alpha.6. No engine behavior change, no schema migration.
 
 = 0.6.0-alpha.6 =
 Phase 4 Day 2 architectural pivot — CCT editing now happens in JE's own UI via a chrome-stripped modal iframe launched from the Woo product edit screen. The meta box renders type-aware read-only previews and a "Save & edit" button per linked bridge. Every JE field type works correctly (because JE renders them). The alpha.5 explicit-apply_bridge workaround for L-022 is gone. No schema migration; existing configs work unchanged.
