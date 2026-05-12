@@ -576,10 +576,11 @@
 			.filter( function ( s ) { return s.length > 0; } );
 
 		cfg.meta_box = $.extend( {}, cfg.meta_box || {}, {
-			enabled:  $form.find( 'input[name="meta_box_enabled"]' ).is( ':checked' ),
-			title:    String( $form.find( 'input[name="meta_box_title"]' ).val() || '' ),
-			position: String( $form.find( 'input[name="meta_box_position"]:checked' ).val() || 'normal' ),
-			groups:   groupsArr
+			enabled:       $form.find( 'input[name="meta_box_enabled"]' ).is( ':checked' ),
+			title:         String( $form.find( 'input[name="meta_box_title"]' ).val() || '' ),
+			position:      String( $form.find( 'input[name="meta_box_position"]:checked' ).val() || 'normal' ),
+			groups:        groupsArr,
+			show_advanced: $form.find( 'input[name="meta_box_show_advanced"]' ).is( ':checked' )
 		} );
 
 		if ( ! cfg.trigger ) {
@@ -625,7 +626,7 @@
 
 	$tbody.on( 'change', 'select, input, textarea', syncJSON );
 
-	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="direction"]', syncJSON );
+	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="meta_box_show_advanced"], input[name="direction"]', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_condition, #jedb_flatten_meta_box_title, #jedb_flatten_meta_box_groups', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 

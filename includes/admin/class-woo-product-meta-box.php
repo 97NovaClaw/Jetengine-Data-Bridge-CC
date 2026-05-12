@@ -152,15 +152,55 @@ class JEDB_Woo_Product_Meta_Box {
 
 		$post_types = array( 'product', 'product_variation' );
 
+		// alpha.9 (L-031): one meta box per enabled bridge, not one
+		// umbrella box for all bridges. Each registered box uses the
+		// bridge's `meta_box.title` (fallback to its `label`) as its WP
+		// header so editor edits in the Flatten admin tab propagate
+		// natively. Each box uses its bridge's `meta_box.position`
+		// (`normal` | `side` | `advanced`). Two CCTs linked to one
+		// product = two stacked collapsible boxes, each clearly named.
 		foreach ( $post_types as $pt ) {
-			add_meta_box(
-				self::META_BOX_ID,
-				__( 'JE Data Bridge', 'je-data-bridge-cc' ),
-				array( $this, 'render_meta_box' ),
-				$pt,
-				'normal',
-				'default'
-			);
+
+			$target_slug = 'posts::' . $pt;
+			$bridges     = $this->find_bridges_for_target( $target_slug );
+
+			foreach ( $bridges as $bridge ) {
+
+				$config       = isset( $bridge['config'] ) && is_array( $bridge['config'] ) ? $bridge['config'] : array();
+				$meta_box_cfg = isset( $config['meta_box'] ) && is_array( $config['meta_box'] ) ? $config['meta_box'] : array();
+
+				// Honor the bridge config's `enabled` flag: if a bridge
+				// has the meta box disabled, skip registration entirely
+				// (no empty placeholder, no screen-options entry).
+				if ( isset( $meta_box_cfg['enabled'] ) && ! $meta_box_cfg['enabled'] ) {
+					continue;
+				}
+
+				$bridge_id = (int) ( $bridge['id'] ?? 0 );
+				if ( ! $bridge_id ) {
+					continue;
+				}
+
+				$title = ! empty( $meta_box_cfg['title'] )
+					? (string) $meta_box_cfg['title']
+					: $this->bridge_display_label( $bridge );
+
+				$position = isset( $meta_box_cfg['position'] ) ? (string) $meta_box_cfg['position'] : 'normal';
+				if ( ! in_array( $position, array( 'normal', 'side', 'advanced' ), true ) ) {
+					$position = 'normal';
+				}
+
+				add_meta_box(
+					self::META_BOX_ID . '_' . $bridge_id,
+					$title,
+					function ( $post ) use ( $bridge ) {
+						$this->render_meta_box_for_bridge( $post, $bridge );
+					},
+					$pt,
+					$position,
+					'default'
+				);
+			}
 		}
 	}
 
@@ -566,56 +606,33 @@ class JEDB_Woo_Product_Meta_Box {
 	 *
 	 * @param WP_Post $post
 	 */
-	public function render_meta_box( $post ) {
+	/**
+	 * Render the meta box for ONE bridge (alpha.9 one-box-per-bridge
+	 * model). Replaces the alpha.4-alpha.8 `render_meta_box()` which
+	 * looped all bridges inside a single umbrella box.
+	 *
+	 * Resolves linked-vs-unlinked state for this specific bridge × post
+	 * pair, then delegates to the linked or unlinked template. Each
+	 * call writes its own nonce so per-bridge save handlers can verify
+	 * against the same NONCE_SAVE constant.
+	 *
+	 * @param WP_Post $post
+	 * @param array   $bridge  Decoded flatten config row.
+	 */
+	public function render_meta_box_for_bridge( $post, $bridge ) {
 
 		wp_nonce_field( self::NONCE_SAVE, self::NONCE_SAVE_FIELD );
 
-		$post_type      = $post->post_type;
-		$target_slug    = 'posts::' . $post_type;
-		$bridges        = $this->find_bridges_for_target( $target_slug );
-
-		if ( empty( $bridges ) ) {
-			echo '<p class="description">';
-			esc_html_e( 'No JEDB bridge configs target this post type. Configure one in JE Data Bridge → Flatten.', 'je-data-bridge-cc' );
-			echo '</p>';
-			return;
-		}
-
-		// For each candidate bridge, resolve whether THIS specific post
-		// is linked through it. Each bridge gets its own panel — linked
-		// or unlinked — so a product matched by multiple bridges (rare
-		// but legal) shows them all.
-		$resolutions = array();
-		foreach ( $bridges as $bridge ) {
-			$resolutions[] = array(
-				'bridge'     => $bridge,
-				'resolution' => $this->resolve_for_post( $bridge, $post ),
-			);
-		}
-
+		$resolution     = $this->resolve_for_post( $bridge, $post );
 		$lock_value     = (bool) get_post_meta( $post->ID, self::META_LOCKED, true );
 		$override_value = (string) get_post_meta( $post->ID, self::META_DIRECTION_OVR, true );
 
-		echo '<div class="jedb-meta-box-wrap" data-post-id="' . esc_attr( (int) $post->ID ) . '">';
+		echo '<div class="jedb-meta-box-wrap" data-post-id="' . esc_attr( (int) $post->ID ) . '" data-bridge-id="' . esc_attr( (int) ( $bridge['id'] ?? 0 ) ) . '">';
 
-		foreach ( $resolutions as $entry ) {
-
-			$bridge     = $entry['bridge'];
-			$resolution = $entry['resolution'];
-			$config     = isset( $bridge['config'] ) && is_array( $bridge['config'] ) ? $bridge['config'] : array();
-			$meta_box   = isset( $config['meta_box'] ) && is_array( $config['meta_box'] ) ? $config['meta_box'] : array();
-
-			// If the bridge config explicitly disables meta box rendering
-			// (meta_box.enabled = false), skip its panel.
-			if ( isset( $meta_box['enabled'] ) && ! $meta_box['enabled'] ) {
-				continue;
-			}
-
-			if ( ! empty( $resolution['source_id'] ) ) {
-				$this->render_linked_panel( $post, $bridge, $resolution, $lock_value, $override_value );
-			} else {
-				$this->render_unlinked_panel( $post, $bridge, $resolution );
-			}
+		if ( ! empty( $resolution['source_id'] ) ) {
+			$this->render_linked_panel( $post, $bridge, $resolution, $lock_value, $override_value );
+		} else {
+			$this->render_unlinked_panel( $post, $bridge, $resolution );
 		}
 
 		echo '</div>';
@@ -639,6 +656,14 @@ class JEDB_Woo_Product_Meta_Box {
 		$bridge_label  = $this->bridge_display_label( $bridge );
 		$panel_title   = ! empty( $meta_box_cfg['title'] ) ? (string) $meta_box_cfg['title'] : $bridge_label;
 
+		// alpha.9 (L-031): show_advanced gates the bottom "<details>
+		// Advanced Details" collapsible. When false (default), the
+		// panel renders only surfaced field previews + the "Save & edit"
+		// modal launcher button. When true, an additional <details>
+		// section appears with per-product overrides, recent sync log,
+		// and Sync now / Unlink action buttons.
+		$show_advanced = ! empty( $meta_box_cfg['show_advanced'] );
+
 		// Build the surfaced-field display rows. Per alpha.5 design
 		// (response to user's "does it need a target field?" finding):
 		// surface_on_target is decoupled from target_field requirement
@@ -656,7 +681,7 @@ class JEDB_Woo_Product_Meta_Box {
 		$surface_result   = $this->build_surfaced_groups( $mappings, $target_adapter, $source_adapter, $source_data, $meta_box_cfg );
 		$surfaced_groups  = $surface_result['groups'];
 		$surface_skipped  = $surface_result['skipped'];
-		$recent_log       = $this->recent_log_for_post( $bridge, $post->ID );
+		$recent_log       = $show_advanced ? $this->recent_log_for_post( $bridge, $post->ID ) : array();
 		$last_manual_id   = (int) get_post_meta( $post->ID, self::META_LAST_MANUAL, true );
 
 		// Flatten admin tab deep link for "Edit this bridge".

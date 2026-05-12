@@ -1,171 +1,35 @@
 /**
- * Bridge meta box — Phase 4 / Day 2 (D-27).
+ * Bridge meta box — alpha.9 (L-031) minimal native-WP styles.
  *
- * Styling for the JEDB Bridge meta box on Woo product / variation
- * edit screens. Scoped to .jedb-meta-box-wrap so it doesn't bleed into
- * Woo's own meta boxes or the editor screen.
+ * The WP meta box itself provides the container (header, collapsible
+ * frame, border, position). This stylesheet only supplies what WP
+ * doesn't: read-only field preview helpers, the modal overlay, and a
+ * couple of layout tweaks for the Advanced Details section.
  *
  * @package JEDB
  */
 
-.jedb-meta-box-wrap {
-	font-size: 13px;
+/* =========================================================================
+ * Read-only field previews
+ *
+ * Used inside the surfaced-fields form-table on the linked panel. Each
+ * helper is small — most field types render plain text that needs no
+ * styling beyond inheriting from form-table.
+ * ====================================================================== */
+
+.jedb-surfaced-table {
+	margin-top: 0;
 }
 
-.jedb-bridge-panel {
-	margin: 0 0 24px 0;
-	padding: 16px 18px;
-	background: #fff;
-	border: 1px solid #c3c4c7;
-	border-radius: 6px;
-}
-
-.jedb-bridge-panel + .jedb-bridge-panel {
-	margin-top: 12px;
-}
-
-.jedb-bridge-panel-title {
-	margin: 0 0 12px 0;
-	font-size: 15px;
-	font-weight: 600;
-	color: #1d2327;
-}
-
-.jedb-bridge-panel-title .jedb-bridge-panel-status {
-	margin-left: 8px;
-	font-size: 10px;
-	vertical-align: middle;
-}
-
-.jedb-bridge-panel-meta {
-	font-size: 12px;
-	color: #50575e;
-	margin-bottom: 16px;
-	padding-bottom: 14px;
-	border-bottom: 1px solid #dcdcde;
-}
-
-.jedb-bridge-panel-meta p {
-	margin: 4px 0;
-}
-
-.jedb-bridge-panel-meta code {
+.jedb-surfaced-table .jedb-surfaced-group-header {
 	font-size: 11px;
-	padding: 1px 5px;
-}
-
-.jedb-bridge-resolution {
-	margin-left: 8px;
-	color: #646970;
-}
-
-/* -------------------------------------------------------------------------
- * Surfaced fields
- * --------------------------------------------------------------------- */
-
-.jedb-surfaced-fields {
-	margin: 14px 0 18px 0;
-}
-
-.jedb-surfaced-group {
-	margin: 0 0 14px 0;
-	padding: 10px 14px;
-	background: #f6f7f7;
-	border: 1px solid #dcdcde;
-	border-radius: 4px;
-}
-
-.jedb-surfaced-group legend {
-	font-weight: 600;
-	font-size: 12px;
 	text-transform: uppercase;
 	letter-spacing: 0.04em;
 	color: #50575e;
-	padding: 0 6px;
-}
-
-.jedb-surfaced-row {
-	margin: 10px 0;
-}
-
-.jedb-surfaced-row label {
-	display: block;
 	font-weight: 600;
-	margin-bottom: 4px;
-}
-
-.jedb-surfaced-row .description {
-	margin: 4px 0 0 0;
-	font-size: 12px;
-	color: #646970;
-}
-
-.jedb-surfaced-meta {
-	margin: 4px 0 0 0;
-	font-size: 11px;
-	color: #909195;
-}
-
-.jedb-surfaced-meta code {
-	font-size: 11px;
-	padding: 1px 5px;
-	background: rgba( 0, 0, 0, 0.04 );
-}
-
-.jedb-surfaced-fields-empty {
-	padding: 12px 14px;
-	background: #f6f7f7;
-	border: 1px dashed #c3c4c7;
-	border-radius: 4px;
-}
-
-.jedb-surface-skipped-list {
-	margin: 6px 0 6px 18px;
-	padding: 0;
-	list-style: disc;
-	font-size: 12px;
-}
-
-.jedb-surface-skipped-list li {
-	margin: 4px 0;
-	color: #50575e;
-}
-
-.jedb-surface-skipped-list code {
-	font-size: 11px;
-	padding: 1px 5px;
-}
-
-.jedb-surface-skipped-reason {
-	color: #8a6d00;
-	font-style: italic;
-}
-
-/* -------------------------------------------------------------------------
- * Read-only field previews (alpha.6 / L-027) — replaces alpha.5's
- * inline editable inputs.
- * --------------------------------------------------------------------- */
-
-.jedb-surfaced-fields-readonly .jedb-surfaced-row {
-	padding: 8px 10px;
-	background: rgba( 0, 0, 0, 0.015 );
-	border: 1px solid rgba( 0, 0, 0, 0.06 );
-	border-radius: 4px;
-	margin: 6px 0;
-}
-
-.jedb-surfaced-row-label {
-	font-weight: 600;
-	font-size: 12px;
-	color: #1d2327;
-	margin-bottom: 4px;
-}
-
-.jedb-surfaced-row-value {
-	font-size: 13px;
-	color: #2c3338;
-	line-height: 1.5;
-	word-break: break-word;
+	padding-top: 18px;
+	padding-bottom: 4px;
+	border-bottom: 1px solid #dcdcde;
 }
 
 .jedb-preview-empty {
@@ -175,10 +39,10 @@
 
 .jedb-preview-bool {
 	display: inline-block;
-	padding: 2px 8px;
+	padding: 1px 8px;
 	border-radius: 11px;
-	font-weight: 600;
 	font-size: 11px;
+	font-weight: 600;
 }
 
 .jedb-preview-bool-on {
@@ -193,15 +57,6 @@
 	border: 1px solid #dcdcde;
 }
 
-.jedb-preview-wysiwyg,
-.jedb-preview-text {
-	display: inline-block;
-}
-
-.jedb-preview-wysiwyg p {
-	margin: 0 0 4px 0;
-}
-
 .jedb-preview-wysiwyg-full {
 	margin-top: 6px;
 	padding: 8px 10px;
@@ -210,17 +65,12 @@
 	border-radius: 3px;
 }
 
-.jedb-preview-textarea summary,
-.jedb-preview-text-long summary,
-.jedb-preview-wysiwyg summary {
-	cursor: pointer;
-}
-
 .jedb-preview-textarea pre,
-.jedb-preview-text-long pre {
+.jedb-preview-text-long pre,
+.jedb-preview-wysiwyg pre {
 	margin: 6px 0 0 0;
 	padding: 8px 10px;
-	background: #fff;
+	background: #f6f7f7;
 	border: 1px solid #dcdcde;
 	border-radius: 3px;
 	white-space: pre-wrap;
@@ -245,10 +95,6 @@
 	font-size: 10px;
 	color: #909195;
 	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
-}
-
-.jedb-preview-media-nonimage .dashicons {
-	color: #2271b1;
 }
 
 .jedb-preview-gallery {
@@ -285,15 +131,10 @@
 }
 
 .jedb-preview-select code,
-.jedb-preview-multi-item,
 .jedb-preview-text code {
 	background: rgba( 0, 0, 0, 0.04 );
 	padding: 1px 5px;
 	border-radius: 2px;
-}
-
-.jedb-preview-date {
-	color: #2c3338;
 }
 
 .jedb-preview-link {
@@ -305,40 +146,135 @@
 	text-decoration: underline;
 }
 
-.jedb-preview-repeater em,
-.jedb-preview-posts small {
-	color: #909195;
+.jedb-preview-attachment {
+	color: #50575e;
+}
+
+/* =========================================================================
+ * Modal launcher button — minimal margin tweak only
+ * ====================================================================== */
+
+.jedb-bridge-cct-edit-launch {
+	margin: 16px 0 0 0;
+}
+
+/* =========================================================================
+ * Advanced Details collapsible — native <details> styling enhancement
+ * ====================================================================== */
+
+.jedb-bridge-advanced {
+	margin-top: 20px;
+	padding-top: 16px;
+	border-top: 1px solid #dcdcde;
+}
+
+.jedb-bridge-advanced > summary {
+	cursor: pointer;
+	font-weight: 600;
+	color: #50575e;
+	padding: 4px 0;
+	user-select: none;
+}
+
+.jedb-bridge-advanced > summary:hover {
+	color: #2271b1;
+}
+
+.jedb-bridge-advanced[open] > summary {
+	margin-bottom: 12px;
+}
+
+.jedb-bridge-overrides {
+	margin: 12px 0;
+	padding: 12px 14px;
+	border: 1px solid #dcdcde;
+	border-radius: 3px;
+}
+
+.jedb-bridge-overrides legend {
+	font-weight: 600;
+	padding: 0 6px;
+}
+
+.jedb-override-lock {
+	display: block;
+	margin-bottom: 8px;
+}
+
+.jedb-override-direction label {
+	display: inline-block;
+	margin-right: 12px;
+	margin-bottom: 4px;
+}
+
+.jedb-bridge-recent-log {
+	margin: 6px 0 6px 18px;
+	font-size: 12px;
+	list-style: disc;
+}
+
+.jedb-bridge-recent-log li {
+	margin: 6px 0;
+}
+
+.jedb-bridge-recent-log code {
+	font-size: 11px;
+	padding: 1px 5px;
+}
+
+.jedb-recent-msg {
+	color: #50575e;
 	font-size: 11px;
 }
 
-/* -------------------------------------------------------------------------
- * "Save & edit CCT row" launch button (alpha.6)
- * --------------------------------------------------------------------- */
-
-.jedb-bridge-cct-edit-launch {
-	margin: 16px 0 8px 0;
-	padding: 12px 14px;
-	background: #f0f6fc;
-	border: 1px solid #c5d9ed;
-	border-radius: 4px;
+.jedb-bridge-actions {
+	margin-top: 12px;
 }
 
-.jedb-bridge-cct-edit-launch .button {
-	display: inline-flex;
-	align-items: center;
-	gap: 6px;
-	font-weight: 600;
+.jedb-bridge-actions .button {
+	margin-right: 6px;
 }
 
-.jedb-bridge-cct-edit-launch .description {
-	margin-top: 8px;
-	color: #50575e;
+/* =========================================================================
+ * Skipped-mapping diagnostic list
+ * ====================================================================== */
+
+.jedb-surface-skipped-list {
+	margin: 6px 0 6px 18px;
+	font-size: 12px;
+	list-style: disc;
+}
+
+.jedb-surface-skipped-list li {
+	margin: 4px 0;
+}
+
+.jedb-surface-skipped-reason {
+	color: #8a6d00;
+	font-style: italic;
+}
+
+/* =========================================================================
+ * Unlinked panel — CCT search results
+ * ====================================================================== */
+
+.jedb-link-search {
+	width: 100%;
+}
+
+.jedb-link-results {
+	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
 	font-size: 12px;
 }
 
-/* -------------------------------------------------------------------------
- * Modal overlay for the chrome-stripped CCT edit iframe (alpha.6 / L-027)
- * --------------------------------------------------------------------- */
+.jedb-link-status {
+	margin-top: 4px;
+	min-height: 1.2em;
+}
+
+/* =========================================================================
+ * Modal overlay for the chrome-stripped CCT edit iframe (L-027)
+ * ====================================================================== */
 
 body.jedb-cct-modal-open {
 	overflow: hidden;
@@ -348,7 +284,7 @@ body.jedb-cct-modal-open {
 	position: fixed;
 	inset: 0;
 	background: rgba( 29, 35, 39, 0.72 );
-	z-index: 160001; /* above WP admin bar (z-index: 99999) and modals */
+	z-index: 160001;
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -420,137 +356,4 @@ body.jedb-cct-modal-open {
 	box-shadow: 0 4px 18px rgba( 0, 0, 0, 0.08 );
 	display: flex;
 	align-items: center;
-}
-
-/* -------------------------------------------------------------------------
- * Per-product overrides
- * --------------------------------------------------------------------- */
-
-.jedb-bridge-overrides {
-	margin: 16px 0;
-	padding: 12px 14px;
-	background: #fff8e1;
-	border: 1px solid #f0d77a;
-	border-radius: 4px;
-}
-
-.jedb-bridge-overrides legend {
-	font-weight: 600;
-	font-size: 12px;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-	color: #8a6d00;
-	padding: 0 6px;
-}
-
-.jedb-bridge-overrides .description {
-	margin-top: 8px;
-	font-size: 12px;
-	color: #8a6d00;
-}
-
-.jedb-override-lock {
-	display: block;
-	margin: 6px 0;
-	font-weight: 600;
-}
-
-.jedb-override-direction {
-	margin: 10px 0 0 0;
-}
-
-.jedb-override-direction strong {
-	display: block;
-	margin-bottom: 4px;
-}
-
-.jedb-override-direction label {
-	display: inline-block;
-	margin-right: 12px;
-	margin-bottom: 4px;
-}
-
-/* -------------------------------------------------------------------------
- * Recent log
- * --------------------------------------------------------------------- */
-
-.jedb-bridge-recent-log {
-	margin: 16px 0;
-	padding: 10px 14px;
-	background: #f6f7f7;
-	border: 1px solid #dcdcde;
-	border-radius: 4px;
-}
-
-.jedb-bridge-recent-log strong {
-	display: block;
-	margin-bottom: 6px;
-	font-size: 12px;
-	text-transform: uppercase;
-	letter-spacing: 0.04em;
-	color: #50575e;
-}
-
-.jedb-bridge-recent-log ul {
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.jedb-bridge-recent-log li {
-	padding: 4px 0;
-	border-bottom: 1px dotted #dcdcde;
-	font-size: 12px;
-}
-
-.jedb-bridge-recent-log li:last-child {
-	border-bottom: none;
-}
-
-.jedb-bridge-recent-log .jedb-pill {
-	font-size: 10px;
-	padding: 2px 6px;
-	margin-right: 6px;
-}
-
-.jedb-recent-msg {
-	display: inline-block;
-	margin-top: 2px;
-	color: #50575e;
-	font-style: italic;
-}
-
-/* -------------------------------------------------------------------------
- * Action buttons + unlinked picker
- * --------------------------------------------------------------------- */
-
-.jedb-bridge-actions {
-	margin-top: 16px;
-	padding-top: 12px;
-	border-top: 1px solid #dcdcde;
-}
-
-.jedb-link-picker {
-	margin: 12px 0;
-}
-
-.jedb-link-picker label {
-	display: block;
-	font-weight: 600;
-	margin-bottom: 4px;
-}
-
-.jedb-link-results {
-	font-family: Consolas, Menlo, Monaco, "Courier New", monospace;
-	font-size: 12px;
-}
-
-.jedb-link-status:empty {
-	display: none;
-}
-
-.jedb-link-status {
-	margin: 6px 0 0 0;
-	font-size: 12px;
-	color: #646970;
 }

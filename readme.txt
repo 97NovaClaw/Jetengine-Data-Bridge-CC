@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.8
+Stable tag: 0.6.0-alpha.9
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.8) ==
+== Current Capability (v0.6.0-alpha.9) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -94,6 +94,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.6.0-alpha.9 =
+* Bridge meta box reshape (L-031) - one meta box per enabled bridge (was one umbrella box that looped all bridges internally since alpha.4). Each registered with the bridge's `meta_box.title` (fallback bridge `label`) as its WP gray header, honoring `meta_box.position` (normal/side/advanced). Native WP look in the linked panel: <table class="form-table"> for surfaced field previews, no custom pills/borders/panel chrome. New `meta_box.show_advanced` opt-in flag (default false) hides per-product overrides + recent sync log + Sync now/Unlink behind a collapsed <details> "Advanced Details" section. Existing alpha.4-8 bridges automatically inherit show_advanced=false via wp_parse_args back-compat. Non-image media previews collapse to "Has attachment" (image thumbnails and gallery thumbnails unchanged). Multi-CCT-per-product: now renders two stacked collapsible WP meta boxes, each named, independently controllable via WP's native screen options. Variation use case (BUILD-PLAN §4.7 `has_instructions_pdf` pattern) remains compatible with this architecture - Phase 4b will add the variations[] reconciliation engine to the SAME bridge config (no new bridge needed). NO engine code touched.
+
 = 0.6.0-alpha.8 =
 * Stale-data hotfix (L-030) - Bridge meta box surfaced previews were reading via JE's `$db->get_item()`, which can return cached pre-save rows on the request immediately after a write (especially Redis / Memcached setups). Forward push didn't have this problem because it runs in JE's save request where cache layers happen to be hot with the new value. New `Target_CCT::get_fresh()` method goes direct-SQL, bypassing every JE cache layer. Wired into meta box `resolve_for_post`, forward push `apply_bridge`, and reverse pull source-side reads. Non-CCT adapters unchanged (WP's standard post-meta cache invalidates properly). Engine semantics unchanged - purely a read-freshness fix.
 
@@ -153,6 +156,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.9 =
+Bridge meta box reshape: one box per bridge, native WP look, opt-in Advanced Details. WP gray header now reflects bridge title/label correctly. Two-CCT-per-product = two clearly-separated WP boxes. Existing configs default to compact (opt in to show_advanced if you want the verbose surface). No schema migration. No engine changes.
 
 = 0.6.0-alpha.8 =
 Stale-data hotfix - Bridge meta box surfaced previews now refresh correctly after a modal save, even on setups with persistent object cache (Redis / Memcached). Direct-SQL get_fresh() bypass for CCT reads. No engine semantics change, no schema change.

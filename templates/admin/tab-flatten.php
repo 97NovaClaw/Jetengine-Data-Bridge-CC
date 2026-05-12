@@ -357,6 +357,13 @@ endif;
 						<p class="description"><?php esc_html_e( 'Comma-separated list of group labels controlling display order on the meta box. Groups are freeform per-mapping (D-26) — type any label that matches the per-mapping "Group" column below. Groups not listed here render after listed ones in alphabetical order.', 'je-data-bridge-cc' ); ?></p>
 					</td>
 				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Advanced Details', 'je-data-bridge-cc' ); ?></th>
+					<td>
+						<label><input type="checkbox" name="meta_box_show_advanced" value="1" <?php checked( ! empty( $meta_box_cfg['show_advanced'] ) ); ?> /> <?php esc_html_e( 'Show "Advanced Details" collapsible on this bridge\'s meta box', 'je-data-bridge-cc' ); ?></label>
+						<p class="description"><?php esc_html_e( 'When ON, a collapsed <details> "Advanced Details" section appears at the bottom of the meta box exposing per-product overrides (Freeze / Direction override), the last 3 sync log rows, and Sync now / Unlink action buttons. When OFF (default), the meta box renders only the surfaced field previews and the "Save & edit" button — clean native-WP look.', 'je-data-bridge-cc' ); ?></p>
+					</td>
+				</tr>
 			</table>
 
 			<p class="description" style="max-width:760px;color:#996800;">

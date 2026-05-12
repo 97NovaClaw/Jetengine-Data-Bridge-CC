@@ -2,8 +2,14 @@
 /**
  * Unlinked-state template for one bridge in the Woo product Bridge meta box.
  *
- * Phase 4 / Day 2 (D-27). Rendered by JEDB_Woo_Product_Meta_Box::
- * render_unlinked_panel(). Variables in scope (set by the caller):
+ * alpha.9 rewrite. Minimal native-WP look, paired with the linked template's
+ * native form-table style. The WP meta box itself is the bridge's named
+ * container (one box per bridge — see register_meta_boxes), so this template
+ * is just the inner content: a brief explanation + the CCT row search picker
+ * + a Link button. No custom panel chrome / pills / colored borders.
+ *
+ * Rendered by JEDB_Woo_Product_Meta_Box::render_unlinked_panel(). Variables
+ * in scope (set by the caller):
  *
  *   @var WP_Post $post              The product / variation being edited.
  *   @var array   $bridge            Decoded flatten config row.
@@ -22,47 +28,31 @@ if ( ! defined( 'WPINC' ) ) {
 	die;
 }
 
-$bridge_id     = (int) ( $bridge['id'] ?? 0 );
-$direction     = isset( $bridge['direction'] ) ? (string) $bridge['direction'] : 'push';
-$ajax_url      = admin_url( 'admin-post.php' );
+$bridge_id   = (int) ( $bridge['id'] ?? 0 );
+$direction   = isset( $bridge['direction'] ) ? (string) $bridge['direction'] : 'push';
+$ajax_url    = admin_url( 'admin-post.php' );
 
-$link_via      = isset( $config['link_via'] ) && is_array( $config['link_via'] ) ? $config['link_via'] : array();
-$link_type     = isset( $link_via['type'] ) ? (string) $link_via['type'] : 'je_relation';
-$relation_id   = isset( $link_via['relation_id'] ) ? (string) $link_via['relation_id'] : '';
+$link_via    = isset( $config['link_via'] ) && is_array( $config['link_via'] ) ? $config['link_via'] : array();
+$link_type   = isset( $link_via['type'] ) ? (string) $link_via['type'] : 'je_relation';
+$relation_id = isset( $link_via['relation_id'] ) ? (string) $link_via['relation_id'] : '';
 ?>
-<div class="jedb-bridge-panel jedb-bridge-panel-unlinked" data-bridge-id="<?php echo esc_attr( $bridge_id ); ?>" data-source-target="<?php echo esc_attr( $source_target ); ?>" data-relations-nonce="<?php echo esc_attr( $relations_nonce ); ?>">
+<div
+	class="jedb-bridge-panel jedb-bridge-panel-unlinked"
+	data-bridge-id="<?php echo esc_attr( $bridge_id ); ?>"
+	data-source-target="<?php echo esc_attr( $source_target ); ?>"
+	data-relations-nonce="<?php echo esc_attr( $relations_nonce ); ?>"
+>
 
 	<input type="hidden" name="jedb_meta_box_present" value="1" />
 
-	<h3 class="jedb-bridge-panel-title">
-		<?php echo esc_html( $panel_title ); ?>
-		<span class="jedb-bridge-panel-status jedb-pill jedb-pill-warn"><?php esc_html_e( 'Not linked', 'je-data-bridge-cc' ); ?></span>
-	</h3>
-
-	<div class="jedb-bridge-panel-meta">
-		<p>
-			<strong><?php esc_html_e( 'Bridge config:', 'je-data-bridge-cc' ); ?></strong>
-			<code><?php echo esc_html( $bridge['config_slug'] ?? '' ); ?></code>
-			· <code><?php echo esc_html( $direction ); ?></code>
-			·
-			<?php
-			/* translators: %s = source target slug */
-			printf( esc_html__( 'source: %s', 'je-data-bridge-cc' ), '<code>' . esc_html( $source_target ) . '</code>' );
-			?>
-		</p>
-		<p class="description">
-			<?php esc_html_e( 'This product is not yet linked to a source CCT row via this bridge. Search for a CCT row below to attach it. Once linked, the bridge will sync on every save event in both directions (per the bridge\'s direction setting).', 'je-data-bridge-cc' ); ?>
-		</p>
-	</div>
+	<p class="description">
+		<?php esc_html_e( 'This product is not yet linked to a source CCT row via this bridge. Once linked, the bridge will sync on every save event in both directions (per the bridge\'s direction setting).', 'je-data-bridge-cc' ); ?>
+	</p>
 
 	<?php if ( 'je_relation' === $link_type ) : ?>
 		<?php
-		/* alpha.6.1: NO `<form>` here — see meta-box-bridge.php for
-		 * the rationale (HTML5 forbids nested forms; meta boxes are
-		 * already inside `#post`; the broken parse pushes the WP
-		 * Update button outside any form and breaks regular product
-		 * saves). Container is a `<div>` with data attributes; the
-		 * JS handler builds the real form off-DOM on submit. */
+		/* No inner <form> per L-028 — meta boxes are inside #post and HTML5
+		 * forbids nested forms. JS builds the real form off-DOM on click. */
 		?>
 		<div
 			class="jedb-bridge-link-form"
@@ -73,28 +63,28 @@ $relation_id   = isset( $link_via['relation_id'] ) ? (string) $link_via['relatio
 			data-jedb-bridge-id="<?php echo (int) $bridge_id; ?>"
 			data-jedb-action="<?php echo esc_attr( JEDB_Woo_Product_Meta_Box::ACTION_LINK ); ?>"
 		>
-			<div class="jedb-link-picker">
+			<p>
 				<label for="jedb-link-search-<?php echo (int) $bridge_id; ?>">
-					<?php esc_html_e( 'Search for a source CCT row:', 'je-data-bridge-cc' ); ?>
+					<strong><?php esc_html_e( 'Search for a source CCT row:', 'je-data-bridge-cc' ); ?></strong>
 				</label>
-				<input
-					id="jedb-link-search-<?php echo (int) $bridge_id; ?>"
-					type="search"
-					class="jedb-link-search regular-text"
-					autocomplete="off"
-					placeholder="<?php esc_attr_e( 'Type to search…', 'je-data-bridge-cc' ); ?>"
-				/>
-				<select
-					class="jedb-link-results"
-					data-jedb-field-name="source_id"
-					size="6"
-					required
-					style="display:block;width:100%;margin-top:6px;min-height:120px;"
-				>
-					<option value=""><?php esc_html_e( '— Search above, then pick a result —', 'je-data-bridge-cc' ); ?></option>
-				</select>
-				<p class="description jedb-link-status"></p>
-			</div>
+			</p>
+			<input
+				id="jedb-link-search-<?php echo (int) $bridge_id; ?>"
+				type="search"
+				class="jedb-link-search regular-text"
+				autocomplete="off"
+				placeholder="<?php esc_attr_e( 'Type to search…', 'je-data-bridge-cc' ); ?>"
+			/>
+			<select
+				class="jedb-link-results"
+				data-jedb-field-name="source_id"
+				size="6"
+				required
+				style="display:block;width:100%;margin-top:6px;min-height:120px;"
+			>
+				<option value=""><?php esc_html_e( '— Search above, then pick a result —', 'je-data-bridge-cc' ); ?></option>
+			</select>
+			<p class="description jedb-link-status"></p>
 
 			<p>
 				<button type="button" class="button button-primary jedb-bridge-link-btn">

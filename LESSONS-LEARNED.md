@@ -2408,3 +2408,85 @@ Added `Target_CCT::get_fresh( $id )` method that goes directly to the underlying
 5. **For our adapter API: any method whose name implies a value read (`get`, `exists`, `count`, `list_ids`) should be EITHER guaranteed-fresh or have a companion `*_fresh()` variant.** Going forward, all new adapters get audited for this asymmetry at design time, not in production.
 
 ---
+
+## L-031: WP meta box label is set at `add_meta_box()` registration — register one box per bridge, not one umbrella box that loops bridges internally.
+
+**Discovered:** 2026-05-16 (Phase 4 Day 2 final form / version 0.6.0-alpha.9)
+**Severity:** Medium
+**Category:** API knowledge / Information architecture
+
+### Context
+The alpha.4 → alpha.8 Bridge meta box registered a single WP meta box (`add_meta_box('jedb_bridge_meta_box', 'JE Data Bridge', ...)`) on `product` and `product_variation` post types. The render callback then looped ALL bridges whose `target_target` matched the post type and rendered one inner panel per resolved bridge, with custom-CSS chrome (custom `<h3>` panel title, pills, borders, sub-headers, etc.) to visually separate them.
+
+This was acceptable when there was only one bridge in practice, but the BBHQ install has two bridges targeting `posts::product` (Mosaics→Product and Available Sets→Product), and the umbrella architecture produced UX friction.
+
+### Wrong (alpha.4-8)
+Three compounding issues:
+
+1. **One outer gray WP header for all bridges.** The WP `add_meta_box()` second arg ("JE Data Bridge") was hardcoded. Editors who renamed a bridge's `label` or set `meta_box.title` saw the inner `<h3>` change, but the outer WP gray bar stayed "JE Data Bridge" — they reported this as a bug (correctly: the surface they intended to customize was unreachable).
+2. **Per-bridge collapse / position not possible.** WP's screen-options + drag/drop machinery operates at the `add_meta_box()` ID granularity. With one umbrella box, editors can't collapse a single bridge's panel, can't drag one to the side column while keeping another in the main column, can't selectively hide via screen options.
+3. **Custom panel chrome to compensate.** The inner-loop architecture forced us to invent visual separation between bridges using custom CSS (`.jedb-bridge-panel` with borders + `.jedb-bridge-panel-title` `<h3>` headers + status pills). This drifted from native WP styling and ended up looking foreign on the product edit screen next to WC's own meta boxes.
+
+### Evidence
+- User staging report 2026-05-16: *"I have changed the name of the box on in the flatten tab, but its not changing on the box header in the product page."* — they had set `meta_box.title = "Moasics Data surface"` and expected the WP gray bar to update.
+- Same report: *"theres alot of admin data in this box on the product page, but i want the option to hide everything but the button and the surfaced fields. OH and it should have more of a native wordpress look than what we designed."* — the custom chrome compensating for the umbrella architecture had become visual noise.
+- Future-proofing concern from the same report about multi-CCT-per-product: when two CCTs are linked to the same product, the umbrella box stacks two custom-styled panels with arbitrary visual separation. Two clearly-separate native WP boxes would be far more legible.
+
+### Reality
+`add_meta_box()` is meant to be called multiple times — once per logical container that should appear as a distinct collapsible / movable WP meta box. The right granularity for our use case is **one WP meta box per bridge**:
+
+```php
+foreach ( $bridges as $bridge ) {
+    $meta_box_cfg = $bridge['config']['meta_box'] ?? array();
+    if ( isset( $meta_box_cfg['enabled'] ) && ! $meta_box_cfg['enabled'] ) {
+        continue;
+    }
+    $title    = ! empty( $meta_box_cfg['title'] ) ? $meta_box_cfg['title'] : $this->bridge_display_label( $bridge );
+    $position = $meta_box_cfg['position'] ?? 'normal';
+    add_meta_box(
+        'jedb_bridge_meta_box_' . (int) $bridge['id'],
+        $title,
+        function ( $post ) use ( $bridge ) { $this->render_meta_box_for_bridge( $post, $bridge ); },
+        $pt,
+        $position,
+        'default'
+    );
+}
+```
+
+Benefits:
+
+1. **Native WP header from `meta_box.title` / `label`.** Editor changes the title in the Flatten tab → updates immediately on next render. No more "title bug."
+2. **Native WP collapse / drag / screen-options.** Each bridge box gets its own UI state. Editors can collapse Mosaics, expand Available Sets, drag one to the side column, hide one via Screen Options.
+3. **Custom chrome becomes unnecessary.** The WP meta box itself IS the container with title, border, collapsible chevron, and screen-options entry. Inner template can drop the `<h3>` + pills + custom panel chrome and use a native `<table class="form-table">` for content — exactly like the WC "Categories" or "Tags" boxes look.
+4. **Future-compatible with the `meta_box.position` field already in schema** (since alpha.3). User sets `"position": "side"` → bridge renders in the sidebar. `"normal"` → main column. `"advanced"` → below main. Honored at registration time per bridge.
+
+The "umbrella with inner loop" model was a legacy of the early Phase 4 design that assumed one bridge per post type. The moment a second bridge exists, the model frays. Better to assume N bridges from day one and use WP's primitive (one `add_meta_box()` call per logical unit) for the granularity that matches.
+
+### Bonus: opt-in compact mode (`meta_box.show_advanced`)
+A new boolean flag on the meta_box block (default `false`) controls whether the panel renders only the surfaced field previews + the "Save & edit" button (clean native look — the "tags/categories meta box" feel the user asked for) OR also surfaces per-product overrides + recent sync log + Sync now / Unlink action buttons inside a collapsed `<details>` "Advanced Details" section at the bottom.
+
+Default `false` = minimal. Editors who want the admin diagnostics flip a checkbox in the Flatten admin tab to opt in. Existing alpha.4-8 bridges automatically default to `false` via `wp_parse_args()` in `merge_with_defaults()` — they "lose" the verbose surface but gain a cleaner look until the editor decides they want the diagnostics back.
+
+### Affected code
+- `includes/admin/class-woo-product-meta-box.php` — `register_meta_boxes()` rewritten to loop bridges per post type, one `add_meta_box()` per enabled bridge. `render_meta_box()` deleted; replaced by `render_meta_box_for_bridge( $post, $bridge )` for the per-bridge render. `render_linked_panel()` now passes `$show_advanced` into template scope.
+- `includes/flatten/class-flatten-config-manager.php` — `default_meta_box()` extended with `show_advanced => false`. `default_config_json()` `meta_box` block extended likewise. `merge_with_defaults()` already deep-merges via `wp_parse_args()` so existing configs inherit the new default automatically.
+- `templates/admin/meta-box-bridge.php` — rewritten. Drops `<h3>` panel title, drops status pill, drops `.jedb-bridge-panel-meta` block. Uses `<table class="form-table">` for surfaced field rows. Wraps the alpha.4-8 diagnostics + override controls + actions in a `<details>` collapsible gated on `$show_advanced`.
+- `templates/admin/meta-box-bridge-unlinked.php` — rewritten. Drops `<h3>` panel title and status pill. Plain `<p class="description">` for the "not linked" message + CCT search picker.
+- `assets/css/bridge-meta-box.css` — reduced from ~500 lines to ~270. Drops `.jedb-bridge-panel-title`, `.jedb-bridge-panel-meta`, `.jedb-bridge-panel-status`, `.jedb-pill-*`, `.jedb-surfaced-row` chrome, `.jedb-surfaced-group` `<fieldset>` border. Keeps the read-only preview helpers + modal overlay + Advanced Details section tweaks.
+- `includes/helpers/field-preview.php` — non-image attachments collapse to a plain "Has attachment" label (image previews still render thumbnails per user preference).
+- `templates/admin/tab-flatten.php` — new "Advanced Details" checkbox row in the "Meta box settings" section.
+- `assets/js/flatten-admin.js` — `buildConfig()` writes `meta_box.show_advanced` from the checkbox; the `change` listener includes the new input name.
+
+### Fix shipped in
+v0.6.0-alpha.9.
+
+### Prevention
+1. **`add_meta_box()` registration is the right granularity for "logical unit the editor interacts with separately."** If you're tempted to render N bridges/panels/items inside ONE meta box with custom visual separation, ask: would the editor benefit from independent collapse / drag / screen-options control per item? Almost always yes — register N meta boxes.
+2. **Hardcoded labels in `add_meta_box()` are a UX trap.** The label appears in the gray bar, screen options menu, dashboard widget list, and admin search results. If your data has a label, USE that label. Pull from the source data at registration time; the WP filter pipeline expects this.
+3. **Custom chrome that compensates for the wrong WP primitive is a code smell.** When we ended up writing `.jedb-bridge-panel { background; border; border-radius; padding; }` to make N panels inside one meta box look like separate WP boxes, that was a sign the WP primitive (one meta box per logical unit) was being misused. Native WP meta boxes already provide the chrome — register more of them instead of styling more.
+4. **`wp_parse_args()` on read is the cleanest forward-compat strategy for adding new config keys.** Existing configs that lack the new key receive the default automatically; no migration code, no version-gated branches, no schema version bumps for minor additions.
+5. **Default new visibility flags to the more conservative value (typically `false`).** Editors who used the previous behavior and miss the verbose surface flip ONE checkbox per bridge to bring it back. Editors who never knew the verbose surface existed get a clean default they likely prefer. This is much better than defaulting to `true` and forcing every editor to discover + flip a "hide stuff" checkbox.
+6. **L-031 and L-029 / L-027 / L-028 form the Phase 4 Day 2 lesson cluster.** Each addresses a different layer of the same workflow (modal flow, nested-form HTML, WP-chrome flash, cache freshness, meta-box granularity). The collective lesson: when wrapping a host plugin's UI in your own, every WP/host primitive that touches your wrapper needs verification against actual behavior — not against assumed behavior. The hosts are bigger than they look.
+
+---

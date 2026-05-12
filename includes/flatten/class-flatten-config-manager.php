@@ -80,10 +80,19 @@ class JEDB_Flatten_Config_Manager {
 			// fields render; this block controls HOW the meta box is
 			// presented as a whole.
 			'meta_box'                          => array(
-				'enabled'  => true,        // when false, no meta box rendered for this bridge
-				'title'    => '',          // empty = use the flatten config's `label` column
-				'position' => 'normal',    // normal | side | advanced — passed to add_meta_box()
-				'groups'   => array(),     // optional explicit ordering of freeform group labels: ['Identity','Pricing',...]
+				'enabled'       => true,     // when false, no meta box rendered for this bridge
+				'title'         => '',       // empty = use the flatten config's `label` column
+				'position'      => 'normal', // normal | side | advanced — passed to add_meta_box()
+				'groups'        => array(),  // optional explicit ordering of freeform group labels: ['Identity','Pricing',...]
+				// Phase 4 alpha.9 (L-031): when false, the meta box renders
+				// ONLY the surfaced field previews + the "Save & edit"
+				// modal launcher button — minimal native-WP look. When
+				// true, an additional <details> "Advanced Details"
+				// section appears at the bottom of the panel exposing
+				// per-product overrides, recent sync log, and Sync now
+				// / Unlink action buttons. Default false (clean look
+				// out of the box; verbose chrome is opt-in per bridge).
+				'show_advanced' => false,
 			),
 			// Phase 4 alpha.3 (D-27 / §4.6): when true and `direction`
 			// includes `push`, a `template_redirect` shim 301-redirects
@@ -109,10 +118,11 @@ class JEDB_Flatten_Config_Manager {
 	 */
 	public static function default_meta_box() {
 		return array(
-			'enabled'  => true,
-			'title'    => '',
-			'position' => 'normal',
-			'groups'   => array(),
+			'enabled'       => true,
+			'title'         => '',
+			'position'      => 'normal',
+			'groups'        => array(),
+			'show_advanced' => false,
 		);
 	}
 

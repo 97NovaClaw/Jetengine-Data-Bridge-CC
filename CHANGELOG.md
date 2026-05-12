@@ -2,6 +2,52 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.9] — 2026-05-16
+
+**Bridge meta box reshape — one box per bridge, native WP look, opt-in Advanced Details (L-031).**
+
+User feedback after alpha.8: three architectural friction points with the umbrella-meta-box model that had been in place since alpha.4:
+
+1. Renaming a bridge in the Flatten tab didn't update the WP meta box gray header (which was hardcoded to "JE Data Bridge" because one umbrella box served all bridges).
+2. Too much admin chrome in the box on day-to-day editor workflows — overrides, sync log, action buttons cluttered the surface that should mostly be "see the surfaced fields, click to edit in JE."
+3. Custom panel chrome (pills, panel borders, custom h3 headers) looked foreign next to WC's native meta boxes on the product edit screen.
+
+### Changed
+
+- **`JEDB_Woo_Product_Meta_Box::register_meta_boxes()`** rewritten to loop `find_bridges_for_target()` per post type and call `add_meta_box()` once per enabled bridge. Each box ID is `jedb_bridge_meta_box_{bridge_id}`. Each box uses the bridge's `meta_box.title` (fallback to `bridge_display_label()`) as its WP gray header — so editor edits in the Flatten tab now propagate to the WP meta box header natively on next render. Each box uses the bridge's `meta_box.position` (`normal` | `side` | `advanced`), enabling per-bridge placement in main column / sidebar / below-main. Two CCTs targeting one product = two stacked collapsible WP meta boxes, each clearly named and independently controllable via WP's native screen options + drag-drop UI.
+- **`render_meta_box()` → `render_meta_box_for_bridge( $post, $bridge )`** — the umbrella looping render method retired. Per-bridge render method called by each registered meta box's callback closure. Resolves linked-vs-unlinked state for that specific bridge × post pair, then delegates to the linked or unlinked template.
+- **`templates/admin/meta-box-bridge.php`** (linked panel) rewritten with minimal native WP look. Uses `<table class="form-table">` for the surfaced field previews (label in `<th>`, preview in `<td>`). Drops the alpha.4-8 panel `<h3>` title, "Linked" status pill, `.jedb-bridge-panel-meta` diagnostic block, `.jedb-bridge-cct-edit-launch` blue background panel — the WP meta box header serves as the panel title, and the "Save & edit" button stands on its own in a `<p>`. When multiple groups exist, they're separated by a single `<tr>` group header row inside the form-table (no `<fieldset>` chrome).
+- **`templates/admin/meta-box-bridge-unlinked.php`** rewritten with the same minimal native look. Plain `<p class="description">` for the "not linked" message, regular `regular-text` input + `<select size="6">` for the CCT picker, no panel chrome.
+- **`assets/css/bridge-meta-box.css`** slimmed from ~500 lines to ~270. Drops `.jedb-bridge-panel-title`, `.jedb-bridge-panel-meta`, `.jedb-bridge-panel-status`, `.jedb-pill-ok` / `.jedb-pill-warn` / `.jedb-pill-info`, `.jedb-surfaced-row` chrome, `.jedb-surfaced-group` fieldset chrome, `.jedb-bridge-cct-edit-launch` blue panel chrome, `.jedb-bridge-recent-log` custom pill stylings. Keeps the read-only field preview helpers, the modal overlay (L-027), the saving overlay (L-029), and the Advanced Details section (L-031) tweaks.
+- **`includes/helpers/field-preview.php`** — non-image attachments now collapse to a plain `<span class="jedb-preview-attachment">` "Has attachment #{id}" label with a default media dashicon. Image attachments still render rich thumbnails (per user preference). Gallery thumbnails unchanged.
+
+### Added
+
+- **`meta_box.show_advanced`** boolean flag on the flatten config schema (default `false`). When `true`, a collapsed `<details>` "Advanced Details" section appears at the bottom of the linked panel containing: linked source diagnostic line, bridge config link, per-product overrides (Freeze / Direction override), recent syncs (last 3 sync_log rows), Sync now button, Unlink button. When `false`, the panel renders ONLY the surfaced field previews + the "Save & edit" button. Existing alpha.4-8 bridges automatically inherit `false` via `wp_parse_args()` in `merge_with_defaults()` — no migration code needed.
+- **Flatten admin tab UI** — new checkbox row "Show 'Advanced Details' collapsible on this bridge's meta box" in the Meta box settings section. Wired through `flatten-admin.js` `buildConfig()` so the value round-trips correctly.
+- **L-031 in `LESSONS-LEARNED.md`** — "WP meta box label is set at `add_meta_box()` registration — register one box per bridge, not one umbrella box that loops bridges internally." Documents the umbrella architecture trap + the WP-primitive-granularity rule + the wp_parse_args back-compat pattern.
+
+### Engine code unchanged
+
+No changes to `handle_save()`, any flattener / reverse flattener, taxonomy applier, transformer, condition evaluator, target adapter, or sync log path. This is purely a meta box reshape — registration model + template + CSS + one schema flag.
+
+### Multi-CCT and variation gameplan clarified
+
+With one-box-per-bridge, two CCTs linked to one product = two stacked collapsible WP meta boxes (each named, each independently controllable). The resolution path is fenced per-bridge (each bridge's `link_via.relation_id` only matches its own source CCT), so the Mosaics box can only ever surface mosaics fields and the Available Sets box can only ever surface available-sets fields. No cross-contamination possible by design.
+
+For variations (the `has_instructions_pdf → product variation` use case in BUILD-PLAN §4.7), the locked decision (L-015) is that variations come from the SAME CCT row as their parent product, NOT from a separate bridge. The current alpha.9 architecture is fully compatible: when Phase 4b ships the `variations[]` block + reconciliation engine, the same Mosaics→Product bridge gains variation-management behavior without needing a new bridge or a new meta box. Pure-surface fields like the user's current `has_instructions_pdf` (target_field='' + surface_on_target=true) are the correct interim shape — when Phase 4b lands, those fields gain reconciliation side effects automatically with no schema migration.
+
+### Verification
+
+1. **WP header reflects bridge name**: open a product linked through the Mosaics bridge. The WP meta box gray header should display `meta_box.title` (e.g. "Moasics Data surface" if you typed that) or fall back to the bridge `label`. NOT "JE Data Bridge."
+2. **Two CCTs → two boxes**: if a product is linked via two bridges, two separate WP meta boxes appear, each named with its own bridge's label. Each can be collapsed / dragged independently.
+3. **Native look**: the linked panel renders a `<table class="form-table">` with key/value rows for surfaced fields, followed by a single `.button.button-primary` for the modal launcher. No custom pills, no custom borders, no inner `<h3>` title.
+4. **Compact default**: a fresh bridge with `show_advanced` unticked shows only surfaced fields + Save & edit button.
+5. **Advanced opt-in**: tick "Show 'Advanced Details' collapsible" in the Flatten admin tab Meta box settings, save the bridge. On next product edit screen render, a collapsed `<details>` "Advanced Details" element appears at the bottom of the meta box. Click to expand → per-product overrides, recent syncs, Sync now / Unlink buttons.
+6. **Image previews still rich**: a media field pointing at an image still renders a thumbnail. A media field pointing at a PDF or other non-image collapses to "Has attachment #{id}".
+7. **Position field honored**: change a bridge's `meta_box.position` to `side`, save, reload the product edit page. The bridge's meta box should now appear in the right sidebar instead of the main column.
+8. **Existing configs**: alpha.8 bridges work unchanged on first render after upgrade — they automatically inherit `show_advanced=false` and the new registration model.
+
 ## [0.6.0-alpha.8] — 2026-05-16
 
 **Stale-data hotfix — Bridge meta box surfaced previews now refresh correctly after a modal save (L-030).**

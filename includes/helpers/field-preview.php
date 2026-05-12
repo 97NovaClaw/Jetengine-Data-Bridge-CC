@@ -101,6 +101,11 @@ function jedb_render_field_preview( $value, $field_type = 'text', array $field =
 				return '<span class="jedb-preview-empty">' . esc_html__( '(no media)', 'je-data-bridge-cc' ) . '</span>';
 			}
 
+			// alpha.9: image attachments still render a thumbnail (keep the
+			// rich preview for the common case). Non-image attachments —
+			// PDFs, audio, video, etc. — collapse to a plain "Has
+			// attachment" label per user feedback: cheaper to render and
+			// editors who want to inspect/replace open the modal anyway.
 			$mime = (string) get_post_mime_type( $att_id );
 			if ( 0 === strpos( $mime, 'image/' ) ) {
 				$img = wp_get_attachment_image( $att_id, array( 80, 80 ), false, array( 'class' => 'jedb-preview-media-thumb' ) );
@@ -109,12 +114,11 @@ function jedb_render_field_preview( $value, $field_type = 'text', array $field =
 				}
 			}
 
-			$filename = basename( (string) get_attached_file( $att_id ) );
-			$url      = wp_get_attachment_url( $att_id );
-			$label    = '' !== (string) get_the_title( $att_id ) ? get_the_title( $att_id ) : $filename;
-			return '<div class="jedb-preview-media jedb-preview-media-nonimage"><span class="dashicons dashicons-media-default"></span> '
-				. ( $url ? '<a href="' . esc_url( $url ) . '" target="_blank" rel="noopener">' . esc_html( $label ) . '</a>' : esc_html( $label ) )
-				. ' <small class="jedb-preview-media-id">#' . (int) $att_id . '</small></div>';
+			return '<span class="jedb-preview-attachment">'
+				. '<span class="dashicons dashicons-media-default"></span> '
+				. esc_html__( 'Has attachment', 'je-data-bridge-cc' )
+				. ' <small class="jedb-preview-media-id">#' . (int) $att_id . '</small>'
+				. '</span>';
 
 		case 'gallery':
 		case 'media_gallery':
