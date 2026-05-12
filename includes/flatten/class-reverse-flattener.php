@@ -248,7 +248,18 @@ class JEDB_Reverse_Flattener {
 			return JEDB_Sync_Log::STATUS_SKIPPED_NO_TARGET;
 		}
 
-		$source_data = $source_adapter->get( $source_id );
+		// alpha.8 (L-030): pull source-side reads should be fresh too —
+		// the reverse pull engine computes its diff between target_data
+		// (incoming from post save) and source_data (current CCT row).
+		// If source_data is stale (cached pre-prior-modal-save row),
+		// the diff over-reports "needs update", and we double-write
+		// values that are already in the source. Defensive: prefer
+		// get_fresh() when the adapter exposes it.
+		if ( method_exists( $source_adapter, 'get_fresh' ) ) {
+			$source_data = $source_adapter->get_fresh( $source_id );
+		} else {
+			$source_data = $source_adapter->get( $source_id );
+		}
 		if ( ! is_array( $source_data ) ) {
 			$source_data = array();
 		}

@@ -2348,3 +2348,63 @@ v0.6.0-alpha.7.
 7. **L-027 was about delegating editing to JE's UI via iframe; L-029 is about making that iframe actually work end-to-end through JE's save lifecycle.** The pair forms the full architecture: L-027 says "delegate the rendering," L-029 says "and here's how to recover state and close cleanly when the host redirects."
 
 ---
+
+## L-030: JE's `$db->get_item()` returns stale rows on the next request after a write — use direct SQL when freshness matters.
+
+**Discovered:** 2026-05-16 (Phase 4 Day 2 follow-up / version 0.6.0-alpha.8)
+**Severity:** Medium
+**Category:** API drift / Defensive coding
+
+### Context
+After L-029 fixed the modal close flow, the user reported one remaining issue: *"the surfaced fields don't update on the product page, but the standard push/pulled fields (rendered in woocommerce product page) do change."*
+
+The flow in question:
+
+1. Editor opens the modal, edits `mosaic_name` to "New Whale", clicks Done.
+2. JE form submits → JE server saves the CCT row.
+3. `updated-item/{slug}` hook fires → our forward push engine reads `$source_adapter->get($source_id)` (which calls `$db->get_item($source_id)`), applies mappings, writes "New Whale" to the linked product's post meta / post title.
+4. JE redirects iframe, Tier 1 postMessages parent, parent reloads.
+5. New GET request — meta box renders → calls `$source_adapter->get($source_id)` → builds previews.
+
+**Observed:** product fields (WC native) show "New Whale" after the reload. Bridge meta box surfaced previews still show "Old Whale".
+
+### Wrong
+Initially assumed forward push and meta box render would both see the same persisted CCT row, since they both call `$source_adapter->get($source_id)` against the same DB and the save committed in step 2 before either read.
+
+### Evidence
+- User staging: WC product title updates correctly; surfaced preview of `mosaic_name` does NOT update on the same page reload.
+- Both reads go through identical adapter code (`Target_CCT::get()` which calls `$db->get_item()`).
+- The difference: forward push runs in the SAME PHP request as the JE save (step 3); meta box render runs in a SEPARATE later request (step 5).
+
+### Reality
+JE's `$db->get_item()` consults a per-class instance cache AND in some persistent-cache configurations also `wp_cache_get()` for the row. When `$db->update()` runs in step 2, **JE doesn't guarantee `wp_cache_delete()` for the row's cache entry** — same asymmetric-API surface that L-022 documents for hooks not firing on adapter writes. Net effect:
+
+- **Step 3 (same request as save):** `$db->get_item()` is called by our forward push. The save in step 2 may have populated or refreshed JE's per-class instance cache as a side effect of its internal flow, so step 3 happens to read the FRESH row. Target gets the new value. User sees the update on the WC product fields.
+- **Step 5 (separate request, separate PHP process):** `$db->get_item()` is called by our meta box. The per-class instance cache is empty (new request, new instance), so it falls through to underlying storage. If a persistent object cache (Redis / Memcached) is enabled AND was populated by a prior read with the pre-save row AND wasn't invalidated by step 2's write, this returns the STALE row. Surfaced preview shows old value.
+
+In other words: the freshness of `$db->get_item()` depends on which cache layers are hot, whether the prior request invalidated them, and the exact cache backend. Not predictable, not reliable.
+
+### Affected code
+- `includes/targets/class-target-cct.php` — `get()` method (calls `$db->get_item()`).
+- `includes/admin/class-woo-product-meta-box.php` — `resolve_for_post()` (uses adapter's `get()` for the source read that feeds surfaced previews).
+- `includes/flatten/class-flattener.php` — `apply_bridge()` source read (mostly fine because the typical caller is the same-request save hook, but admin-triggered "Sync now" syncs and bulk syncs are separate requests and could be affected).
+- `includes/flatten/class-reverse-flattener.php` — `apply_bridge()` source read (CCT row read during pull diff calculation; staleness here could cause unnecessary double-writes).
+
+### Fix shipped in
+v0.6.0-alpha.8.
+
+Added `Target_CCT::get_fresh( $id )` method that goes directly to the underlying `wp_jet_cct_{slug}` table via `$wpdb->get_row()`, skipping `$db->get_item()`, `$db->query()`, and every layer of caching they touch. Wired four call sites to prefer `get_fresh()` when the adapter exposes it:
+
+1. **`JEDB_Woo_Product_Meta_Box::resolve_for_post()`** — the highest-priority user-visible path. Surfaced previews now always show the freshest CCT row after a modal save.
+2. **`JEDB_Flattener::apply_bridge()`** — source read used by the forward push. Hook-triggered case is already fresh in practice; this hardens against admin-triggered syncs hitting stale persistent caches.
+3. **`JEDB_Reverse_Flattener::apply_bridge()`** — source-side (CCT) read used during pull diff. Prevents unnecessary CCT writes when target post values match the freshly-saved CCT row but a cached read would have reported divergence.
+4. Non-CCT adapters (CPT, Woo product, Woo variation) don't expose `get_fresh()` — they fall through to the standard `get()` because their post-meta-based reads use WP's standard object cache which DOES invalidate properly on `update_post_meta()` / `wp_update_post()`.
+
+### Prevention
+1. **When reading a host plugin's data after a write the host plugin performed, don't assume the host's read API invalidates its own caches.** Verify the host's behavior by writing a tracing test (one request writes, the next reads and logs both the API-via value and a direct-SQL value side-by-side; compare). Or just always use direct SQL for the use cases where freshness is critical.
+2. **Per-class instance caches + persistent object caches stack.** Same code path can hit different layers in different requests depending on cache state. Don't reason about cache freshness without identifying every layer involved.
+3. **Provide adapter-level escape hatches.** Each `JEDB_Data_Target` implementation should know whether its underlying storage has freshness gotchas and expose a `get_fresh()` accordingly. Callers that care should `method_exists()`-check and prefer the fresh path.
+4. **L-022 and L-030 are siblings.** L-022 is "host writes don't fire host hooks consistently"; L-030 is "host reads don't see host writes consistently." Both come from the same root: host plugins built around their own internal APIs as the primary interface, with low-level `$wpdb` operations as the actual storage, and gaps between the two when developers assume parity. The mitigation pattern in both cases is the same: when symmetry matters, go direct to the underlying storage and bypass the host's wrapper.
+5. **For our adapter API: any method whose name implies a value read (`get`, `exists`, `count`, `list_ids`) should be EITHER guaranteed-fresh or have a companion `*_fresh()` variant.** Going forward, all new adapters get audited for this asymmetry at design time, not in production.
+
+---

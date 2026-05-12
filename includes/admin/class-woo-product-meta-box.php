@@ -779,7 +779,25 @@ class JEDB_Woo_Product_Meta_Box {
 		$source_id   = (int) $source_id;
 		$source_data = array();
 		if ( $source_id ) {
-			$got = $source_adapter->get( $source_id );
+			// alpha.8 (L-030): meta box render must see the freshest source
+			// data. After a modal Done save, the CCT row is updated and the
+			// forward push fires (in the iframe's request) to update the
+			// product target. The parent then reloads and we render here.
+			// If a persistent object cache (Redis/Memcached) is in play AND
+			// JE doesn't `wp_cache_delete()` after its low-level $db->update()
+			// — same asymmetric-API quirk as L-022 — `$source_adapter->get()`
+			// can return the pre-save cached row. Forward push got fresh
+			// data because it runs in the same request as the save; we don't.
+			//
+			// Workaround: when the adapter exposes a `get_fresh()` method
+			// (Target_CCT does), call that — it bypasses every JE-side
+			// caching layer and reads direct from the underlying table.
+			// Non-CCT adapters fall through to standard `get()`.
+			if ( method_exists( $source_adapter, 'get_fresh' ) ) {
+				$got = $source_adapter->get_fresh( $source_id );
+			} else {
+				$got = $source_adapter->get( $source_id );
+			}
 			if ( is_array( $got ) ) {
 				$source_data = $got;
 			}

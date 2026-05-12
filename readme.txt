@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.7
+Stable tag: 0.6.0-alpha.8
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.7) ==
+== Current Capability (v0.6.0-alpha.8) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -94,6 +94,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
+= 0.6.0-alpha.8 =
+* Stale-data hotfix (L-030) - Bridge meta box surfaced previews were reading via JE's `$db->get_item()`, which can return cached pre-save rows on the request immediately after a write (especially Redis / Memcached setups). Forward push didn't have this problem because it runs in JE's save request where cache layers happen to be hot with the new value. New `Target_CCT::get_fresh()` method goes direct-SQL, bypassing every JE cache layer. Wired into meta box `resolve_for_post`, forward push `apply_bridge`, and reverse pull source-side reads. Non-CCT adapters unchanged (WP's standard post-meta cache invalidates properly). Engine semantics unchanged - purely a read-freshness fix.
+
 = 0.6.0-alpha.7 =
 * Bridge meta box modal flow fixes (L-029) - three user-reported bugs squashed: (1) "Save & edit" confirm-dialog loop on post-save reload (caused by an over-eager dirty-check vs WP autosave / 3rd-party plugin DOM mutations - dropped the check entirely, always save-first); (2) "Done" button didn't save (Done now programmatically clicks JE's submit button so JE's full save flow fires); (3) JE's native Save button left the editor on a chromed page inside the iframe (JE's post-save redirect strips our chrome-strip query param; fixed via a two-tier injection where the close-on-save handler is always-injected on jet-cct-* pages and uses sessionStorage to survive the redirect, hiding html immediately to prevent WP-chrome flash). Polish: "Saving..." overlay on the parent modal during the save round-trip. No engine code touched.
 
@@ -150,6 +153,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.8 =
+Stale-data hotfix - Bridge meta box surfaced previews now refresh correctly after a modal save, even on setups with persistent object cache (Redis / Memcached). Direct-SQL get_fresh() bypass for CCT reads. No engine semantics change, no schema change.
 
 = 0.6.0-alpha.7 =
 Bridge meta box modal flow fixes - Save & edit no longer loops, Done now actually saves, JE's native Save also closes the modal. "Saving..." overlay added. No schema migration, no engine behavior change.

@@ -2,6 +2,41 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.8] — 2026-05-16
+
+**Stale-data hotfix — Bridge meta box surfaced previews now refresh correctly after a modal save (L-030).**
+
+After alpha.7's modal flow fixes landed, the user reported one final issue: *"the surfaced fields don't update on the product page, but the standard push/pulled fields (rendered in woocommerce product page) do change."*
+
+Root cause: JE's `$db->get_item()` can return STALE rows on the request immediately after a write, especially in setups with a persistent object cache (Redis / Memcached). Forward push reads via the same call but happens to get fresh data because it runs in the same PHP request as JE's save (cache layers happen to be hot with the new value, or empty and forced to underlying storage). The meta box render is a separate request — different cache state — and can read the cached pre-save row. Same asymmetric-API gotcha L-022 documents for hooks; L-030 documents it for reads.
+
+### Added
+
+- **`Target_CCT::get_fresh( $id )`** — new method on the CCT adapter that goes directly to the underlying `wp_jet_cct_{slug}` table via `$wpdb->get_row()`, bypassing `$db->get_item()`, `$db->query()`, and every cache layer underneath. Use when freshness matters more than a tiny perf cost (one cache-bypass DB read).
+
+### Changed
+
+- **`JEDB_Woo_Product_Meta_Box::resolve_for_post()`** — source-data read now `method_exists()`-checks for `get_fresh()` and prefers it. Surfaced field previews in the Bridge meta box now always reflect the latest persisted CCT row, even immediately after a modal save on Redis-cached setups.
+- **`JEDB_Flattener::apply_bridge()`** — source read also prefers `get_fresh()`. Hook-triggered pushes (the common case) already saw fresh data because they run in JE's save request, but admin-triggered Sync now / bulk-sync paths are separate requests and could hit stale cached rows. This hardens those paths too.
+- **`JEDB_Reverse_Flattener::apply_bridge()`** — source-side (CCT) read during pull diff also prefers `get_fresh()`. Prevents unnecessary CCT double-writes when target post values match the freshly-saved CCT row but a cached read would report spurious divergence.
+- **L-030 added to LESSONS-LEARNED** — captures the JE asymmetric-read-cache behavior + the get_fresh pattern + the "host read API doesn't see host write API" prevention rules.
+
+### Engine semantics unchanged
+
+This is purely a read-path freshness fix. No mapping logic changed. No new sync_log rows. No condition evaluation differences. No taxonomy applier changes. If a setup has no persistent object cache (typical small WP installs, file-based transient caching), this is a near-no-op — `Target_CCT::get_fresh()` just adds one direct-SQL read instead of routing through JE's wrapper, same network of DB queries either way. On Redis-cached setups, this is the difference between the meta box working correctly and not.
+
+### Verification
+
+1. After running alpha.7's verification checklist (no loop, Done saves, JE Save also closes, Cancel discards), open the modal, edit `mosaic_name` to a new value (e.g. "Mosaic Whale 2"), click Done.
+2. Wait for the modal to close + parent to reload.
+3. Inspect the Bridge meta box on the product edit page — the read-only preview for `mosaic_name` should show "Mosaic Whale 2".
+4. Inspect WC native product fields (e.g. product title if `mosaic_name` maps to `post_title`) — should ALSO show "Mosaic Whale 2".
+5. Both freshness paths now line up. If the surfaced preview still shows the old value, there's an additional caching layer we haven't accounted for — please report with `wp_jedb_sync_log` rows, a SELECT * from `wp_jet_cct_mosaics_data` showing the actual DB state, and any active object-cache plugin name.
+
+### Non-CCT adapter notes
+
+`Target_CPT`, `Target_Woo_Product`, and `Target_Woo_Variation` don't expose `get_fresh()` — they fall through to standard `get()`. This is intentional: their reads go through WP's standard `get_post()` / `get_post_meta()` which use the standard object cache, and WP's standard cache DOES invalidate properly on `update_post_meta()` / `wp_update_post()`. The freshness gotcha is specifically a JE-CCT thing.
+
 ## [0.6.0-alpha.7] — 2026-05-16
 
 **Bridge meta box modal flow fixes — Save & edit no longer loops; Done button now actually saves; JE's post-save redirect no longer leaves the editor on a chromed page (L-029).**

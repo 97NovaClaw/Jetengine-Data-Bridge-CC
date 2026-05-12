@@ -141,9 +141,37 @@ class JEDB_Target_CCT extends JEDB_Target_Abstract {
 			}
 		}
 
+		return $this->get_fresh( $id );
+	}
+
+	/**
+	 * Read a CCT row directly from the underlying database table, bypassing
+	 * every JE-side caching layer (`$db->get_item()`, `$db->query()`, any
+	 * persistent object cache JE may have populated on a prior request).
+	 *
+	 * Use this when freshness matters more than performance — e.g. for the
+	 * Bridge meta box render after a modal save. L-030: forward push runs
+	 * in the same request as JE's save and gets fresh data; subsequent
+	 * requests reading via `$db->get_item()` can return stale rows if a
+	 * persistent object cache (Redis / Memcached) is in play AND JE's
+	 * `update()` doesn't `wp_cache_delete()` after writing (asymmetric
+	 * API surface; same root cause as L-022). Going direct-SQL skips
+	 * the cache entirely.
+	 *
+	 * @param int $id  CCT row PK (`_ID`).
+	 * @return array|null  Row data as associative array, or null if not found.
+	 */
+	public function get_fresh( $id ) {
+
+		$id = absint( $id );
+		if ( ! $id ) {
+			return null;
+		}
+
 		global $wpdb;
 		$table = $this->get_table_name();
-		$row   = $wpdb->get_row(
+
+		$row = $wpdb->get_row(
 			$wpdb->prepare( "SELECT * FROM `{$table}` WHERE _ID = %d LIMIT 1", $id ), // phpcs:ignore WordPress.DB.PreparedSQL,WordPress.DB.DirectDatabaseQuery
 			ARRAY_A
 		);

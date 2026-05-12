@@ -213,7 +213,19 @@ class JEDB_Flattener {
 			return JEDB_Sync_Log::STATUS_ERRORED;
 		}
 
-		$source_data = $source_adapter->get( $source_id );
+		// alpha.8 (L-030): when the adapter exposes get_fresh(), use it
+		// here too. For CCT sources, this bypasses any cache layer JE
+		// may have populated on a prior request and guarantees we apply
+		// the most recent persisted values. Hook-triggered pushes (the
+		// common case) tend to get fresh data anyway because they run
+		// in the same request as the save; but admin-triggered pushes
+		// (Sync now button, bulk sync) are separate requests and CAN
+		// hit stale cached rows on Redis/Memcached setups.
+		if ( method_exists( $source_adapter, 'get_fresh' ) ) {
+			$source_data = $source_adapter->get_fresh( $source_id );
+		} else {
+			$source_data = $source_adapter->get( $source_id );
+		}
 		if ( ! is_array( $source_data ) ) {
 			$this->log_status( $bridge, $source_id, '', JEDB_Sync_Log::STATUS_ERRORED, $origin_tag, 'source record not found', array() );
 			return JEDB_Sync_Log::STATUS_ERRORED;
