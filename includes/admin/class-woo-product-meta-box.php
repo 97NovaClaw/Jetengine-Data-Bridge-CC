@@ -249,7 +249,18 @@ class JEDB_Woo_Product_Meta_Box {
 			return;
 		}
 
-		// Fast gate: only fire on jet-cct-* pages with our query param.
+		// Fast gate: only fire on jet-cct-* pages. Two-tier injection:
+		//   Tier 1 (ALWAYS on jet-cct-* pages): the iframe-aware close-
+		//     on-save handler. Runs only when in an iframe and only when
+		//     sessionStorage flag is set. Needed because JE's post-save
+		//     redirect strips our `jedb_chrome=stripped` query param,
+		//     so the chrome-strip code (tier 2) doesn't run on the
+		//     post-save page — but we still need to close the modal
+		//     when the editor's save completes. (alpha.7 bug fix.)
+		//   Tier 2 (only when ?jedb_chrome=stripped): the CSS that
+		//     hides WP admin chrome + the Done/Cancel top bar +
+		//     interception of JE's form submit to set the close flag.
+		//
 		// phpcs:disable WordPress.Security.NonceVerification.Recommended
 		$page   = isset( $_GET['page'] )         ? sanitize_text_field( wp_unslash( $_GET['page'] ) )         : '';
 		$chrome = isset( $_GET['jedb_chrome'] )  ? sanitize_key( wp_unslash( $_GET['jedb_chrome'] ) )         : '';
@@ -259,10 +270,126 @@ class JEDB_Woo_Product_Meta_Box {
 		if ( '' === $page || 0 !== strpos( $page, 'jet-cct-' ) ) {
 			return;
 		}
-		if ( 'stripped' !== $chrome ) {
+		if ( ! current_user_can( JEDB_CAPABILITY ) ) {
 			return;
 		}
-		if ( ! current_user_can( JEDB_CAPABILITY ) ) {
+
+		/* ------------------------------------------------------------
+		 * TIER 1 — Always injected on jet-cct-* pages.
+		 *
+		 * Iframe-aware close-on-save handler. Listens for the
+		 * sessionStorage `jedb_close_modal_on_load` flag (set by Tier 2's
+		 * form-submit interceptor) and, if present, postMessages the
+		 * parent to close the modal and reload the product page.
+		 *
+		 * Why this runs even WITHOUT `jedb_chrome=stripped`: JE's CCT
+		 * save form posts to `?cct_action=save-item&page=...`, and
+		 * after the save JE redirects to a URL constructed from its
+		 * own state — typically the edit URL WITHOUT our extra query
+		 * params. So the chrome-strip CSS/Done bar (Tier 2) doesn't
+		 * apply on the post-save page, but we still need to detect
+		 * that we just came back from a save inside the modal and
+		 * close it. Tier 1 handles that.
+		 *
+		 * Validation-error guard: if the page contains a `.notice-error`
+		 * (JE renders one for validation failures), we do NOT close the
+		 * modal — the editor needs to see the error and fix their
+		 * input. We clear the flag in either case so we don't loop.
+		 *
+		 * Page-flash mitigation: when we ARE closing, we set
+		 * `html.style.visibility = 'hidden'` immediately so the editor
+		 * doesn't see a flash of WP chrome before the parent closes the
+		 * iframe.
+		 * ----------------------------------------------------------- */
+		?>
+		<script id="jedb-cct-iframe-close-handler">
+			(function () {
+				if ( window.top === window.self ) {
+					// Not in an iframe — these mechanics only apply
+					// inside our modal. Direct visits to jet-cct pages
+					// behave normally.
+					return;
+				}
+
+				var FLAG_KEY = 'jedb_close_modal_on_load';
+
+				// Read flag immediately (sessionStorage is available
+				// before DOM is ready). If set, hide the page right now
+				// so the editor doesn't see any flash of WP chrome
+				// between paint and the parent's modal close.
+				var shouldClose = false;
+				try {
+					shouldClose = sessionStorage.getItem( FLAG_KEY ) === '1';
+				} catch ( e ) {}
+
+				if ( ! shouldClose ) {
+					return;
+				}
+
+				// Hide the page NOW (during head parsing — body doesn't
+				// yet exist, but documentElement does).
+				document.documentElement.style.visibility = 'hidden';
+
+				// After DOM is parsed, inspect for validation error
+				// notices. JE-style validation failure produces a
+				// `.notice-error` near the top of the form. If found,
+				// the save was rejected — un-hide so the editor can
+				// see and fix the error. Otherwise postMessage parent
+				// to close.
+				document.addEventListener( 'DOMContentLoaded', function () {
+					try { sessionStorage.removeItem( FLAG_KEY ); } catch ( e ) {}
+
+					var hasError = !! document.querySelector(
+						'.notice-error, .notice.notice-error'
+					);
+
+					if ( hasError ) {
+						// Validation failure inside JE — show the page
+						// so the editor can read and address the error.
+						// Also tell the parent to hide its "Saving…"
+						// overlay so the editor can interact with the
+						// form again. The modal stays open.
+						//
+						// Note: chrome-strip CSS only runs when
+						// `jedb_chrome=stripped` is in the URL, which
+						// JE's post-save redirect typically drops, so
+						// the editor may see admin bar / sidebar here.
+						// Acceptable fallback: error states are
+						// recoverable (fix input, click Done again).
+						document.documentElement.style.visibility = '';
+
+						try {
+							window.parent.postMessage(
+								{ type: 'jedb:cct-save-error' },
+								window.location.origin
+							);
+						} catch ( e ) {}
+						return;
+					}
+
+					try {
+						window.parent.postMessage(
+							{ type: 'jedb:cct-modal-close', reload: true },
+							window.location.origin
+						);
+					} catch ( err ) {
+						// postMessage failed; restore visibility so the
+						// editor isn't stuck on a blank page.
+						document.documentElement.style.visibility = '';
+					}
+				} );
+			})();
+		</script>
+		<?php
+
+		/* ------------------------------------------------------------
+		 * TIER 2 — Only when explicitly opened from the modal launcher.
+		 *
+		 * Chrome strip + Done/Cancel top bar + JE form submit
+		 * interceptor (which sets the sessionStorage close flag so
+		 * Tier 1 closes the modal on the post-save reload).
+		 * ----------------------------------------------------------- */
+		if ( 'stripped' !== $chrome ) {
 			return;
 		}
 
@@ -311,50 +438,110 @@ class JEDB_Woo_Product_Meta_Box {
 		<script id="jedb-cct-chrome-strip-js">
 			(function () {
 				if ( window.top === window.self ) {
-					// Not actually in an iframe — abort, this query param
-					// only makes sense when loaded inside the parent's modal.
+					// Not in an iframe — abort. Direct visits with the
+					// query param shouldn't strip chrome.
 					return;
 				}
 
+				var FLAG_KEY = 'jedb_close_modal_on_load';
+
+				function setCloseFlag() {
+					try { sessionStorage.setItem( FLAG_KEY, '1' ); } catch ( e ) {}
+				}
+
+				function notifyParent( msg ) {
+					try {
+						window.parent.postMessage( msg, window.location.origin );
+					} catch ( e ) {}
+				}
+
+				function postClose( reload ) {
+					try {
+						window.parent.postMessage(
+							{ type: 'jedb:cct-modal-close', reload: !! reload },
+							window.location.origin
+						);
+					} catch ( e ) {
+						<?php if ( $return_url ) : ?>
+						window.parent.location = <?php echo wp_json_encode( $return_url ); ?>;
+						<?php endif; ?>
+					}
+				}
+
 				document.addEventListener( 'DOMContentLoaded', function () {
+
+					// ----- JE form submit interceptor -----
+					// JE's CCT save form posts to ?cct_action=save-item.
+					// We attach a submit listener that:
+					//   (a) sets the close flag so Tier 1 closes the
+					//       modal on the post-save reload, AND
+					//   (b) tells the parent to show a "Saving…" overlay
+					//       so the editor has feedback during the
+					//       form POST → server save → redirect → reload
+					//       round-trip (typically 200-800ms).
+					// Fires for both JE's native Save button click AND
+					// for our Done button below (which clicks JE's
+					// submit button programmatically).
+					var jeForm = document.querySelector( 'form[action*="jet-cct-save-item"], form[action*="cct_action=save-item"]' );
+					if ( jeForm ) {
+						jeForm.addEventListener( 'submit', function () {
+							setCloseFlag();
+							notifyParent( { type: 'jedb:cct-save-starting' } );
+						} );
+					}
+
+					// ----- Top bar with Done and Cancel buttons -----
 					var bar = document.createElement( 'div' );
 					bar.className = 'jedb-cct-frame-bar';
 
 					var title = document.createElement( 'span' );
 					title.className = 'jedb-cct-frame-title';
-					title.textContent = <?php echo wp_json_encode( __( 'Editing linked CCT row — save in the JetEngine form below, then click Done.', 'je-data-bridge-cc' ) ); ?>;
+					title.textContent = <?php echo wp_json_encode( __( 'Editing linked CCT row — Done saves & closes; Cancel discards changes.', 'je-data-bridge-cc' ) ); ?>;
 
 					var actions = document.createElement( 'span' );
 					actions.className = 'jedb-cct-frame-actions';
 
+					// Done = save JE's form (via clicking its submit
+					// button so submit events fire) then let Tier 1
+					// close the modal on the post-save reload.
 					var doneBtn = document.createElement( 'button' );
 					doneBtn.type = 'button';
-					doneBtn.textContent = <?php echo wp_json_encode( __( 'Done · Return to product', 'je-data-bridge-cc' ) ); ?>;
+					doneBtn.textContent = <?php echo wp_json_encode( __( 'Done · Save & return to product', 'je-data-bridge-cc' ) ); ?>;
 					doneBtn.addEventListener( 'click', function () {
-						try {
-							window.parent.postMessage(
-								{ type: 'jedb:cct-modal-close', reload: true },
-								window.location.origin
-							);
-						} catch ( e ) {
-							// Same-origin should always allow postMessage. Fallback: direct navigate.
-							<?php if ( $return_url ) : ?>
-							window.parent.location = <?php echo wp_json_encode( $return_url ); ?>;
-							<?php endif; ?>
+						if ( ! jeForm ) {
+							// No JE form found — fall back to closing
+							// without saving so the user isn't stuck.
+							postClose( false );
+							return;
+						}
+
+						// Set the close flag + notify parent immediately
+						// (belt-and-suspenders — the submit listener
+						// above will also fire, but covering the
+						// edge case where `form.submit()` is used as
+						// fallback and doesn't trigger submit events).
+						setCloseFlag();
+						notifyParent( { type: 'jedb:cct-save-starting' } );
+
+						// Prefer clicking JE's actual submit button so
+						// validation / event handlers fire normally. Fall
+						// back to form.submit() if no button is found.
+						var submitBtn = jeForm.querySelector( 'button[type="submit"], input[type="submit"]' );
+						if ( submitBtn ) {
+							submitBtn.click();
+						} else {
+							jeForm.submit();
 						}
 					} );
 
+					// Cancel = close without saving. Editor's in-iframe
+					// edits are discarded (they never POSTed anywhere).
 					var cancelBtn = document.createElement( 'button' );
 					cancelBtn.type = 'button';
 					cancelBtn.className = 'jedb-cct-frame-cancel';
-					cancelBtn.textContent = <?php echo wp_json_encode( __( 'Cancel', 'je-data-bridge-cc' ) ); ?>;
+					cancelBtn.textContent = <?php echo wp_json_encode( __( 'Cancel · Discard changes', 'je-data-bridge-cc' ) ); ?>;
 					cancelBtn.addEventListener( 'click', function () {
-						try {
-							window.parent.postMessage(
-								{ type: 'jedb:cct-modal-close', reload: false },
-								window.location.origin
-							);
-						} catch ( e ) {}
+						postClose( false );
 					} );
 
 					actions.appendChild( cancelBtn );

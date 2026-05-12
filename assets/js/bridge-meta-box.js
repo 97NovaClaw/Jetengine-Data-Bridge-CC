@@ -58,6 +58,12 @@
 					'<div class="jedb-cct-modal-frame">' +
 						'<button type="button" class="jedb-cct-modal-close" aria-label="Close" title="Close">&times;</button>' +
 						'<iframe class="jedb-cct-modal-iframe" frameborder="0" allow="clipboard-write"></iframe>' +
+						'<div class="jedb-cct-modal-saving" style="display:none;">' +
+							'<div class="jedb-cct-modal-saving-inner">' +
+								'<span class="spinner is-active" style="float:none;margin:0 8px 0 0;"></span>' +
+								'<span>Saving CCT changes…</span>' +
+							'</div>' +
+						'</div>' +
 					'</div>' +
 				'</div>'
 			);
@@ -67,18 +73,18 @@
 
 			$modal.on( 'click', function ( e ) {
 				if ( e.target === $modal.get( 0 ) ) {
-					closeModal( /* reload */ false, /* confirm */ true );
+					closeModal( /* reload */ false );
 				}
 			} );
 
 			$modal.find( '.jedb-cct-modal-close' ).on( 'click', function () {
-				closeModal( /* reload */ false, /* confirm */ true );
+				closeModal( /* reload */ false );
 			} );
 
 			if ( ! modalCloseOnEscBound ) {
 				$( document ).on( 'keydown', function ( e ) {
 					if ( $modal && $modal.is( ':visible' ) && e.key === 'Escape' ) {
-						closeModal( /* reload */ false, /* confirm */ true );
+						closeModal( /* reload */ false );
 					}
 				} );
 				modalCloseOnEscBound = true;
@@ -89,22 +95,15 @@
 
 		function openModal( url ) {
 			var $m = ensureModal();
+			$m.find( '.jedb-cct-modal-saving' ).hide();
 			$modalIframe.attr( 'src', url );
 			$m.show();
 			$( 'body' ).addClass( 'jedb-cct-modal-open' );
 		}
 
-		function closeModal( shouldReload, confirmDirty ) {
+		function closeModal( shouldReload ) {
 			if ( ! $modal || ! $modal.is( ':visible' ) ) {
 				return;
-			}
-			if ( confirmDirty && ! shouldReload ) {
-				// We don't actually know if the iframe form is dirty (cross-frame
-				// dirty-state detection is unreliable). Skip the confirm by default
-				// — JE's own form will warn via beforeunload if it has its own
-				// dirty-tracking, and the editor already had Cancel/Done buttons
-				// inside the chrome-stripped iframe. A blanket "are you sure?"
-				// here is more annoying than helpful.
 			}
 			$( 'body' ).removeClass( 'jedb-cct-modal-open' );
 			$modal.hide();
@@ -115,18 +114,61 @@
 			}
 		}
 
+		function showSavingOverlay() {
+			if ( $modal && $modal.is( ':visible' ) ) {
+				$modal.find( '.jedb-cct-modal-saving' ).show();
+			}
+		}
+
+		function hideSavingOverlay() {
+			if ( $modal ) {
+				$modal.find( '.jedb-cct-modal-saving' ).hide();
+			}
+		}
+
 		// Listen for postMessages from the chrome-stripped CCT edit iframe.
 		// Only accept messages from the same origin as the parent (the iframe
 		// is loaded from the same WP install, so origins match).
 		window.addEventListener( 'message', function ( event ) {
 			if ( event.origin !== window.location.origin ) { return; }
 			var data = event.data || {};
-			if ( ! data || data.type !== 'jedb:cct-modal-close' ) { return; }
-			closeModal( !! data.reload, false );
+			if ( ! data || ! data.type ) { return; }
+
+			switch ( data.type ) {
+				case 'jedb:cct-save-starting':
+					// JE form is being submitted (Done click or native
+					// Save click inside iframe). Show a "Saving…" overlay
+					// so the editor has feedback during the round-trip.
+					showSavingOverlay();
+					break;
+
+				case 'jedb:cct-save-error':
+					// Validation failed inside JE. The iframe stays open
+					// so the editor can read and fix the error. Hide our
+					// overlay so they can interact with the form again.
+					hideSavingOverlay();
+					break;
+
+				case 'jedb:cct-modal-close':
+					closeModal( !! data.reload );
+					break;
+			}
 		} );
 
 		/* -----------------------------------------------------------------
 		 * "Save & edit CCT row" buttons — each linked-panel has one
+		 *
+		 * alpha.7 (post L-027 bug report): always save the product form
+		 * first, no dirty-check confirm dialog. The button label
+		 * ("Save & edit ... in JetEngine") sets the expectation that a
+		 * save happens. Saving a clean form is a harmless WP no-op.
+		 *
+		 * The alpha.6 dirty-check + confirm dialog caused an auto-launch
+		 * loop because WP's autosave/heartbeat leaves the #post form
+		 * looking "dirty" even immediately after a save (compare
+		 * `defaultValue` to `value` on inputs that WP / 3rd-party
+		 * plugins mutate post-load — many do). The confirm fired again
+		 * on the reloaded page, click OK → save again → loop.
 		 * -------------------------------------------------------------- */
 
 		$( document ).on( 'click', '.jedb-open-cct-modal', function ( e ) {
@@ -140,82 +182,55 @@
 				return;
 			}
 
-			// If the product form is dirty, the parent product page should
-			// save first so the editor doesn't lose any product-side changes.
-			// Detection is best-effort — WP's #post form sets `wp.autosave`
-			// dirty tracking when fields change.
-			var dirty = isProductFormDirty();
-
-			if ( dirty ) {
-				var save = window.confirm(
-					'You have unsaved product changes.\n\n' +
-					'Click OK to SAVE the product first, then re-open the CCT editor.\n' +
-					'Click Cancel to open the CCT editor anyway (your product changes will not be saved yet).'
-				);
-
-				if ( save ) {
-					// Stamp a hidden marker so handle_save() sets a transient
-					// that this script will read on the NEXT page render and
-					// auto-launch the modal.
-					var $form = $( '#post' );
-					if ( $form.length ) {
-						$form.append(
-							$( '<input>', {
-								type:  'hidden',
-								name:  '_jedb_reopen_cct_bridge',
-								value: bridgeId
-							} )
-						);
-						$( '#publish' ).trigger( 'click' );
-						return;
-					}
-				}
-				// Cancel pressed or form not found → open modal without saving.
+			// Stamp the reopen marker and submit the WP product form.
+			// handle_save() reads `_jedb_reopen_cct_bridge`, persists a
+			// 60-second transient keyed to this user+post. On the post-
+			// save reload, maybe_enqueue_assets() reads the transient
+			// and passes the bridge id to JS as
+			// `jedbMetaBoxBootstrap.reopenBridgeId`. The auto-launch
+			// block below opens the modal directly (bypassing this
+			// click handler, so no loop).
+			var $form = $( '#post' );
+			if ( ! $form.length ) {
+				// No #post form found (shouldn't happen on a product
+				// edit screen). Fall back to opening the modal without
+				// saving — the editor's product-side changes (if any)
+				// will be lost on the parent reload after Done, but
+				// that's better than doing nothing.
+				openModal( url );
+				return;
 			}
 
-			openModal( url );
+			$form.append(
+				$( '<input>', {
+					type:  'hidden',
+					name:  '_jedb_reopen_cct_bridge',
+					value: bridgeId
+				} )
+			);
+			$( '#publish' ).trigger( 'click' );
 		} );
 
 		// Auto-open the modal on this page render if a previous submission
 		// flagged it (the editor clicked Save & edit, product saved, page
 		// reloaded — we now open the modal for them).
+		//
+		// CRITICAL: this path opens the modal DIRECTLY via openModal()
+		// rather than triggering a click on the button. Triggering a
+		// click would re-enter the save-first flow above and submit the
+		// form AGAIN, causing the alpha.6 loop. Auto-launch means "the
+		// save already happened; just open the modal."
 		if ( bootstrap.reopenBridgeId > 0 ) {
-			var $btn = $( '.jedb-open-cct-modal[data-bridge-id="' + bootstrap.reopenBridgeId + '"]' );
-			if ( $btn.length ) {
-				// Small delay so the page is fully painted first.
-				window.setTimeout( function () {
-					$btn.trigger( 'click' );
-				}, 250 );
-			}
-		}
-
-		function isProductFormDirty() {
-			// WP doesn't expose a clean "is this form dirty?" API outside
-			// the block editor. Best-effort: if any input value differs
-			// from its `defaultValue`, treat as dirty.
-			var dirty = false;
-			$( '#post :input' ).each( function () {
-				var el = this;
-				if ( ! el.name ) { return; }
-				if ( el.type === 'checkbox' || el.type === 'radio' ) {
-					if ( el.checked !== el.defaultChecked ) {
-						dirty = true; return false;
-					}
-				} else if ( el.tagName === 'SELECT' ) {
-					var sel = '';
-					$( el ).find( 'option' ).each( function () {
-						if ( this.defaultSelected ) { sel = this.value; }
-					} );
-					if ( sel !== $( el ).val() ) {
-						dirty = true; return false;
-					}
-				} else if ( typeof el.defaultValue !== 'undefined' ) {
-					if ( el.value !== el.defaultValue ) {
-						dirty = true; return false;
-					}
+			var $reopenBtn = $( '.jedb-open-cct-modal[data-bridge-id="' + bootstrap.reopenBridgeId + '"]' );
+			if ( $reopenBtn.length ) {
+				var autoOpenUrl = String( $reopenBtn.data( 'cct-edit-url' ) || '' );
+				if ( autoOpenUrl ) {
+					// Small delay so the page is fully painted first.
+					window.setTimeout( function () {
+						openModal( autoOpenUrl );
+					}, 250 );
 				}
-			} );
-			return dirty;
+			}
 		}
 
 		/* =================================================================

@@ -2,6 +2,48 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.7] — 2026-05-16
+
+**Bridge meta box modal flow fixes — Save & edit no longer loops; Done button now actually saves; JE's post-save redirect no longer leaves the editor on a chromed page (L-029).**
+
+Three user-reported bugs from alpha.6.1 staging:
+
+1. **Click "Save & edit \"X\" in JetEngine" → confirm dialog asks to save → click OK → save fires → page reloads → dialog appears AGAIN → loop.** Eventually clicking Cancel breaks out, but the auto-launched modal then opens on top of an unsaved-state product page.
+2. **Click "Done · Return to product" in the modal top bar → modal closes → CCT changes are NOT saved.** The Done button was a misnomer; it just postMessaged the parent to close without telling JE to save.
+3. **Click JE's native Save button inside the modal → page refreshes inside the iframe → WP admin chrome (sidebar, admin bar, screen options) reappears.** JE's post-save redirect URL doesn't preserve our `?jedb_chrome=stripped` query param, so the chrome-strip code stops applying. Also: clicking JE's Save doesn't close the modal automatically — editor is stuck on a chromed JE page inside the iframe.
+
+All three fixed in alpha.7. See L-029 for the parser / cross-frame interaction details.
+
+### Changed
+
+- **`assets/js/bridge-meta-box.js`** — `.jedb-open-cct-modal` click handler simplified: **always** save the product form first, no dirty-check, no confirm dialog. Saving a clean form is a harmless WP no-op; saving a dirty form preserves the editor's work. The alpha.6 dirty-check (comparing `value` to `defaultValue` on every input in `#post`) was triggering false positives because WP's autosave/heartbeat and various third-party plugins (visible in user's staging: "Restore the backup", "Deployer for Git", "Jet Woo Builder Data Update" notices) mutate form inputs post-load. Auto-launch path on the post-save reload now opens the modal **directly** via `openModal()` instead of re-triggering the click handler, eliminating the loop entirely.
+- **`JEDB_Woo_Product_Meta_Box::maybe_inject_cct_chrome_strip()`** — restructured into a two-tier injection model:
+  - **Tier 1** (always injected on `jet-cct-*` pages, regardless of `?jedb_chrome=stripped`): an iframe-aware close-on-save handler that runs only when (a) the page is loaded inside an iframe (`window.top !== window.self`), AND (b) `sessionStorage.jedb_close_modal_on_load === '1'`. When both conditions hold, hides the document with `html.style.visibility = 'hidden'` immediately (prevents WP chrome flash), then on `DOMContentLoaded` checks for validation error notices (`.notice-error, .notice.notice-error`). If clean, postMessages the parent to close + reload. If error, un-hides and postMessages `jedb:cct-save-error` so the parent can hide its saving overlay. The flag is cleared in either case to prevent loops.
+  - **Tier 2** (only when `?jedb_chrome=stripped`): the chrome-strip CSS + Done/Cancel top bar + JE form submit interceptor. The submit interceptor sets the sessionStorage flag on every JE form submit (whether triggered by the user clicking JE's native Save button OR by our Done button programmatically clicking it), AND postMessages the parent with `jedb:cct-save-starting` so the parent can show a "Saving…" overlay.
+- **"Done" button behavior** — was `postMessage parent to close`. Now: sets the sessionStorage close flag, postMessages parent with `jedb:cct-save-starting`, then programmatically clicks JE's submit button so JE's native validation / save flow fires normally. Renamed from "Done · Return to product" to "Done · Save & return to product" for clarity.
+- **"Cancel" button** — unchanged behavior (closes without saving, postMessages parent with `jedb:cct-modal-close, reload:false`). Renamed to "Cancel · Discard changes" for clarity.
+
+### Added
+
+- **"Saving…" overlay** in the parent modal. Shown when the iframe postMessages `jedb:cct-save-starting`. Hidden when the iframe either closes (success) or postMessages `jedb:cct-save-error` (validation failure). Gives the editor visual feedback during the ~200-800ms server round-trip while JE saves + redirects + the iframe reloads.
+- **L-029 in LESSONS-LEARNED** — "JE's post-save redirect strips custom query params; use `sessionStorage` + an always-injected handler to communicate cross-frame state." Captures the redirect-strips-params problem, the two-tier injection pattern, the chrome-flash mitigation, and prevention rules.
+
+### Engine code unchanged
+
+No changes to `handle_save()`, any flattener / reverse flattener, taxonomy applier, or any engine path. The bug surface was entirely in client-side mechanics (form interception, sessionStorage, postMessage protocol, page visibility timing). The CCT save itself goes through JE's normal form POST → `?cct_action=save-item` → JE's internal handler → JE's `updated-item/{slug}` hook → our forward push subscriber, all as designed since Phase 3.
+
+### Verification
+
+1. **No more loop**: open any linked product, edit a product field (creates "dirty" state in WP's eyes), click "Save & edit \"X\" in JetEngine". Should: see WP save the product, page reloads, modal opens automatically. NO confirm dialog should appear at any point.
+2. **Done saves**: open the modal, edit a CCT field (e.g. mosaic_name), click "Done · Save & return to product". Should: see "Saving…" overlay appear briefly, modal closes, parent reloads, the preview in the meta box shows the new value.
+3. **JE's Save also closes**: open the modal, edit a CCT field, click JE's native Save button (inside the JE form, not our top bar). Should: see "Saving…" overlay appear briefly, modal closes (no WP chrome flash beyond the unavoidable inter-page transition), parent reloads with the new preview value.
+4. **Cancel doesn't save**: open the modal, edit a CCT field, click "Cancel · Discard changes". Should: modal closes immediately, NO reload, the preview values are UNCHANGED.
+5. **Sync log**: a successful Done or JE-Save should produce a forward-push row in `wp_jedb_sync_log` from JE's natural `updated-item/{slug}` hook. NO `meta_box_post_save_push` rows (that origin tag was retired in alpha.6).
+
+### Known limitation
+
+If JE's CCT save fails validation, the editor sees the iframe re-render with the error message — but the iframe will show with normal WP chrome (admin bar, sidebar) because JE's post-save redirect drops `?jedb_chrome=stripped` from the URL. This is acceptable as a fallback: validation errors are recoverable (fix input, click Done again). A future release can preserve the chrome-strip param across JE's redirect by either modifying JE's redirect URL or detecting the post-error state and self-redirecting to the chrome-stripped URL.
+
 ## [0.6.0-alpha.6.1] — 2026-05-15
 
 **Critical hotfix — Bridge meta box was emitting `<form>` tags inside the WP `#post` form (since alpha.4); fixed product saves redirecting to `wp-admin/edit.php` and the modal launcher not working (L-028).**
