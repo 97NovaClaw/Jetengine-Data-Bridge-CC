@@ -1432,6 +1432,7 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 - Implement the §4.6 shim. New file `includes/class-cct-single-redirect.php`. Hook `template_redirect`.
 - Reads opt-in from each flatten config's `cct_single_redirect` flag (per Day 1 extension). Direction guard (only redirects for bridges where direction includes push). Admin escape hatch (`?jedb_no_redirect=1` with `manage_options`).
 - ✅ **Exit criterion**: visiting `/cct/mosaics_data/2/` 301-redirects to the linked product permalink for opt-in bridges. Logged-in admin with `?jedb_no_redirect=1` sees the CCT single (or 404).
+- **Modal-iframe interaction (post-L-027 note):** the redirect shim hooks `template_redirect`, which only fires on frontend requests. The modal iframe loads the JE *admin* CCT edit URL (`wp-admin/admin.php?page=jet-cct-{slug}&cct_action=edit`), so the modal flow is completely unaffected. The shim's main consumer is public-storefront visitors who somehow land on the public CCT single URL; editors using the alpha.9 meta box never see a frontend CCT page in their daily workflow.
 
 #### Day 4 — Field Presets admin tab + Mandatory coverage integration
 
@@ -1442,6 +1443,7 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
   - **Display-only overlay** mode — pick a preset to see its fields layered into the panel WITHOUT modifying the bridge config (PAC VDM-style green/red badges + "X of Y covered" summary, freeform group labels per preset).
   - **Scaffold missing mappings** button — for any preset field not yet in the bridge's mappings, stub a passthrough mapping (`source_field` empty, `target_field` set, push/pull = passthrough, `group` carried over from preset). Editor fills in source side.
 - Provenance display on the Mandatory coverage panel: each required field labeled with its origin (adapter / preset / bridge override).
+- **Meta box presentation (alpha.9 interaction):** mandatory-coverage warnings on the linked product Bridge meta box appear ONLY when that bridge's `meta_box.show_advanced=true`. The compact meta box stays surface-fields-and-button only; warnings live with the rest of the admin/diagnostic surface inside the Advanced Details `<details>` collapsible. This keeps the editor's daily-use surface uncluttered. Editors who need coverage at-a-glance flip the bridge's `show_advanced` flag on; otherwise they consult the Flatten admin tab's Mandatory coverage panel (always visible there).
 - ✅ **Exit criterion**: editor can curate a "WooCommerce — Storefront Visible" preset with `name` / `regular_price` / `category_ids` / `_visibility` as mandatory + freeform groups, export it as JSON, drop into a fresh staging site, import, apply to a bridge, see PAC VDM-style coverage badges, click Scaffold to auto-stub missing mappings.
 
 ### Phase 4b — Variation bridging (1.5 days) — *new code, builds on Phase 4*
@@ -1450,6 +1452,8 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 - Variation reconciliation engine on PUSH (create / update / soft-delete based on `show_when`).
 - Variation Scope radio + variation picker added to the meta box.
 - Wire downloadable-files handling (the "Has Instructions PDF" path).
+- **Scope reminder:** WC variations are a Woo-specific construct (child posts of a variable product). The `variations[]` block and reconciliation engine are accordingly Woo-scoped. The broader plugin architecture — taxonomies (Phase 3.6 / §4.11), field mappings, push/pull engines, conditional sync — is **post-type-agnostic** and supports ANY CPT target with its own taxonomies, including non-Woo CPTs (e.g. an `event` CPT with `event_category` / `event_tag` taxonomies). Don't conflate "variations are Woo-only" with "the whole bridge is Woo-only" — only the variation reconciliation layer is Woo-scoped.
+- **Meta box presentation (alpha.9 interaction):** the Variation Scope radio mentioned in §4.5/§4.7 is an advanced control — the 99% case is "Bridge the parent product, let auto-reconciliation manage variations." When implemented, the radio belongs inside the meta box's Advanced Details `<details>` collapsible (requires `meta_box.show_advanced=true`), NOT on the compact surface. Pure-surface fields driving variation creation (like `has_instructions_pdf`) continue to render as ordinary read-only previews on the compact surface; they don't need special UI to mark them as "variation-driving."
 - ✅ **Exit criterion**: editing a Mosaic CCT row's `has_instructions_pdf` toggle creates/removes the "Includes Instructions PDF" variation on the bridged Woo product, with the correct price and downloadable file attached.
 
 ### Phase 5 — Settings, debug log, utilities (1 day)
@@ -1457,6 +1461,7 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 - File-based debug log + viewer.
 - Export/import config as JSON (now includes bridge types).
 - "Bulk re-sync all bridges" button.
+- **L-022 / L-030 caveat for admin-triggered bulk operations:** a "Bulk update CCT fields matching X" tool (if added in Phase 5+) that writes via `$source_adapter->update()` directly hits the same L-022 asymmetry the modal-iframe pattern avoids (adapter writes don't fire JE's `updated-item/{slug}` hook, so downstream JE-hook subscribers — including potentially third-party plugins — won't fire). The "Bulk re-sync all bridges" item listed here is READ-side (re-pushes existing CCT values to targets via `apply_bridge()`) so it doesn't hit this asymmetry, BUT any future bulk WRITE tool needs to either: (a) document the asymmetry loudly so admins know to also fire JE's hooks manually if downstream listeners matter, (b) hand-fire `do_action('jet-engine/custom-content-types/updated-item/{slug}', ...)` after each adapter write, or (c) route through JE's higher-level API if one becomes available. The L-030 `get_fresh()` pattern handles the READ-side cache issue but not the WRITE-side hook issue.
 - ✅ **Exit criterion**: an entire site config can be exported, the plugin uninstalled, reinstalled, and config re-imported with everything working.
 
 ### Phase 5b — Custom Code Snippets (1.5 days)

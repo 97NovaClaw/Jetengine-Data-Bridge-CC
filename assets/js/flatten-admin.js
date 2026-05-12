@@ -630,6 +630,23 @@
 	$form.on( 'input',  '#jedb_flatten_condition, #jedb_flatten_meta_box_title, #jedb_flatten_meta_box_groups', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 
+	// alpha.10: hide the "Reverse-direction options" row whenever
+	// direction = push, since the auto-create flag is only meaningful
+	// for pull / bidirectional bridges. Persisted value still saves
+	// correctly via the hidden config_json on submit; we just don't
+	// show the control when it would be a no-op.
+	function toggleReverseRow() {
+		var dir = $form.find( 'input[name="direction"]:checked' ).val() || 'push';
+		var $row = $form.find( 'tr.jedb-reverse-direction-row' );
+		if ( dir === 'push' ) {
+			$row.hide();
+		} else {
+			$row.show();
+		}
+	}
+	$form.on( 'change', 'input[name="direction"]', toggleReverseRow );
+	toggleReverseRow();
+
 	$form.on( 'submit', function () {
 		syncJSON();
 	} );

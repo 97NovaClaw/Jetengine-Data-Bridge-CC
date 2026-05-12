@@ -2,6 +2,47 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.10] — 2026-05-16
+
+**Flatten admin tab UI sweep + forward-looking phase documentation. No engine code touched.**
+
+Post-alpha.9 audit identified a pile of out-of-date copy in the Flatten admin tab — references to phases that are now shipped, behavior descriptions that no longer match the modal-iframe model (L-027), and forward-looking phrases that became stale ("Phase 4 Day 2 builds..."). Cleaned up in one pass. Also tightened up BUILD-PLAN forward-looking notes so future phases know how to interact with the alpha.9 meta box reshape.
+
+### Changed (admin UI copy)
+
+- **Meta box settings intro paragraph** rewritten. Old copy described "editable inputs" + "two-way-syncing inputs" + the D-16 native-rendering skip — all wrong after L-027 / alpha.6. New copy describes the actual flow: read-only previews, "Save & edit" button, JE CCT edit page in a modal, sync engine handles the rest.
+- **Section header** dropped `(Phase 4 / Day 2)` suffix. Phase tags age poorly; belong in BUILD-PLAN, not editor-facing UI.
+- **"Surfacing fields:" closing paragraph** dropped "Phase 4 Day 2 builds the actual meta box" forward-looking phrase (Day 2 shipped multiple releases ago).
+- **CCT-single redirect description** now leads with `**Not yet active —**` since the runtime shim is still a future-release item. Editor understands the toggle persists but doesn't fire today.
+- **Source target dropdown description** dropped "Phase 3 supports CCT sources only" sentence — long since superseded by Phase 3.5.
+- **Mandatory coverage paragraph** rephrased by feature ("A future Field Presets feature will...") instead of by phase number.
+- **Taxonomies section intro** rephrased: dropped `Per BUILD-PLAN §4.11 (D-20, D-21):` lead-in, dropped Phase 3.6 reference. Added explicit reminder that the taxonomy applier works for "any post-type target (products, CPTs, etc.) with any associated taxonomy" — the engine architecture has been post-type-agnostic since 3.6 and the UI was hiding that fact.
+- **Snippet support paragraph** under Taxonomies dropped `(Phase 5b)` parenthetical, rephrased as "the snippet runtime ships in a future release."
+- **Field mappings intro paragraph** dropped `per D-11` decision reference; rephrased as "Push and pull chains are stored independently — they don't have to be inverses" so editors understand the implication, not the decision number.
+- **Condition DSL description** dropped `v1 DSL — see BUILD-PLAN §3.5` lead-in. Operators list is enough.
+- **Group-order description** dropped `(D-26)` parenthetical.
+- **Label field** gained a one-line description: "Identifies the bridge in admin lists and is used as the WP meta box header on the linked product edit screen (unless 'Meta box title' below is set)." Removes the alpha.9 surprise where editors expected `label` changes to update the WP meta box header (which they do — but the connection wasn't documented).
+
+### Changed (behavior)
+
+- **Reverse-direction options row** now hides when `direction = push` is selected. The `auto_create_target_when_unlinked` flag is only meaningful for pull / bidirectional bridges; showing it on a push-only bridge invited confusion (your config had `auto_create_target_when_unlinked: true` on a push-only bridge — a silent no-op). New JS handler `toggleReverseRow()` watches the direction radios and hides/shows the row. Persisted config_json still saves the flag value correctly on submit; we just don't render the control when it would be a no-op. Server-side initial visibility computed from the persisted direction.
+- **Auto-create flag description** dropped `(per D-17)` parenthetical and rephrased to make the trade-off explicit: "Default OFF because the action creates data — turn it on only when you want post saves to spawn source CCT rows automatically."
+
+### Documentation (BUILD-PLAN forward-look notes)
+
+- **Phase 4 Day 3 (redirect shim)** gained a "Modal-iframe interaction" note documenting that the shim hooks `template_redirect` (frontend only) while the modal iframe loads JE's admin URL, so the modal flow is unaffected. The shim's main consumer is public-storefront visitors, not editors.
+- **Phase 4 Day 4 (Field Presets + Mandatory coverage)** gained a "Meta box presentation" decision: mandatory-coverage warnings on the linked product Bridge meta box appear ONLY when that bridge's `meta_box.show_advanced=true`. Compact meta box stays surface-fields-and-button only; warnings live with the rest of the diagnostic surface inside Advanced Details. Editors who want at-a-glance coverage flip `show_advanced` on; otherwise the Flatten admin tab's Mandatory coverage panel is always visible there.
+- **Phase 4b (Variation reconciliation)** gained a "Scope reminder" — variations are Woo-specific (`Target_Woo_Variation`, `variations[]`, reconciliation engine), but the broader architecture (taxonomies, field mappings, push/pull engines, conditional sync) is post-type-agnostic and supports any CPT target. Don't conflate "variations are Woo-only" with "the whole bridge is Woo-only." Also gained a "Meta box presentation" note — when implemented, the Variation Scope radio belongs inside Advanced Details, not on the compact surface; pure-surface fields driving variation creation (like `has_instructions_pdf`) continue to render as ordinary read-only previews.
+- **Phase 5 (Settings, debug, utilities)** gained a "L-022 / L-030 caveat for admin-triggered bulk operations" note. The currently-listed "Bulk re-sync all bridges" item is READ-side (re-pushes existing values via `apply_bridge()`) so it doesn't hit the L-022 hook-asymmetry. BUT any future bulk WRITE tool that writes via `$source_adapter->update()` directly will hit it (JE doesn't fire `updated-item/{slug}` for adapter writes). Documented three handling options: (a) loud documentation, (b) hand-fire JE's hook after each write, (c) route through a higher-level JE API if one becomes available.
+
+### Engine code unchanged
+
+No changes to any flattener, transformer, condition evaluator, target adapter, taxonomy applier, sync log, or meta box render path. Pure UI copy + one JS visibility toggle + four BUILD-PLAN documentation paragraphs.
+
+### Migration
+
+Zero migration. All changes are display-only or admin-UI-visibility tweaks. Existing flatten configs work identically. `surface_on_source` checkbox stays in the per-mapping table for forward-flexibility (per user feedback — was a candidate for removal but kept since the schema field is harmless).
+
 ## [0.6.0-alpha.9] — 2026-05-16
 
 **Bridge meta box reshape — one box per bridge, native WP look, opt-in Advanced Details (L-031).**

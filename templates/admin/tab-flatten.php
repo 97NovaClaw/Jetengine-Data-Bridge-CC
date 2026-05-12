@@ -166,6 +166,7 @@ endif;
 				<th><label for="jedb_flatten_label"><?php esc_html_e( 'Label', 'je-data-bridge-cc' ); ?></label></th>
 				<td>
 					<input id="jedb_flatten_label" name="label" type="text" class="regular-text" value="<?php echo esc_attr( $editing['label'] ?? '' ); ?>" placeholder="<?php esc_attr_e( 'e.g. Mosaics → Product', 'je-data-bridge-cc' ); ?>" />
+					<p class="description"><?php esc_html_e( 'Identifies the bridge in admin lists and is used as the WP meta box header on the linked product edit screen (unless "Meta box title" below is set).', 'je-data-bridge-cc' ); ?></p>
 				</td>
 			</tr>
 			<tr>
@@ -177,7 +178,6 @@ endif;
 							<option value="<?php echo esc_attr( $opt['slug'] ); ?>" <?php selected( $current_source, $opt['slug'] ); ?>><?php echo esc_html( $opt['label'] ); ?> · <code><?php echo esc_html( $opt['slug'] ); ?></code></option>
 						<?php endforeach; ?>
 					</select>
-					<p class="description"><?php esc_html_e( 'Phase 3 supports CCT sources only. CPT/Woo sources land in Phase 3.5 (reverse direction).', 'je-data-bridge-cc' ); ?></p>
 				</td>
 			</tr>
 			<tr>
@@ -213,7 +213,16 @@ endif;
 					</p>
 				</td>
 			</tr>
-			<tr>
+			<?php
+			// Reverse-direction options are only meaningful for bridges
+			// that include the pull direction. The wrapper carries a
+			// class so the JS toggles its visibility when the editor
+			// picks a direction radio. Initial visibility computed
+			// server-side from the persisted direction.
+			$initial_direction = $editing['direction'] ?? 'push';
+			$reverse_visible   = in_array( $initial_direction, array( 'pull', 'bidirectional' ), true );
+			?>
+			<tr class="jedb-reverse-direction-row"<?php echo $reverse_visible ? '' : ' style="display:none;"'; ?>>
 				<th><?php esc_html_e( 'Reverse-direction options', 'je-data-bridge-cc' ); ?></th>
 				<td>
 					<label>
@@ -221,7 +230,7 @@ endif;
 						<?php esc_html_e( 'Auto-create the source CCT row when an unlinked post saves', 'je-data-bridge-cc' ); ?>
 					</label>
 					<p class="description" style="margin-left:24px;margin-top:4px;color:#646970;">
-						<?php esc_html_e( 'Only relevant for Pull / Bidirectional bridges. When ON, saving a post that has no matching JE relation row AND no CCT row pointing at it via cct_single_post_id will create a fresh CCT row from scratch. Default OFF (per D-17) because the action creates data.', 'je-data-bridge-cc' ); ?>
+						<?php esc_html_e( 'When ON, saving a post that has no matching JE relation row AND no CCT row pointing at it via cct_single_post_id will create a fresh CCT row from scratch. Default OFF because the action creates data — turn it on only when you want post saves to spawn source CCT rows automatically.', 'je-data-bridge-cc' ); ?>
 					</p>
 				</td>
 			</tr>
@@ -230,10 +239,11 @@ endif;
 				<td>
 					<label>
 						<input type="checkbox" name="cct_single_redirect" value="1" <?php checked( ! empty( $config['cct_single_redirect'] ) ); ?> />
-						<?php esc_html_e( 'Redirect the source CCT single page to the linked post permalink (per BUILD-PLAN §4.6)', 'je-data-bridge-cc' ); ?>
+						<?php esc_html_e( 'Redirect the source CCT single page to the linked post permalink', 'je-data-bridge-cc' ); ?>
 					</label>
 					<p class="description" style="margin-left:24px;margin-top:4px;color:#646970;">
-						<?php esc_html_e( 'Phase 4 Day 3 implements the runtime shim. When ON and direction includes "push", visiting the source CCT row\'s "Has Single Page" URL 301s to the linked post permalink. Admins with manage_options can pass ?jedb_no_redirect=1 to bypass for debugging. Default OFF (the CCT may want to remain frontend-visible for some bridges).', 'je-data-bridge-cc' ); ?>
+						<strong><?php esc_html_e( 'Not yet active —', 'je-data-bridge-cc' ); ?></strong>
+						<?php esc_html_e( 'the runtime redirect shim ships in a future release. The setting persists now so existing bridges are ready when the shim lands. Intended behavior: when ON and direction includes "push", visiting the source CCT row\'s "Has Single Page" URL 301s to the linked post permalink. Admins with manage_options will be able to pass ?jedb_no_redirect=1 to bypass for debugging. Default OFF — the CCT may want to remain frontend-visible for some bridges.', 'je-data-bridge-cc' ); ?>
 					</p>
 				</td>
 			</tr>
@@ -291,7 +301,7 @@ endif;
 					<button type="button" class="button button-small" id="jedb_flatten_validate_condition"><?php esc_html_e( 'Validate', 'je-data-bridge-cc' ); ?></button>
 					<span id="jedb_flatten_condition_status" class="jedb-pill" style="display:none;"></span>
 					<p class="description">
-						<?php esc_html_e( 'v1 DSL — see BUILD-PLAN §3.5. Empty = always apply. Operators: == != > < >= <= contains not_contains starts_with ends_with in not_in. Combine with AND OR NOT. Reference fields with {source.field} / {target.field}.', 'je-data-bridge-cc' ); ?>
+						<?php esc_html_e( 'Empty = always apply. Operators: == != > < >= <= contains not_contains starts_with ends_with in not_in. Combine with AND OR NOT. Reference fields with {source.field} / {target.field}.', 'je-data-bridge-cc' ); ?>
 					</p>
 				</td>
 			</tr>
@@ -305,24 +315,24 @@ endif;
 		</table>
 
 		<?php
-		// Phase 4 alpha.3 (D-27 / §4.5): Meta box settings — controls how
-		// the Phase 4 Day 2 Bridge meta box presents this bridge's
-		// surfaced fields on the Woo product / variation edit screen.
-		// Per-mapping `surface_on_target` flags select WHICH fields render
-		// (down in the mappings table); this section controls HOW the
-		// meta box is presented as a whole. Visible for any target;
-		// the meta box itself is Woo-specific in Phase 4.
-		$meta_box_cfg = isset( $config['meta_box'] ) && is_array( $config['meta_box'] ) ? $config['meta_box'] : JEDB_Flatten_Config_Manager::default_meta_box();
+		// Meta box settings — control how this bridge's surfaced fields
+		// are presented on the linked product / variation edit screen.
+		// Per-mapping `surface_on_target` flags below select WHICH fields
+		// render; this section controls HOW the meta box is presented
+		// as a whole. Currently the meta box renderer is Woo-scoped
+		// (product + product_variation post types); the underlying
+		// engine itself is post-type-agnostic.
+		$meta_box_cfg  = isset( $config['meta_box'] ) && is_array( $config['meta_box'] ) ? $config['meta_box'] : JEDB_Flatten_Config_Manager::default_meta_box();
 		$mb_groups_csv = is_array( $meta_box_cfg['groups'] ?? null ) ? implode( ', ', $meta_box_cfg['groups'] ) : '';
 		?>
 		<details class="jedb-flatten-meta-box-section" id="jedb_flatten_meta_box_section" open>
 			<summary>
-				<h3 style="display:inline-block;margin:0;"><?php esc_html_e( 'Meta box settings (Phase 4 / Day 2)', 'je-data-bridge-cc' ); ?></h3>
-				<span class="description" style="margin-left:8px;"><?php esc_html_e( '— controls the Bridge meta box on the Woo product edit screen', 'je-data-bridge-cc' ); ?></span>
+				<h3 style="display:inline-block;margin:0;"><?php esc_html_e( 'Meta box settings', 'je-data-bridge-cc' ); ?></h3>
+				<span class="description" style="margin-left:8px;"><?php esc_html_e( '— controls the Bridge meta box on the linked product edit screen', 'je-data-bridge-cc' ); ?></span>
 			</summary>
 
 			<p class="description" style="max-width:760px;">
-				<?php esc_html_e( 'Phase 4 Day 2 builds a Bridge meta box on the Woo product / variation edit screen. It reads this flatten config directly (per D-27) and renders editable inputs for any mapping below where "Show on target meta box" is checked AND the target adapter does not natively render that field. WC products are notoriously hard to extend with custom fields; the meta box fills that gap with two-way-syncing inputs for CCT-managed fields.', 'je-data-bridge-cc' ); ?>
+				<?php esc_html_e( 'Each enabled bridge gets its own native WP meta box on the linked product / variation edit screen, named with the title below (falling back to this bridge\'s Label). The meta box shows read-only previews of any mapping flagged for surfacing in the table below, plus a "Save & edit" button that opens JE\'s CCT edit page in a focused modal. When the editor saves there, the CCT row updates, the existing sync engine pushes the new values to the product, and the meta box previews refresh on the next page load.', 'je-data-bridge-cc' ); ?>
 			</p>
 
 			<table class="form-table">
@@ -354,7 +364,7 @@ endif;
 					<th><label for="jedb_flatten_meta_box_groups"><?php esc_html_e( 'Group order (optional)', 'je-data-bridge-cc' ); ?></label></th>
 					<td>
 						<input id="jedb_flatten_meta_box_groups" name="meta_box_groups" type="text" class="regular-text" value="<?php echo esc_attr( $mb_groups_csv ); ?>" placeholder="<?php esc_attr_e( 'Identity, Pricing, Variations', 'je-data-bridge-cc' ); ?>" />
-						<p class="description"><?php esc_html_e( 'Comma-separated list of group labels controlling display order on the meta box. Groups are freeform per-mapping (D-26) — type any label that matches the per-mapping "Group" column below. Groups not listed here render after listed ones in alphabetical order.', 'je-data-bridge-cc' ); ?></p>
+						<p class="description"><?php esc_html_e( 'Comma-separated list of group labels controlling display order on the meta box. Groups are freeform per-mapping — type any label that matches the per-mapping "Group" column below. Groups not listed here render after listed ones in alphabetical order.', 'je-data-bridge-cc' ); ?></p>
 					</td>
 				</tr>
 				<tr>
@@ -368,7 +378,7 @@ endif;
 
 			<p class="description" style="max-width:760px;color:#996800;">
 				<strong><?php esc_html_e( 'Surfacing fields:', 'je-data-bridge-cc' ); ?></strong>
-				<?php esc_html_e( 'In the field mappings table below, tick the "Target" checkbox in the "Meta box" column to surface a mapping on the product edit screen, and optionally type a freeform "Group" label to organize the meta box visually. Phase 4 Day 2 builds the actual meta box that consumes these flags.', 'je-data-bridge-cc' ); ?>
+				<?php esc_html_e( 'In the field mappings table below, tick the "Target" checkbox in the "Meta box" column to surface a mapping on the product edit screen as a read-only preview. Optionally type a freeform "Group" label to cluster related surfaced fields. The "Group order" field above controls the display order of groups.', 'je-data-bridge-cc' ); ?>
 			</p>
 		</details>
 
@@ -385,7 +395,7 @@ endif;
 				</ul>
 			<?php endif; ?>
 			<p class="description" style="max-width:760px;color:#646970;">
-				<?php esc_html_e( 'Phase 4 Day 4 will add Field Presets — portable curated lists of mandatory fields per target adapter that overlay onto this panel and ship "Apply" + "Scaffold missing" buttons (per D-26 / BUILD-PLAN §4.12).', 'je-data-bridge-cc' ); ?>
+				<?php esc_html_e( 'A future Field Presets feature will overlay curated lists of mandatory fields per target adapter onto this panel and add "Apply" / "Scaffold missing" actions, so common configurations (e.g. "WooCommerce storefront-visible product") can be applied with one click.', 'je-data-bridge-cc' ); ?>
 			</p>
 		</div>
 
@@ -408,14 +418,7 @@ endif;
 			</summary>
 
 			<p class="description" style="max-width:760px;">
-				<?php
-				printf(
-					/* translators: %1$s = D-20 label, %2$s = D-21 label */
-					esc_html__( 'Per BUILD-PLAN §4.11 (%1$s, %2$s): each rule below applies a set of terms in one taxonomy on every successful push. Pull never modifies taxonomies — editors can hand-tag products with extra terms and the bridge won\'t strip them. Multiple rules per bridge are first-class — use one rule per taxonomy.', 'je-data-bridge-cc' ),
-					'D-20',
-					'D-21'
-				);
-				?>
+				<?php esc_html_e( 'Each rule below applies a set of terms in one taxonomy on every successful push. Pull never modifies taxonomies — editors can hand-tag the target with extra terms and the bridge won\'t strip them. Multiple rules per bridge are first-class — use one rule per taxonomy. Works for any post-type target (products, CPTs, etc.) with any associated taxonomy.', 'je-data-bridge-cc' ); ?>
 			</p>
 
 			<table class="widefat jedb-flatten-taxonomies" id="jedb_flatten_taxonomies">
@@ -443,15 +446,15 @@ endif;
 			</table>
 
 			<p class="description" style="max-width:760px;">
-				<strong><?php esc_html_e( 'Snippet support (Phase 5b):', 'je-data-bridge-cc' ); ?></strong>
-				<?php esc_html_e( 'Each rule reserves a "snippet" slot for dynamic term computation (e.g., compute categories from CCT field values). Disabled until the Snippet runtime ships in Phase 5b. Rules with a snippet set today log skipped_invalid in sync_log.', 'je-data-bridge-cc' ); ?>
+				<strong><?php esc_html_e( 'Snippet support:', 'je-data-bridge-cc' ); ?></strong>
+				<?php esc_html_e( 'Each rule reserves a "snippet" slot for dynamic term computation (e.g., compute categories from CCT field values). The snippet runtime ships in a future release — rules with a snippet set today log skipped_invalid in sync_log.', 'je-data-bridge-cc' ); ?>
 			</p>
 		</details>
 
 		<h3><?php esc_html_e( 'Field mappings', 'je-data-bridge-cc' ); ?></h3>
 
 		<p class="description">
-			<?php esc_html_e( 'Each row pushes one source field through a transformer chain into one target field. Per-direction chains (push and pull) are stored independently per D-11.', 'je-data-bridge-cc' ); ?>
+			<?php esc_html_e( 'Each row pushes one source field through a transformer chain into one target field. Push and pull chains are stored independently — they don\'t have to be inverses.', 'je-data-bridge-cc' ); ?>
 		</p>
 
 		<table class="widefat jedb-flatten-mappings" id="jedb_flatten_mappings">
