@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.14
+Stable tag: 0.6.0-alpha.15
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.14) ==
+== Current Capability (v0.6.0-alpha.15) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -94,8 +94,11 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
-= Unreleased (alpha.15 planned) =
-* Phase 4b Phase B — chrome-strip the WC product edit iframe to Product Data + Submit meta boxes only. CSS injection + chrome-strip script + Done/Cancel top bar identical to the L-027 CCT-edit chrome strip pattern, just targeting `post.php?post_type=product`. Form-submit interceptor on WC's `form#post` to set the sessionStorage close-on-save flag. D3 auto-force variable product type on iframe load when the bridge has `cct_screen.wc_variations.auto_force_variable_type=true`.
+= Unreleased =
+* No items currently queued. Phase 4b is complete. Next focus per roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+= 0.6.0-alpha.15 =
+* Phase 4b Phase B shipped — chrome-strip the WC product edit iframe to Product Data + Submit meta boxes only. New JEDB_CCT_Screen_Variations_Panel::maybe_inject_wc_chrome_strip() symmetric mirror of JEDB_Woo_Product_Meta_Box::maybe_inject_cct_chrome_strip(). Hooked on admin_head for post.php where post_type=product. Two-tier structure: Tier 1 (always on product edit pages) is the iframe-aware close-on-save handler reading sessionStorage jedb_close_wc_modal_on_load flag (distinct from CCT-side jedb_close_modal_on_load to prevent cross-contamination); Tier 2 (only when ?jedb_chrome=stripped) hides admin bar / sidebar / footer / screen options / page title / #post-body-content / ALL .postbox except #woocommerce-product-data and #submitdiv, forces the surviving boxes open + visible, removes drag handles, reserves 56px for the .jedb-wc-frame-bar top bar with title text + Cancel + Done buttons, and intercepts form#post submit to set the close flag. D3 auto-force variable product type: when bridge has cct_screen.wc_variations.auto_force_variable_type=true, iframe URL includes &jedb_force_variable=1 which the chrome-strip script reads via PHP server-side gate and auto-triggers jQuery('#product-type').val('variable').trigger('change') on DOMContentLoaded. D4 explicit non-action: no code that auto-clicks the Variations sub-tab inside Product Data (editor may need to configure attributes first). assets/js/cct-screen-variations-panel.js postMessage listener renamed from jedb:cct-* to jedb:wc-* to match the new chrome-strip script. Phase 4b is now complete.
 
 = 0.6.0-alpha.14 =
 * Phase 4b reset shipped — alpha.13's declarative variations[] reconciler is RETIRED per L-032 in favor of an iframe-flip architecture (the L-027 symmetric mirror). Removed: JEDB_Variation_Reconciler class (~480 lines), the variations[] schema block + default_variation() factory + merge_with_defaults() handling, the Flatten admin tab Variations section, the variation row builder in flatten-admin.js, the meta box Advanced Details "Variations managed by this bridge" subsection + its data plumbing, the variation status pill CSS. Retained as deprecated defensive surface (zero production callers): Target_Woo_Variation::find_managed_variation() + create_for_bridge() + META_VARIATION_* constants — docblocks updated with explicit @deprecated notes pointing to BUILD-PLAN §4.7 + L-032. Added: cct_screen.wc_variations config block (`enabled` / `title` / `auto_force_variable_type`), new "Enable WooCommerce Variations" section in the Flatten admin tab (D6 hidden when target_target isn't posts::product), new JEDB_CCT_Screen_Variations_Panel class that injects a panel beneath the JE save button on CCT edit pages with an "Open variations editor →" button, new cct-screen-variations-panel.js with full modal mechanics mirroring the L-027/L-029 pattern (D1/R3 hide-relations-block when linked, D5 silent hide in iframe context, postMessage protocol, sessionStorage close-on-save flag wired for forward-compat with Phase B), new CSS. Phase A renders the iframe without chrome stripping — full WC admin chrome inside the modal but Done/Cancel top bar overlays. Phase B (alpha.15) will scope the iframe to Product Data + Submit only. Sync log context_json no longer carries a `variations` block. No schema migration — existing alpha.13 bridges read cleanly through merge_with_defaults() with the new cct_screen.wc_variations block defaulting to disabled.
@@ -174,6 +177,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.15 =
+Phase 4b complete — chrome-strip the WC product edit iframe to Product Data + Submit meta boxes only. Done/Cancel top bar overlays. Form-submit interceptor + sessionStorage close flag auto-closes the modal after WC's post-save redirect. D3 auto-force variable product type on iframe load when bridge has auto_force_variable_type=true. Mirrors the L-027/L-029 chrome-strip pattern from the CCT side, just targeting WC product edit pages.
 
 = 0.6.0-alpha.14 =
 Phase 4b reset — alpha.13's declarative variations[] reconciler is retired per L-032. Replaced with a per-bridge "Enable WooCommerce Variations" panel on the JE CCT edit screen that launches WC's native product edit page in a modal iframe (Phase A — chrome strip coming in alpha.15). Editors manage variations using WC's full native UI; no declarative schema. Existing alpha.13 bridges read cleanly via merge_with_defaults. NO engine behavior change for non-variation bridges.

@@ -4,7 +4,48 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
-**Phase 4b Phase B (alpha.15) — chrome-strip the WC product edit iframe.** Pending implementation. Phase A (alpha.14) shipped the panel + iframe without scoping the iframe content. Phase B adds the CSS that hides everything except `#woocommerce-product-data` + `#submitdiv` when `?jedb_chrome=stripped` is on the iframe URL, plus the chrome-strip script + Done/Cancel top bar identical to the L-027 CCT-edit chrome strip. D3 implementation: auto-trigger `jQuery('#product-type').val('variable').trigger('change')` on DOMContentLoaded when `cct_screen.wc_variations.auto_force_variable_type=true` on the bridge.
+No items currently queued. Phase 4b is complete — both Phase A (alpha.14) and Phase B (alpha.15) have shipped. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+## [0.6.0-alpha.15] — 2026-05-17
+
+**Phase 4b Phase B shipped — chrome-strip the WC product edit iframe to Product Data + Submit only; auto-close on save; D3 auto-force variable product type. Phase 4b is now complete.**
+
+This release lands the visual + behavioral half of the iframe-flip pattern that Phase A scaffolded. The iframe modal launched from the CCT-edit-screen variations panel now renders only the meta boxes editors actually need (`#woocommerce-product-data` for variations management and `#submitdiv` for save controls), with everything else from WP/WC's product edit chrome hidden. A dark top bar with Done + Cancel buttons overlays. The form-submit interceptor + sessionStorage close flag close the modal automatically after WC's post-save redirect — same L-027/L-029 mechanism used in reverse for the CCT-edit iframe modal, now mirrored for the WC-product-edit iframe modal.
+
+### Added (Phase B chrome strip)
+
+- **`JEDB_CCT_Screen_Variations_Panel::maybe_inject_wc_chrome_strip()`** hooked on `admin_head` for `post.php?post=*` where `post_type=product`. Symmetric mirror of `JEDB_Woo_Product_Meta_Box::maybe_inject_cct_chrome_strip()` (alpha.6 / L-027). Same two-tier structure:
+  - **Tier 1 (always on product edit pages)**: iframe-aware close-on-save handler. Reads sessionStorage `jedb_close_wc_modal_on_load` flag (deliberately distinct from the CCT-side `jedb_close_modal_on_load` key to prevent cross-contamination if both modal subsystems are ever used in sequence). Hides the page immediately on flag-hit to avoid flash of WP chrome, then on DOMContentLoaded either postMessages parent `jedb:wc-modal-close` (clean save → modal closes + CCT page reloads) or postMessages parent `jedb:wc-save-error` and un-hides (validation failure → editor sees error, modal stays open).
+  - **Tier 2 (only when `?jedb_chrome=stripped`)**: the visual chrome strip — hides `#wpadminbar` / `#adminmenu*` / `#wpfooter` / `#screen-meta*` / `.wrap > h1.wp-heading-inline` / `.wrap > .page-title-action` / `.wrap > .wp-header-end` / `#post-body-content` (title + permalink + editor) + ALL `.postbox` except `#woocommerce-product-data` and `#submitdiv`. Forces the surviving boxes open + visible even if user_meta had them collapsed. Removes drag handles on surviving boxes so editors can't fold them down to nothing. Reserves 56px at the top for the fixed Done bar. Adds the `.jedb-wc-frame-bar` dark top bar with title text + Cancel + Done buttons (mirrors `.jedb-cct-frame-bar` visual design). Adds the WC `form#post` submit interceptor + Done button click handler that prefer-clicks WC's `#publish` / `#save-post` button so all WC submit handlers fire (variation save, attribute serialization, downloadable file processing, etc.) before form submission.
+- **D3 auto-force variable product type**: when the bridge has `cct_screen.wc_variations.auto_force_variable_type=true`, the iframe URL includes `&jedb_force_variable=1`. The chrome-strip script reads the URL param via PHP server-side gate and auto-triggers `jQuery('#product-type').val('variable').trigger('change')` on DOMContentLoaded. Skipped silently if jQuery isn't loaded or the product type is already `variable`. Off by default; admin opts in per bridge in the Flatten admin tab.
+- **D4 explicit non-action**: NOT auto-jumping to the Variations sub-tab inside `#woocommerce-product-data`. Editors may need to configure attributes first (General → Attributes tab) before they can add variations, so we land on whatever WC's default Product Data tab is. Documented in the method docblock so future maintainers understand the deliberate choice.
+
+### Changed (Phase A forward-compat → Phase B production)
+
+- **`assets/js/cct-screen-variations-panel.js`** postMessage listener renamed from `jedb:cct-*` to `jedb:wc-*`. The Phase A listener was forward-wired for these messages; Phase B's chrome-strip script now emits them. Renaming clarifies that these messages flow from the WC iframe to the CCT page (the opposite direction from the existing `jedb:cct-*` traffic that flows from the CCT iframe to the WC page per L-027).
+- **`includes/admin/class-cct-screen-variations-panel.php` `hooks()`** now registers `add_action( 'admin_head', 'maybe_inject_wc_chrome_strip' )` in addition to the existing `admin_enqueue_scripts` hook.
+- **`build_panels_for()`** appends `&jedb_force_variable=1` to the iframe URL when the bridge has `auto_force_variable_type=true`. The chrome-strip script reads this param.
+
+### Phase 4b completion summary
+
+With Phase B shipped, Phase 4b is complete:
+- Phase A (alpha.14) shipped the iframe-flip panel + modal + form-poll injection + D1/R3/D5/D6 plumbing.
+- Phase B (alpha.15) shipped the chrome strip + Done/Cancel top bar + form-submit interceptor + auto-close on save + D3 auto-force variable product type + D4 explicit non-action.
+
+The entire alpha.13 declarative variations[] reconciler has been retired, with WC variation management fully delegated to WC's native UI accessed via a focused iframe modal from the CCT edit screen. Editors get all WC variation features (per-variation images, stock, shipping class, menu_order, attributes, downloads) for free — zero schema bloat in our plugin, zero per-variation behavior to maintain.
+
+### Verification
+
+The Phase A 8-step recipe still applies for the underlying behavior. Phase B adds these checks on top:
+
+1. **Chrome strip applies**: open a Mosaic CCT row with the new panel enabled; click "Open variations editor →". Inside the modal iframe, you should see ONLY the dark Done/Cancel bar at the top and the Product Data meta box + Update meta box. No admin bar, no left sidebar, no page title, no permalink editor, no other meta boxes (SEO plugin, etc.).
+2. **D3 auto-force**: tick "Auto-force variable type" in the Flatten admin tab on the bridge. Save. Open a Mosaic CCT row whose linked product is a Simple product (not yet variable). Click "Open variations editor →". On iframe load, the Product Data dropdown should auto-flip to "Variable product" and the WC tabs should re-render with the Variations sub-tab visible.
+3. **Save & close round-trip**: inside the iframe, add a variation using WC's UI. Click WC's blue "Update" button (or our top-bar Done button — both should do the same thing). The "Saving variations…" overlay appears on the parent CCT page (Phase A's postMessage listener finally has a sender). After WC's redirect, the iframe page reloads, Tier 1 detects the sessionStorage flag, postMessages parent, modal auto-closes, CCT edit page reloads. Editor sees the variations editor close cleanly without manual intervention.
+4. **Cancel discards**: open the modal, make a change (e.g. add a variation), click Cancel. Modal closes WITHOUT WC saving. Open it again — your changes should be gone (because they never POSTed). The CCT page does NOT reload (no parent-side reload on cancel).
+5. **Validation error keeps modal open**: inside the iframe, set an invalid SKU (e.g. a duplicate). Click Update. The iframe reloads to the same page WITH a `.notice-error`. Tier 1 detects the error, un-hides the page (so editor can see what failed), postMessages `jedb:wc-save-error` → parent hides the saving overlay. Modal stays open so editor can fix and retry.
+6. **Direct (non-iframe) visits unaffected**: navigate directly to a product edit page outside the modal. The chrome strip should NOT apply (you should see the full normal WC product edit UI with admin bar, sidebar, everything). Tier 1's `window.top === window.self` guard prevents close-on-save misfires.
+7. **D5 nested-iframe prevention still works**: from a WC product edit page, open the Bridge meta box's modal (the L-027 CCT-edit modal). Inside that modal, the CCT edit page renders in an iframe. The variations panel button on the CCT edit page should remain hidden (D5).
+8. **Flag isolation**: confirm the two modal subsystems use distinct sessionStorage keys (`jedb_close_modal_on_load` for CCT-side, `jedb_close_wc_modal_on_load` for WC-side) by inspecting browser sessionStorage during use of each. They should never appear together.
 
 ## [0.6.0-alpha.14] — 2026-05-17
 

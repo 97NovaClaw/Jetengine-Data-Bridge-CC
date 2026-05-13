@@ -233,34 +233,26 @@
 	}
 
 	function bindMessageListener() {
-		// postMessage protocol from the iframe — same message types
-		// the L-027 modal uses. The chrome-strip script that emits
-		// these from inside the WC product edit page lands in alpha.15.
-		// In Phase A this listener exists for forward-compat AND in
-		// case the editor manually closes via the iframe's own
-		// "Update" button which causes a page reload inside the iframe
-		// — sessionStorage-flag detection on that reload will trigger
-		// a postMessage out once the chrome-strip script ships.
+		// postMessage protocol from the iframe. Emitted by the WC
+		// product edit page's chrome-strip script (Phase B alpha.15)
+		// rendered server-side by JEDB_CCT_Screen_Variations_Panel::
+		// maybe_inject_wc_chrome_strip(). Message names use the `wc-`
+		// prefix to distinguish from the symmetric `jedb:cct-*` traffic
+		// flowing in the opposite direction (CCT edit page inside a
+		// modal launched from a WC product page) — see L-027/L-029.
 		window.addEventListener( 'message', function ( event ) {
 			if ( event.origin !== window.location.origin ) { return; }
 			var data = event.data || {};
 			if ( ! data || ! data.type ) { return; }
 
 			switch ( data.type ) {
-				case 'jedb:cct-save-starting':
-					// Note: the existing L-027 chrome-strip script uses
-					// this same message type for CCT saves inside its
-					// modal. When the WC chrome-strip ships in alpha.15
-					// it'll emit the same type for product saves. Since
-					// this listener is bound on the CCT edit page (not
-					// the WC product edit page), only messages from our
-					// own iframe reach it.
+				case 'jedb:wc-save-starting':
 					showSavingOverlay();
 					break;
-				case 'jedb:cct-save-error':
+				case 'jedb:wc-save-error':
 					hideSavingOverlay();
 					break;
-				case 'jedb:cct-modal-close':
+				case 'jedb:wc-modal-close':
 					closeModal( !! data.reload );
 					break;
 			}

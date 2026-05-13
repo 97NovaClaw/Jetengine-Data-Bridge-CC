@@ -46,6 +46,15 @@ class JEDB_CCT_Screen_Variations_Panel {
 
 	private function hooks() {
 		add_action( 'admin_enqueue_scripts', array( $this, 'maybe_enqueue' ), 25 );
+
+		// Phase B (alpha.15): chrome-strip injection on WC product edit
+		// pages. Symmetric mirror of JEDB_Woo_Product_Meta_Box::
+		// maybe_inject_cct_chrome_strip() — same two-tier structure,
+		// same fallback safety, just targeting `post.php?post_type=
+		// product` instead of `?page=jet-cct-*`. Hook on admin_head
+		// runs early enough to set visibility:hidden BEFORE any flash
+		// of WP chrome paints.
+		add_action( 'admin_head', array( $this, 'maybe_inject_wc_chrome_strip' ) );
 	}
 
 	/* -----------------------------------------------------------------------
@@ -241,15 +250,21 @@ class JEDB_CCT_Screen_Variations_Panel {
 
 			$edit_url = '';
 			if ( $target_post_id > 0 ) {
-				$edit_url = add_query_arg(
-					array(
-						'post'        => $target_post_id,
-						'action'      => 'edit',
-						'jedb_chrome' => 'stripped',     // Tier 1 close-on-save handler shipped in L-027 already runs on this — Phase B will add the chrome strip CSS + Done bar
-						'jedb_return' => rawurlencode( $return_url ),
-					),
-					admin_url( 'post.php' )
+				$args = array(
+					'post'        => $target_post_id,
+					'action'      => 'edit',
+					'jedb_chrome' => 'stripped',
+					'jedb_return' => rawurlencode( $return_url ),
 				);
+				// D3 (alpha.15): the chrome-strip script reads this
+				// param and auto-flips #product-type to "variable" on
+				// DOMContentLoaded so editors don't need to manually
+				// change the product type dropdown. Admin opt-in per
+				// bridge — off by default.
+				if ( ! empty( $wc_var['auto_force_variable_type'] ) ) {
+					$args['jedb_force_variable'] = 1;
+				}
+				$edit_url = add_query_arg( $args, admin_url( 'post.php' ) );
 			}
 
 			$title = isset( $wc_var['title'] ) ? trim( (string) $wc_var['title'] ) : '';
@@ -281,5 +296,353 @@ class JEDB_CCT_Screen_Variations_Panel {
 			),
 			admin_url( 'admin.php' )
 		);
+	}
+
+	/* -----------------------------------------------------------------------
+	 * Chrome-strip for the WC product edit page (Phase B / alpha.15)
+	 * --------------------------------------------------------------------
+	 *
+	 * Symmetric mirror of JEDB_Woo_Product_Meta_Box::
+	 * maybe_inject_cct_chrome_strip() (alpha.6 / L-027). Same two-tier
+	 * structure, same fallback safety, same sessionStorage-bridged
+	 * close-on-save flow that L-029 worked out for JE's redirect quirks.
+	 *
+	 * Tier 1 (always on `post.php?post_type=product`): iframe-aware
+	 *   close-on-save handler. Reads sessionStorage `jedb_close_wc_
+	 *   modal_on_load` flag (distinct from the CCT-side key to prevent
+	 *   cross-contamination). Hides the page immediately on flag-hit
+	 *   to avoid a flash of WP chrome, then on DOMContentLoaded either
+	 *   postMessages the parent to close (clean save) or postMessages
+	 *   an error + un-hides (validation failure).
+	 *
+	 * Tier 2 (only when `?jedb_chrome=stripped`): the actual visual
+	 *   chrome strip — hides admin bar / sidebar / title / non-WC
+	 *   meta boxes, leaving only #woocommerce-product-data + #submitdiv
+	 *   visible. Adds a fixed top bar with Done + Cancel buttons.
+	 *   Intercepts `form#post` submit to set the close flag so Tier 1
+	 *   closes the modal after WC's post-save redirect.
+	 *
+	 * D3 implementation (alpha.15): when the bridge has
+	 *   `cct_screen.wc_variations.auto_force_variable_type=true`, the
+	 *   iframe URL includes `&jedb_force_variable=1` and the chrome-
+	 *   strip script auto-triggers
+	 *   `jQuery('#product-type').val('variable').trigger('change')`
+	 *   on DOMContentLoaded.
+	 *
+	 * D4 (explicit non-action): we do NOT auto-jump to the Variations
+	 *   sub-tab inside #woocommerce-product-data. Editors may need to
+	 *   configure attributes first (General → Attributes tab), so we
+	 *   land on whatever WC's default tab is.
+	 */
+	public function maybe_inject_wc_chrome_strip() {
+
+		global $pagenow;
+
+		if ( ! is_admin() ) {
+			return;
+		}
+
+		// Fast gate: only fire on post.php pages where the post type
+		// is product. The action vs query-string approach mirrors WP
+		// core's own page detection.
+		// phpcs:disable WordPress.Security.NonceVerification.Recommended
+		if ( 'post.php' !== $pagenow ) {
+			return;
+		}
+
+		$post_id = isset( $_GET['post'] ) ? absint( $_GET['post'] ) : 0;
+		if ( $post_id <= 0 ) {
+			return;
+		}
+		if ( 'product' !== get_post_type( $post_id ) ) {
+			return;
+		}
+
+		$chrome     = isset( $_GET['jedb_chrome'] )         ? sanitize_key( wp_unslash( $_GET['jedb_chrome'] ) )                            : '';
+		$return_raw = isset( $_GET['jedb_return'] )         ? esc_url_raw( wp_unslash( $_GET['jedb_return'] ) )                             : '';
+		$force_var  = isset( $_GET['jedb_force_variable'] ) ? '1' === (string) $_GET['jedb_force_variable']                                 : false;
+		// phpcs:enable WordPress.Security.NonceVerification.Recommended
+
+		if ( ! current_user_can( JEDB_CAPABILITY ) ) {
+			return;
+		}
+
+		/* ------------------------------------------------------------
+		 * TIER 1 — Always injected on product edit pages.
+		 *
+		 * Iframe-aware close-on-save handler. Mirrors the CCT-side
+		 * Tier 1 verbatim (only the flag key + message names differ).
+		 * Listens for sessionStorage `jedb_close_wc_modal_on_load` and
+		 * postMessages the parent to close the modal on the next page
+		 * load if set. The flag is set by Tier 2's form-submit
+		 * interceptor — the post-save redirect strips our
+		 * `jedb_chrome=stripped` query param (just like JE's does for
+		 * the CCT side per L-029), so Tier 2 doesn't run on the post-
+		 * save page, but we still need to close the modal.
+		 *
+		 * Validation-error guard: WC's product save can fail with
+		 * `.notice-error` (e.g., invalid SKU). On error, un-hide the
+		 * page so the editor can fix the issue, and postMessage the
+		 * parent to hide its "Saving…" overlay. The modal stays open.
+		 * ----------------------------------------------------------- */
+		?>
+		<script id="jedb-wc-iframe-close-handler">
+			(function () {
+				if ( window.top === window.self ) {
+					return;
+				}
+
+				var FLAG_KEY = 'jedb_close_wc_modal_on_load';
+
+				var shouldClose = false;
+				try {
+					shouldClose = sessionStorage.getItem( FLAG_KEY ) === '1';
+				} catch ( e ) {}
+
+				if ( ! shouldClose ) {
+					return;
+				}
+
+				document.documentElement.style.visibility = 'hidden';
+
+				document.addEventListener( 'DOMContentLoaded', function () {
+					try { sessionStorage.removeItem( FLAG_KEY ); } catch ( e ) {}
+
+					var hasError = !! document.querySelector(
+						'.notice-error, .notice.notice-error, #message.error'
+					);
+
+					if ( hasError ) {
+						document.documentElement.style.visibility = '';
+
+						try {
+							window.parent.postMessage(
+								{ type: 'jedb:wc-save-error' },
+								window.location.origin
+							);
+						} catch ( e ) {}
+						return;
+					}
+
+					try {
+						window.parent.postMessage(
+							{ type: 'jedb:wc-modal-close', reload: true },
+							window.location.origin
+						);
+					} catch ( err ) {
+						document.documentElement.style.visibility = '';
+					}
+				} );
+			})();
+		</script>
+		<?php
+
+		/* ------------------------------------------------------------
+		 * TIER 2 — Only when explicitly opened from the modal launcher.
+		 *
+		 * Chrome strip CSS (hides everything except #woocommerce-
+		 * product-data + #submitdiv) + Done/Cancel top bar + WC form
+		 * submit interceptor (sets the sessionStorage close flag so
+		 * Tier 1 closes the modal on the post-save reload).
+		 * ----------------------------------------------------------- */
+		if ( 'stripped' !== $chrome ) {
+			return;
+		}
+		?>
+		<style id="jedb-wc-chrome-strip">
+			/* ---- Hide WP admin chrome ---- */
+			html.wp-toolbar { padding-top: 0 !important; }
+			#wpadminbar, #adminmenuwrap, #adminmenuback, #adminmenu, #wpfooter, #screen-meta, #screen-meta-links { display: none !important; }
+			#wpcontent, #wpbody-content { margin-left: 0 !important; padding-top: 0 !important; }
+			#wpbody { padding-top: 0 !important; }
+			body.wp-admin { background: #f6f7f7; }
+
+			/* ---- Hide page chrome (title bar, "Add New" button, header bars) ---- */
+			.wrap > h1.wp-heading-inline,
+			.wrap > .page-title-action,
+			.wrap > .wp-header-end,
+			.wrap > hr.wp-header-end { display: none !important; }
+
+			/* ---- Hide title editor + permalink + visual editor ---- */
+			#post-body-content { display: none !important; }
+
+			/* ---- Hide all postboxes EXCEPT WC Product Data + Submit ---- */
+			.postbox:not(#woocommerce-product-data):not(#submitdiv) { display: none !important; }
+			/* Hide drag handle on the surviving boxes (we don't want
+			   editors collapsing the only useful meta box). */
+			#woocommerce-product-data .handlediv,
+			#submitdiv .handlediv { display: none !important; }
+			/* Force the remaining boxes to be expanded even if WP's
+			   user_meta postbox state has them collapsed. */
+			#woocommerce-product-data,
+			#submitdiv { display: block !important; }
+			#woocommerce-product-data.closed > .inside,
+			#submitdiv.closed > .inside { display: block !important; }
+			#woocommerce-product-data > .inside,
+			#submitdiv > .inside { display: block !important; }
+
+			/* ---- Reserve room for the floating Done bar at the top ---- */
+			#wpbody-content > .wrap { padding-top: 56px !important; }
+
+			/* ---- Top bar styling (mirrors .jedb-cct-frame-bar visual design) ---- */
+			.jedb-wc-frame-bar {
+				position: fixed;
+				top: 0; left: 0; right: 0;
+				height: 48px;
+				background: #1d2327;
+				color: #fff;
+				display: flex;
+				align-items: center;
+				justify-content: space-between;
+				padding: 0 16px;
+				z-index: 99999;
+				box-shadow: 0 2px 6px rgba(0,0,0,0.15);
+				font-size: 13px;
+			}
+			.jedb-wc-frame-bar .jedb-wc-frame-title { font-weight: 600; }
+			.jedb-wc-frame-bar .jedb-wc-frame-actions { display: flex; gap: 8px; }
+			.jedb-wc-frame-bar button {
+				background: #2271b1;
+				color: #fff;
+				border: 1px solid transparent;
+				padding: 6px 14px;
+				border-radius: 3px;
+				cursor: pointer;
+				font-size: 13px;
+				font-weight: 500;
+			}
+			.jedb-wc-frame-bar button.jedb-wc-frame-cancel {
+				background: transparent;
+				border-color: rgba(255,255,255,0.3);
+			}
+			.jedb-wc-frame-bar button:hover { opacity: 0.9; }
+		</style>
+		<script id="jedb-wc-chrome-strip-js">
+			(function () {
+				if ( window.top === window.self ) {
+					return;
+				}
+
+				var FLAG_KEY      = 'jedb_close_wc_modal_on_load';
+				var FORCE_VARIABLE = <?php echo $force_var ? 'true' : 'false'; ?>;
+
+				function setCloseFlag() {
+					try { sessionStorage.setItem( FLAG_KEY, '1' ); } catch ( e ) {}
+				}
+
+				function notifyParent( msg ) {
+					try {
+						window.parent.postMessage( msg, window.location.origin );
+					} catch ( e ) {}
+				}
+
+				function postClose( reload ) {
+					try {
+						window.parent.postMessage(
+							{ type: 'jedb:wc-modal-close', reload: !! reload },
+							window.location.origin
+						);
+					} catch ( e ) {
+						<?php if ( '' !== $return_raw ) : ?>
+						window.parent.location = <?php echo wp_json_encode( $return_raw ); ?>;
+						<?php endif; ?>
+					}
+				}
+
+				document.addEventListener( 'DOMContentLoaded', function () {
+
+					/* ---- WC form submit interceptor ---- */
+					// WC's product edit uses the standard WP `form#post`
+					// which posts to post.php?action=editpost. We attach
+					// a submit listener that (a) sets the close flag so
+					// Tier 1 closes the modal on the post-save reload,
+					// and (b) tells the parent to show a "Saving…"
+					// overlay. The listener fires for both the Update
+					// button click AND for our Done button below (which
+					// clicks WC's Update button programmatically).
+					var wcForm = document.querySelector( 'form#post' );
+					if ( wcForm ) {
+						wcForm.addEventListener( 'submit', function () {
+							setCloseFlag();
+							notifyParent( { type: 'jedb:wc-save-starting' } );
+						} );
+					}
+
+					/* ---- D3: auto-flip product type to variable ---- */
+					// When the bridge has auto_force_variable_type=true,
+					// pre-select "Variable product" in the #product-type
+					// dropdown and trigger WC's change handlers so the
+					// Product Data tabs re-render with variation-aware
+					// state. Skipped silently if WC's jQuery handlers
+					// aren't loaded yet or if the type is already set.
+					if ( FORCE_VARIABLE ) {
+						try {
+							if ( typeof jQuery !== 'undefined' ) {
+								var $productType = jQuery( '#product-type' );
+								if ( $productType.length && 'variable' !== $productType.val() ) {
+									$productType.val( 'variable' ).trigger( 'change' );
+								}
+							}
+						} catch ( e ) {}
+					}
+
+					/* ---- Top bar with Done + Cancel buttons ---- */
+					var bar = document.createElement( 'div' );
+					bar.className = 'jedb-wc-frame-bar';
+
+					var title = document.createElement( 'span' );
+					title.className = 'jedb-wc-frame-title';
+					title.textContent = <?php echo wp_json_encode( __( 'Managing variations on the linked product — Done saves & closes; Cancel discards changes.', 'je-data-bridge-cc' ) ); ?>;
+
+					var actions = document.createElement( 'span' );
+					actions.className = 'jedb-wc-frame-actions';
+
+					// Done = click WC's Update button so all WC's
+					// internal submit handlers fire (variation save,
+					// attribute serialization, downloadable file
+					// processing, etc.). Fall back to form.submit() if
+					// the button isn't found.
+					var doneBtn = document.createElement( 'button' );
+					doneBtn.type = 'button';
+					doneBtn.textContent = <?php echo wp_json_encode( __( 'Done · Save & return to CCT', 'je-data-bridge-cc' ) ); ?>;
+					doneBtn.addEventListener( 'click', function () {
+						if ( ! wcForm ) {
+							postClose( false );
+							return;
+						}
+
+						setCloseFlag();
+						notifyParent( { type: 'jedb:wc-save-starting' } );
+
+						// Prefer clicking WC's Update button so all its
+						// submit handlers fire. WC's Publish meta box
+						// uses #publish (or #save-post for drafts);
+						// we'll grab whichever is present.
+						var submitBtn = wcForm.querySelector( '#publish, #save-post, input[type="submit"][name="save"], button[type="submit"]' );
+						if ( submitBtn ) {
+							submitBtn.click();
+						} else {
+							wcForm.submit();
+						}
+					} );
+
+					var cancelBtn = document.createElement( 'button' );
+					cancelBtn.type = 'button';
+					cancelBtn.className = 'jedb-wc-frame-cancel';
+					cancelBtn.textContent = <?php echo wp_json_encode( __( 'Cancel · Discard changes', 'je-data-bridge-cc' ) ); ?>;
+					cancelBtn.addEventListener( 'click', function () {
+						postClose( false );
+					} );
+
+					actions.appendChild( cancelBtn );
+					actions.appendChild( doneBtn );
+					bar.appendChild( title );
+					bar.appendChild( actions );
+
+					document.body.insertBefore( bar, document.body.firstChild );
+				} );
+			})();
+		</script>
+		<?php
 	}
 }
