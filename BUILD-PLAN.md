@@ -389,7 +389,7 @@ interface JEDB_Data_Target {
 |---|---|---|
 | `wc_product_meta_lookup` cache table | Used by Woo for fast product queries. Direct `update_post_meta()` does NOT update it. | Always go through `$product->save()`. Helper `jedb_hpos_safe_save( $product )` provided. |
 | HPOS for **orders** | Woo 8.x+ moves orders out of `wp_posts` into `wp_wc_orders`. | We don't write orders, only products. But `helpers/hpos.php` exposes `jedb_is_hpos_enabled()` for any future order-touching code (e.g., when JFB-WC patterns get pulled in). |
-| Product variations | Variations are their own posts (`product_variation`) hanging off a parent variable product. Bridging requires deciding whether the CCT row maps to the parent or to a specific variation. | **In scope.** Both `Target_Woo_Product` and a separate `Target_Woo_Variation` adapter are shipped. Bridge config picks one. See §4.7 for the full pattern (and how "Has Instructions PDF" becomes a variation). |
+| Product variations | Variations are their own posts (`product_variation`) hanging off a parent variable product. Bridging requires deciding whether the CCT row maps to the parent or to a specific variation. | **In scope, post-L-032 iframe-flip architecture.** The bridge config gains a `cct_screen.wc_variations` block that surfaces a "Manage variations" panel on the CCT edit screen. Clicking it opens WC's native product edit page in a chrome-stripped modal iframe; the editor uses WC's full variations UI inside the iframe. The plugin doesn't try to model variations declaratively. See §4.7 for the full pattern and L-032 for the architectural retrospective on why the alpha.13 declarative approach was retired. |
 | Product type changes (simple → variable, etc.) | Change of type can lose meta. | When the bridge config detects a product-type field in the mapping, the UI warns the editor and the flattener refuses PUSH unless `force=true`. |
 | Image / Gallery fields | Woo expects integer attachment IDs, JE galleries store comma-separated IDs. | Conversion happens in the target adapter, not in the flattener. Single source of truth. |
 | Categories / tags | Woo uses taxonomies (`product_cat`, `product_tag`). | Adapter accepts term IDs OR slugs OR names; resolves to IDs and uses `wp_set_object_terms()`. |
@@ -456,7 +456,7 @@ This is the same resolution logic the engine already uses to find the linked sou
 
 #### Variation scope (Phase 4b)
 
-When the product type is `variable`, the meta box adds a top-level radio: *"Bridge the parent product"* vs *"Bridge a specific variation"*. The latter shows a second dropdown picking which variation. The variation reconciliation engine (Phase 4b) consumes the flatten config's `variations[]` array to auto-create / update / soft-delete variations from CCT fields.
+**Historical note (alpha.13):** the bridge meta box never gained a Variation Scope radio because the alpha.13 declarative `variations[]` reconciler was retired in alpha.14 per L-032. Variations are now managed via WC's native UI launched from the CCT edit screen panel (`cct_screen.wc_variations` per §4.7). The meta box on the product side surfaces CCT data; it doesn't try to model variation routing.
 
 #### Stored product-side meta (minimal — link is NOT here)
 
@@ -602,63 +602,59 @@ add_action( 'template_redirect', function () {
 
 **Direction guard.** The shim only redirects for bridges where `direction` includes `push` (i.e., the CCT is canonical and the linked post is the rendered face). For pull-only bridges, the CCT is the display surface and the redirect would invert the intended flow.
 
-### 4.7 Variation bridging — the "Has Instructions PDF" pattern
+### 4.7 Variation bridging — iframe-flip to WC's native variations UI (post-L-032 architecture)
 
-> **Locked decision (L-015):** Variations represent **different purchase
-> options for ONE source record**, not different bridge types. Each
-> variation's data comes from the same CCT row as its parent product.
-> Bridge-type disambiguation across multiple source kinds is handled by
-> the conditional engine in §4.9 — typically using product category,
-> NOT variations.
+> **Locked decisions:**
+> - **L-015:** Variations represent **different purchase options for ONE source record**, not different bridge types. Each variation's data conceptually comes from the same CCT row as its parent product.
+> - **L-032:** WC variations are NOT managed declaratively from the bridge config. The bridge launches WC's native product edit page in a chrome-stripped modal iframe; WC owns variation creation, attribute selection, pricing, downloads, stock, images, and every other variation field. The CCT row signals editorial INTENT (e.g. "this product offers a PDF variation"); WC owns IMPLEMENTATION (which variations exist, what they cost, what files they include).
 
-Variations are first-class targets in v1. The use case that drove the decision: a Mosaic CCT row has a `has_instructions_pdf` boolean and an `instructions_price` field. We want that to surface as a **variation** on the parent Mosaic product, not a separate product, so the storefront shows a single product page with a "Just the build (in-person)" / "Build + Instructions PDF" radio. This is also the standard Woo UX for any "with extras" purchase decision — and it's *that one Mosaic*'s purchase options, not a routing mechanism for "is this a Mosaic or an Available Set?".
+> **History note:** alpha.13 shipped a declarative `variations[]` block + `JEDB_Variation_Reconciler` engine that auto-created / updated / soft-deleted variations from CCT state via a `show_when` mini-DSL. That model was retired in alpha.14 per L-032 — the configuration surface scaled poorly with variation complexity AND covered only a small subset of WC's per-variation feature set (no per-variation images, no stock management, no shipping class, no menu_order, etc.). The iframe-flip pattern delegates 100% of variation UI to WC and gets all those features for free, with no schema bloat. See L-032 for the full reasoning.
 
-**How it works end to end:**
+**How it works end to end (alpha.14 onward):**
 
-1. **Bridge Type definition** in `jedb_bridge_types` JSON includes a `variations` block:
+1. **Per-bridge config** in the flatten config's `cct_screen.wc_variations` block:
    ```json
-   {
-     "slug": "mosaic",
-     "label": "Mosaic",
-     "cct": "mosaics_data",
-     "product_type": "variable",
-     "variations": [
-       {
-         "slug": "build_only",
-         "label": "Build only (no instructions)",
-         "show_when": "true",
-         "price_field": null,
-         "downloads": []
-       },
-       {
-         "slug": "with_instructions",
-         "label": "Includes Instructions PDF",
-         "show_when": "{has_instructions_pdf} == true",
-         "price_field": "instructions_price",
-         "downloads": ["instructions_pdf_attachment"]
-       }
-     ]
+   "cct_screen": {
+     "wc_variations": {
+       "enabled":                  false,
+       "title":                    "WooCommerce Variations",
+       "auto_force_variable_type": false
+     }
    }
    ```
-   The `show_when` mini-DSL (parsed by a tiny expression evaluator, **not** `eval`) controls whether the variation should exist for a given CCT row.
+   - `enabled` → toggle for the panel on the CCT edit screen. Per-bridge. Hidden in the Flatten admin tab when `target_target !== 'posts::product'` (D6).
+   - `title` → heading shown on the CCT edit screen panel (e.g. "WooCommerce Variations", "Edit Product Options"). Editorial.
+   - `auto_force_variable_type` → when true, the chrome-strip JS inside the iframe auto-triggers `jQuery('#product-type').val('variable').trigger('change')` on load so editors don't have to manually flip the product type. Off by default (D3 — admin-opt-in per bridge).
 
-2. **`Target_Woo_Variation` adapter** writes through `WC_Product_Variation`'s typed setters (`->set_regular_price()`, `->set_downloads()`, etc.) and `->save()`. Same HPOS-safe rules as products.
+2. **`Target_Woo_Variation` adapter** keeps its read methods + the `find_managed_variation()` + `create_for_bridge()` helpers (which are now **deprecated as production-wired code paths** — kept as defensive surface for any future automation hook per L-032). Variations are otherwise read/written by WC's native UI in the iframe; our adapter is no longer the primary write path.
 
-3. **Variation reconciliation on PUSH** (when CCT row changes):
-   - For each variation defined in the bridge type:
-     - Evaluate `show_when` against current CCT field values.
-     - If true → ensure the variation exists; create if missing; PUSH mapped fields.
-     - If false → soft-delete (set `status = private`) so the variation hangs around for analytics but isn't purchasable. Hard-delete only on explicit "Reconcile" button.
-   - Variations the bridge type doesn't know about are **left alone** — third-party plugins or manual variations stay untouched.
+3. **CCT edit screen panel.** On every JE CCT edit page render (`?page=jet-cct-{slug}&cct_action=edit&item_id={id}`), the plugin walks all enabled bridges where `source_target = cct::{slug}` AND `cct_screen.wc_variations.enabled = true`. For each matching bridge:
+   - Resolve the linked WC product post ID via the same `JEDB_Flattener::resolve_target_id()` the engine uses.
+   - If a linked product exists → render a panel below the JE save button with the configured title, a short helper line ("After initial save you can add variations to this post."), and a button **"Open variations editor →"**.
+   - If no linked product exists (fresh CCT row, not yet saved) → button hidden / disabled until the next save creates the link.
+   - If the CCT page is currently inside an iframe (e.g. the L-027 modal flow when CCT was launched from a WC product page), the panel button is silently hidden (D5 — prevents nested-iframe chaos).
 
-4. **The "Variation Scope" radio in the meta box** (§4.5) is what tells the bridge whether you want to write *to* a specific variation manually or let the auto-reconciliation manage them. 99% of the time editors leave it on "Bridge the parent product" and let the variation engine do its job.
+4. **Modal iframe to WC product edit page.** Button click opens the same overlay modal pattern as L-027/L-029 (literal code reuse — `openModal()` / `closeModal()` / postMessage listener / sessionStorage close-on-save flag). The iframe `src` is the linked WC product's admin edit URL:
+   ```
+   wp-admin/post.php?post={target_id}&action=edit&jedb_chrome=stripped&jedb_return={cct_edit_url}
+   ```
+   - `jedb_chrome=stripped` → triggers the chrome-strip script + Done/Cancel top bar (phase B; phase A ships without the strip and the iframe shows full WC chrome).
+   - `jedb_return` → the CCT edit URL to navigate back to once the modal closes.
 
-5. **PULL direction** (Woo → CCT): edits to a managed variation's price/downloads back-propagate to the corresponding CCT field defined in the bridge type. Edits to *unmanaged* variations are ignored (no field to map them to).
+5. **Inside the iframe (Phase B).** The chrome-strip CSS hides everything except:
+   - The Product Data meta box (`#woocommerce-product-data`) — contains the Variations tab.
+   - The Submit meta box (`#submitdiv`) — gives editors WC's native Update button in addition to our Done button.
+   - Optionally (when `auto_force_variable_type=true`) triggers the product type dropdown to `variable` on load.
+   - Does NOT auto-jump to the Variations sub-tab — editor may need to set up attributes first; forcing the tab steals control (D4).
+   - Save flow: editor clicks WC's Update OR our Done · Save & return to CCT button → form submits via WC's normal POST → page reloads inside iframe → sessionStorage `jedb_close_modal_on_load` flag triggers postMessage to parent → parent closes modal + reloads CCT edit page.
 
-**Pitfalls specific to variations** (added to §9 risk register):
-- Stock-status drift between parent and variations.
-- Variation attribute taxonomy (`pa_*`) auto-creation — bridge types may need to declare attributes upfront.
-- Variations ordering — Woo respects a `menu_order`; we expose it as a per-variation field in the bridge type JSON.
+6. **PULL direction (variation edits back to CCT).** Not implemented in alpha.14. Under the iframe-flip model, variations are WC-canonical for everything except the editorial-intent toggle on the CCT (whatever field the editor uses to signal "this product should have variations"). If a CCT field needs to track variation state (e.g. `current_variation_price` for storefront filters), the editor maintains it manually OR a future Phase 5b custom snippet computes it on save. The plugin doesn't ship a generic pull mechanism for variation data.
+
+**Pitfalls under the new model:**
+- The iframe-flip moves the entire variation lifecycle into WC's UI. Editors who weren't familiar with WC's variations panel may need training — but that training generalizes to every WC site they ever touch, not just this plugin.
+- Nested-iframe protection (D5) means editors must close the L-027 CCT-edit modal before they can launch the variations editor. Acceptable trade-off — both modals nested would be confusing UX even if technically possible.
+- If the linked WC product is deleted / unlinked while the CCT row still has `enabled: true`, the button has nothing to launch. The panel renders with the button disabled and a descriptive message ("Link a WC product first via the Bridge meta box on a product edit screen.").
+- The previous alpha.13 pitfalls (stock-status drift, `pa_*` taxonomy auto-creation, variation `menu_order`) become NON-ISSUES because WC's native UI handles all of them with its own polished UX.
 
 ### 4.8 Custom Code Snippets — the user-defined transformer system
 
@@ -1307,7 +1303,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-17:** Phases 0, 1, 2, 2.5, 3, 3.5, 3.6, **all of Phase 4**, AND **Phase 4b** are complete and **end-to-end verified on Brick Builder HQ staging** through twenty releases (v0.1.0 through v0.6.0-alpha.13 on `main`). **Phase 4b just shipped (v0.6.0-alpha.13)** — variation reconciliation engine per §4.7 / L-015. New `JEDB_Variation_Reconciler` walks each bridge's `variations[]` array on push, evaluates each entry's `show_when` against the source CCT row, and creates / updates / soft-deletes the corresponding WC variation under the linked parent product. Woo-scoped (variations are a Woo concept) but composes cleanly with the rest of the post-type-agnostic engine. Tier 2 (PULL direction, attribute taxonomy auto-creation, menu_order) deferred. **Phase 4 Day 4 shipped earlier in alpha.12** — Field Presets admin tab + Mandatory coverage integration per §4.12. New `JEDB_Tab_Field_Presets` with full CRUD + JSON export/import. `JEDB_Field_Presets_Manager` extended with `upsert` / `delete` / `replace_all` / `merge_import` / `prepare_for_storage` / `compute_effective_required_fields`. Flatten admin tab's Mandatory coverage panel rebuilt with green/red badges, "X of Y covered" summary, Apply preset dropdown (snapshot model — writes into `required_overrides.add`), Scaffold missing mappings (stubs passthrough rows), provenance labels. Bridge meta box's Advanced Details gained the same coverage breakdown for editors who opt into the verbose surface (`meta_box.show_advanced=true`). All client-side mutations — no extra AJAX. **Phase 4 Day 3 shipped in alpha.11** — CCT-single → linked-post redirect shim per §4.6. New `JEDB_CCT_Single_Redirect` class hooked at `template_redirect` priority 5. Per-bridge opt-in via the `cct_single_redirect` flag (existing schema since alpha.3). Direction guard skips pull-only bridges. Loop guard silently no-ops when the bridge target IS the queried post (BBHQ Pattern X). Admin escape hatch via `?jedb_no_redirect=1` requires the JEDB capability (anonymous bypass blocked). Reverse-lookup detection via `cct_single_post_id` works across JE versions without depending on internal JE single-page APIs. **Phase 4 Day 2 final form shipped in alpha.9 (L-031):** ONE meta box per enabled bridge (was: one umbrella box looping all bridges internally) — each registered with the bridge's `meta_box.title` (fallback `label`) as its WP header, honoring `meta_box.position`. The linked-state panel now uses minimal native-WP look — `<table class="form-table">` for surfaced field previews, no custom panel pills / chrome / `<h2>`, modal-launcher button as the only call-to-action. New `meta_box.show_advanced` opt-in flag (default `false`) hides per-product overrides + recent sync log + Sync now / Unlink behind a collapsed `<details>` "Advanced Details" section at the bottom of the panel. Image media previews remain rich (thumbnail); non-image attachments collapse to a plain "Has attachment" label. CCT data fetched fresh via `Target_CCT::get_fresh()` so previews always reflect post-modal-save state (alpha.8 / L-030). The modal flow (L-027 / L-029) and nested-form fix (L-028) remain in place. **Phase 4 Day 1 alpha.3** sits underneath: bridge type template layer retired (D-25 / L-026), flatten config schema extended (`meta_box` block + per-mapping `surface_*` + `group` + `cct_single_redirect`), per-product engine guards (`_jedb_bridge_locked` / `_jedb_bridge_direction_override`), Field Presets manager skeleton. **Engine paths are byte-identical to v0.5.3** outside the alpha.3 skip-only guards. Existing 0.5.x flatten configs work unchanged. Phase 4 Day 3 (CCT-single → linked-post redirect shim per §4.6), Day 4 (Field Presets admin tab + Mandatory coverage integration per §4.12), and **Phase 4b (variation reconciliation per §4.7)** are next. All architectural decisions locked (D-1 → D-27, with D-5 superseded by D-25); all known platform caveats documented (L-001 → L-031). Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-05-17:** Phases 0, 1, 2, 2.5, 3, 3.5, 3.6, **all of Phase 4** are complete and **end-to-end verified on Brick Builder HQ staging** through twenty releases (v0.1.0 through v0.6.0-alpha.13 on `main`). **Phase 4b reset — alpha.13 retired per L-032; alpha.14 + alpha.15 planned with the iframe-flip architecture.** alpha.13's declarative `variations[]` reconciler shipped end-to-end but was architecturally wrong: the configuration surface scaled poorly with variation complexity AND covered only a small subset of WC's per-variation feature set. The replacement (alpha.14 / alpha.15) launches WC's native product edit page in a chrome-stripped modal iframe from a per-bridge CCT-edit-screen panel — delegates 100% of variation UI to WC, zero schema bloat on our side. See §4.7 for the new architecture spec and L-032 for the full retrospective. New `JEDB_Variation_Reconciler` walks each bridge's `variations[]` array on push, evaluates each entry's `show_when` against the source CCT row, and creates / updates / soft-deletes the corresponding WC variation under the linked parent product. Woo-scoped (variations are a Woo concept) but composes cleanly with the rest of the post-type-agnostic engine. Tier 2 (PULL direction, attribute taxonomy auto-creation, menu_order) deferred. **Phase 4 Day 4 shipped earlier in alpha.12** — Field Presets admin tab + Mandatory coverage integration per §4.12. New `JEDB_Tab_Field_Presets` with full CRUD + JSON export/import. `JEDB_Field_Presets_Manager` extended with `upsert` / `delete` / `replace_all` / `merge_import` / `prepare_for_storage` / `compute_effective_required_fields`. Flatten admin tab's Mandatory coverage panel rebuilt with green/red badges, "X of Y covered" summary, Apply preset dropdown (snapshot model — writes into `required_overrides.add`), Scaffold missing mappings (stubs passthrough rows), provenance labels. Bridge meta box's Advanced Details gained the same coverage breakdown for editors who opt into the verbose surface (`meta_box.show_advanced=true`). All client-side mutations — no extra AJAX. **Phase 4 Day 3 shipped in alpha.11** — CCT-single → linked-post redirect shim per §4.6. New `JEDB_CCT_Single_Redirect` class hooked at `template_redirect` priority 5. Per-bridge opt-in via the `cct_single_redirect` flag (existing schema since alpha.3). Direction guard skips pull-only bridges. Loop guard silently no-ops when the bridge target IS the queried post (BBHQ Pattern X). Admin escape hatch via `?jedb_no_redirect=1` requires the JEDB capability (anonymous bypass blocked). Reverse-lookup detection via `cct_single_post_id` works across JE versions without depending on internal JE single-page APIs. **Phase 4 Day 2 final form shipped in alpha.9 (L-031):** ONE meta box per enabled bridge (was: one umbrella box looping all bridges internally) — each registered with the bridge's `meta_box.title` (fallback `label`) as its WP header, honoring `meta_box.position`. The linked-state panel now uses minimal native-WP look — `<table class="form-table">` for surfaced field previews, no custom panel pills / chrome / `<h2>`, modal-launcher button as the only call-to-action. New `meta_box.show_advanced` opt-in flag (default `false`) hides per-product overrides + recent sync log + Sync now / Unlink behind a collapsed `<details>` "Advanced Details" section at the bottom of the panel. Image media previews remain rich (thumbnail); non-image attachments collapse to a plain "Has attachment" label. CCT data fetched fresh via `Target_CCT::get_fresh()` so previews always reflect post-modal-save state (alpha.8 / L-030). The modal flow (L-027 / L-029) and nested-form fix (L-028) remain in place. **Phase 4 Day 1 alpha.3** sits underneath: bridge type template layer retired (D-25 / L-026), flatten config schema extended (`meta_box` block + per-mapping `surface_*` + `group` + `cct_single_redirect`), per-product engine guards (`_jedb_bridge_locked` / `_jedb_bridge_direction_override`), Field Presets manager skeleton. **Engine paths are byte-identical to v0.5.3** outside the alpha.3 skip-only guards. Existing 0.5.x flatten configs work unchanged. Phase 4 Day 3 (CCT-single → linked-post redirect shim per §4.6), Day 4 (Field Presets admin tab + Mandatory coverage integration per §4.12), and **Phase 4b (variation reconciliation per §4.7)** are next. All architectural decisions locked (D-1 → D-27, with D-5 superseded by D-25); all known platform caveats documented (L-001 → L-031). Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
@@ -1454,25 +1450,64 @@ The taxonomy/categorization architecture per D-20 → D-24 / L-023 / §4.11.
 - ✅ **Exit criterion met**: editor curates a "WooCommerce — Storefront Visible" preset with mandatory fields + freeform groups in the Field Presets tab, exports as JSON, drops into another site, imports (with or without replace-all), opens an applicable bridge in the Flatten tab, picks the preset from the Apply dropdown, clicks Apply (mandatory fields land in `required_overrides.add`), sees green/red coverage badges + missing pill, clicks Scaffold missing mappings to stub passthrough rows, saves the bridge. End-to-end works.
 - **Tier 2 deferred:** "Display-only overlay" mode (preview a preset's fields layered onto the coverage panel WITHOUT writing to `required_overrides`) was scoped out of alpha.12. The Apply-then-Save workflow is the supported authoring path; overlay-without-apply would add a second display state and modest JS complexity for marginal gain. Can be added later if the editor experience needs it.
 
-### Phase 4b — Variation bridging ✅ shipped in v0.6.0-alpha.13
+### Phase 4b — Variation bridging (rewritten architecture per L-032)
 
-- ✅ `Target_Woo_Variation` write methods complete. `create()` and `update()` were already present from Phase 1; alpha.13 adds `find_managed_variation()` (reverse-lookup by parent + bridge id + slug via direct postmeta SQL) and `create_for_bridge()` (wrapper that forces parent_id + the JEDB tracking meta keys `_jedb_variation_slug` + `_jedb_variation_bridge`).
-- ✅ `variations[]` block added to `default_config_json()` + `default_variation()` factory + `merge_with_defaults()` back-compat. Each entry shape: `slug` (required, used as the post meta tracking key), `label`, `show_when` (DSL expression, same syntax as the bridge condition field), `price_field` (source CCT field whose value writes to `regular_price`), `downloads[]` (source CCT field names whose values populate WC downloadable files), `attributes[]` (map of `attribute_slug => value` for variation identification; falls back to a plugin-managed `pa_jedb_variant` slot when empty), `enabled`, `note`.
-- ✅ New `JEDB_Variation_Reconciler` class. `reconcile($bridge, $source_id, $source_data, $target_post_id, $target_target, $context)` walks `variations[]`, evaluates each entry's `show_when` against the source CCT row (via the existing `JEDB_Condition_Evaluator`), and:
-  - `should_show` true + variation exists → `update()` with `status: 'publish'` + computed fields.
-  - `should_show` true + variation doesn't exist → `create_for_bridge()` with parent + slug + tracking meta + computed fields.
-  - `should_show` false + variation exists → `update()` with `status: 'private'` (soft-delete).
-  - `should_show` false + variation doesn't exist → noop.
-  - Variations the bridge doesn't know about (third-party plugins, manual variations) are left alone.
-- ✅ Reconciler hooked into `JEDB_Flattener::apply_bridge()` after mappings + taxonomies. Bails fast for non-`posts::product` targets (variations are Woo-only) and for bridges with empty `variations[]`. The summary `{ran, examined, created, updated, hidden, skipped, errors, per_variation}` is included in the sync_log row's `context_json` so admins can drill into per-variation outcomes via the Debug tab.
-- ✅ Path 3 of the apply_bridge result-determination updated: when mappings noop but variations changed, status is `success` (not `noop`) with a `variations_only` marker. Same logic mirrors the existing `taxonomies_only` path from Phase 3.6.
-- ✅ Flatten admin tab gains a new collapsible "Variations (push only)" section. Visible only when `target_target = posts::product`. Per-variation row: slug, label, show_when textarea, price_field, downloads (CSV of source field names), attributes (CSV of `attr_slug=value` pairs), enabled checkbox, Remove button. Add row button + status pill. JS round-trip via `readVariationsFromDom()` + `makeVariationRow()`. Bootstrap carries `initial_variations` + `variation_default` so the JS row builder uses the canonical shape.
-- ✅ Bridge meta box's Advanced Details gains a "Variations managed by this bridge" subsection (when `show_advanced=true`). Per-variation status pill: active / will create on next push / hidden (will soft-delete) / rule disabled / inactive. Read-only diagnostic — authoring lives in the Flatten admin tab.
-- ✅ Wired downloadable-files handling: the reconciler's `build_download_entry()` accepts attachment IDs (resolves URL + filename) or raw URLs, builds WC's `{id, name, file}` shape, sets `downloadable=true` + `virtual=true` automatically when at least one download is present.
-- **Scope reminder (re-confirmed):** WC variations are a Woo-specific construct (child posts of a variable product). The `variations[]` block and reconciliation engine are accordingly Woo-scoped — the reconciler short-circuits for non-`posts::product` targets. The broader plugin architecture — taxonomies (Phase 3.6 / §4.11), field mappings, push/pull engines, conditional sync — is **post-type-agnostic** and supports ANY CPT target with its own taxonomies, including non-Woo CPTs (e.g. an `event` CPT with `event_category` / `event_tag` taxonomies). Don't conflate "variations are Woo-only" with "the whole bridge is Woo-only" — only the variation reconciliation layer is Woo-scoped.
-- **Meta box presentation locked in (alpha.9 interaction):** there's no separate Variation Scope radio. The 99% case is "Bridge the parent product, let auto-reconciliation manage variations" and that's what the engine does by default. The diagnostic surface for variations lives inside Advanced Details, gated by `meta_box.show_advanced=true`. Pure-surface CCT fields that DRIVE variation creation (like `has_instructions_pdf` from the BBHQ use case) render as ordinary read-only previews on the compact surface — no special "variation-driving" UI marker. The editor opens the modal to edit them in JE; on save, the reconciler does its work; on the parent reload, the variations status pill in Advanced Details shows the new state.
-- ✅ **Exit criterion met**: a bridge with `variations[{slug: with_instructions, show_when: "{source.has_instructions_pdf} == true", price_field: "instructions_price", downloads: ["instructions_pdf_attachment"]}]` correctly creates the variation on the linked product when the CCT row's `has_instructions_pdf` is true, sets the price from `instructions_price`, attaches the downloadable file from `instructions_pdf_attachment`, and soft-deletes the variation (status=private) when the toggle is flipped to false. End-to-end works.
-- **Tier 2 deferred:** PULL direction (variation edits back-propagating to the CCT) was scoped out of alpha.13. The variation reconciliation engine is push-only. When the editor changes a managed variation's price or downloads via WC's variations panel, the change persists in WC but doesn't propagate back to the source CCT field. The push-only model is sufficient for the BBHQ Mosaic use case; reverse pull would require hooking `woocommerce_update_product_variation` and walking each bridge's variations[] to find the matching slug, then writing back to source — doable but not blocking. Also deferred: variation attribute taxonomy auto-creation (currently editors must pre-configure attribute taxonomies in WC); variation `menu_order` field.
+Phase 4b's deliverable is the iframe-flip pattern for managing WC variations from the JE CCT edit screen. The alpha.13 declarative `variations[]` reconciler model is retired; the alpha.14 / alpha.15 iframe-flip model takes its place. See §4.7 above for the architecture spec and L-032 for the full reasoning.
+
+#### alpha.13 — DEPRECATED, retired in alpha.14
+
+Shipped a declarative `variations[]` block + `JEDB_Variation_Reconciler` engine that auto-created / updated / soft-deleted variations from CCT state via a `show_when` mini-DSL. End-to-end functional, exit criterion met against the BBHQ "Has Instructions PDF" use case. **Retired** because:
+- Configuration surface scaled poorly with variation complexity (5 variations × 7 schema fields each = 35 fields to manage in our UI vs 1 button to delegate to WC).
+- Covered only a small subset of WC's per-variation features (no per-variation images, no stock management, no shipping class, no menu_order, etc.). Closing the gap would mean perpetual schema bloat.
+- The L-027 iframe-flip pattern already worked in the reverse direction (CCT edit from WC product page). The symmetric application (WC variation edit from CCT page) gets all WC features for free with no schema bloat.
+
+See L-032 for the full architectural retrospective.
+
+#### alpha.14 — iframe-flip Phase A (planned, in-progress)
+
+**Code removals:**
+- `includes/flatten/class-variation-reconciler.php` (entire file, ~480 lines).
+- `JEDB_Variation_Reconciler::instance()` registration in `JEDB_Plugin::load_core()`.
+- Reconciler invocation + `variations_changed` / `variations_only` Path 3 branch in `JEDB_Flattener::apply_bridge()`.
+- `default_variation()` factory + `variations[]` key on `default_config_json()` + `merge_with_defaults()` variations handling in `JEDB_Flatten_Config_Manager`.
+- Variations section in `templates/admin/tab-flatten.php`.
+- Variation row builder (`makeVariationRow`, `readVariationsFromDom`, `renderVariations`, etc.) in `assets/js/flatten-admin.js` — plus `cfg.variations = readVariationsFromDom()` in `buildConfig`.
+- "Variations managed by this bridge" subsection in `templates/admin/meta-box-bridge.php` + the `$variations_status` data plumbing in `JEDB_Woo_Product_Meta_Box::render_linked_panel()`.
+- Variation status pill CSS (`.jedb-bridge-variations-status` + per-state border-left colors) in `assets/css/bridge-meta-box.css`.
+- alpha.13 bootstrap fields `initial_variations` + `variation_default` from the Flatten tab bootstrap script.
+
+**Code retained as deprecated** (docblocks updated to reference §4.7 + L-032):
+- `JEDB_Target_Woo_Variation::find_managed_variation()` (~50 lines).
+- `JEDB_Target_Woo_Variation::create_for_bridge()` (~30 lines).
+- `JEDB_Target_Woo_Variation::META_VARIATION_SLUG` / `META_VARIATION_BRIDGE` constants.
+
+These are general-purpose utilities (find a bridge-managed variation by parent+slug; create a variation with the bridge tracking meta). They're orphaned from the production code paths but kept as defensive surface for any future automation hook (e.g. an admin button that scans for orphaned managed variations after a bridge deletion).
+
+**Code additions:**
+- New `cct_screen.wc_variations` block in `default_config_json()` with `enabled`, `title`, `auto_force_variable_type` keys. Plus a `default_cct_screen()` factory + back-compat handling in `merge_with_defaults()`.
+- New "Enable WooCommerce Variations" section in the Flatten admin tab (visible only when `target_target = posts::product` per D6). Three controls: enabled checkbox, title text input, auto-force-variable-type checkbox.
+- New PHP class (probable name: `JEDB_CCT_Screen_Variations_Panel`) that hooks into the JE CCT edit page render, walks bridges where `source_target = cct::{current_slug}` AND `cct_screen.wc_variations.enabled = true`, and emits one panel per matching bridge below the JE save button. Each panel: configured title, helper text, "Open variations editor →" button. Iframe-context detection silently hides the button when `window.top !== window.self` (D5).
+- D1 / R3 implementation: where the new panel renders, the existing `jedb-relations-block` is hidden when the CCT row is already linked through this bridge. Editors creating fresh rows still see the relations picker; once linked, the variations launcher takes its space.
+- Modal mechanics REUSE the existing L-027/L-029 infrastructure — `openModal()` / postMessage protocol / sessionStorage close flag / chrome-strip injection-hook scaffolding. Phase A iframe URL: `wp-admin/post.php?post={target_id}&action=edit&jedb_chrome=stripped&jedb_return={cct_edit_url}`. The chrome-strip script itself is no-op in Phase A — the iframe renders full WC admin chrome, but the Done/Cancel top bar + close-on-save handlers are wired. Working end-to-end without the polished chrome scope.
+
+**Exit criterion (Phase A):** editor on a CCT edit page sees the new panel beneath the JE save button (once the CCT row is linked). Click opens a modal with the linked WC product's edit page. Editor navigates to the Variations tab in WC's native UI, makes whatever variation changes they want, clicks Done in the top bar OR Update inside the iframe. The modal closes, the CCT edit page reloads, the variations are visible on the linked product's frontend.
+
+#### alpha.15 — iframe-flip Phase B (planned, follow-up)
+
+**Code additions:**
+- CSS that hides everything except `#woocommerce-product-data` (Product Data meta box) + `#submitdiv` (Publish/Update meta box) when the iframe loads with `?jedb_chrome=stripped`. Plus the existing chrome-hide pattern (admin bar, sidebar menu, footer, screen options).
+- The chrome-strip script + Done/Cancel top bar — same infrastructure as the L-027 CCT edit chrome strip, just targeting a different post type's edit page.
+- Form-submit interceptor on `form#post` (WC's product form) → sets the sessionStorage close flag → parent closes + reloads.
+- D3 implementation: when `cct_screen.wc_variations.auto_force_variable_type=true` is set on the bridge, the chrome-strip script triggers `jQuery('#product-type').val('variable').trigger('change')` on DOMContentLoaded. Skipped per D4 — does NOT auto-click the Variations sub-tab inside Product Data; editor may need to configure attributes first.
+
+**Exit criterion (Phase B):** editor opening the modal sees ONLY the Product Data meta box + the Publish/Update meta box. No title input, no content editor, no featured image, no sidebar meta boxes, no admin bar, no left nav, no footer. The product type may or may not be auto-forced to variable based on the bridge config. Editor uses WC's native variation UX inside the scoped iframe and saves via either Done (top bar) or Update (WC native button).
+
+#### What remains scoped out
+
+- **PULL direction.** Variation edits don't back-propagate to CCT fields. Under the iframe-flip model, variations are WC-canonical for everything except the editorial-intent toggle on the CCT.
+- **`jedb-relations-block` removal.** Per D1 / R3 it's hidden contextually (when a link exists) but the code stays. Removing it entirely is a separate cleanup if/when the editorial workflow no longer uses it.
+- **Auto-jump to the Variations sub-tab.** D4 — explicitly declined; editors set up attributes first.
+- **`Target_Woo_Variation::find_managed_variation()` removal.** Kept as deprecated defensive surface.
 
 ### Phase 5 — Settings, debug log, utilities (1 day)
 - Settings API setup using JFB-WC pattern (incl. the "Enable Custom PHP Snippets" toggle).
@@ -1593,7 +1628,7 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 |---|---|---|---|
 | D-1 | **Bridge cardinality** | **1:1.** One Woo product (or one variation) ↔ one CCT row. | `_jedb_bridge_cct_id` is a single integer. UI shows a single-select Ajax picker, not multi-select. Validation: saving a product with a CCT ID already linked elsewhere triggers an admin warning and a "swap link" prompt. |
 | D-2 | **Source of truth on conflict** | **CCT-canonical by default.** When both sides change between syncs, CCT wins. Per-bridge override (`Product is canonical`) available in the meta box. **Phase 7+** may add per-field "last write wins" via timestamps. | Default value of `_jedb_bridge_direction` is `cct_canonical`. PUSH events from CCT always overwrite Woo fields. PULL events from Woo only fire when `_jedb_bridge_direction = product_canonical` OR when the meta box "Pull from Woo now" button is clicked. |
-| D-3 | **Variations** | **In scope.** Both parent products and individual variations can be bridge targets. Variation reconciliation engine ships in Phase 4b. | Adds `Target_Woo_Variation`, the `variations[]` block in bridge type JSON, the `show_when` mini-DSL evaluator, and the variation reconciliation logic. See §4.7. |
+| D-3 | **Variations** | **In scope, iframe-flip architecture (post-L-032).** Both parent products and individual variations remain as registered target adapters. Variations are managed via the `cct_screen.wc_variations` panel on the JE CCT edit screen that opens WC's native product edit page in a chrome-stripped modal iframe — WC owns variation creation, attributes, pricing, downloads, stock, images, every per-variation field. The declarative `variations[]` reconciliation engine (alpha.13) was retired in alpha.14 per L-032. See §4.7. |
 | D-4 | **"Has Instructions PDF" implementation** | **Woo product variation** of the parent Mosaic product, NOT a separate product. Reconciled automatically by the bridge type's `variations[]` block. | The Brick Builder HQ preset (Phase 6) ships with a `mosaic` bridge type whose `variations[]` includes both `build_only` and `with_instructions`. The CCT field `has_instructions_pdf` controls whether the second variation exists. |
 | D-5 | ~~**Bridge type enum storage**~~ *(superseded by D-25 on 2026-05-10)* | ~~Plugin Settings JSON (`jedb_bridge_types` option), NOT JetEngine Glossary.~~ **Bridge types as a separate template layer were retired** — the flatten config IS the bridge identity. The `jedb_bridge_types` option is dropped in v0.6.0-alpha.3. JetEngine Glossaries are still used for *content* enums like `story_type` per `site-structure.md`. | Decision kept in this log for audit traceability. See L-026 for the post-mortem and D-25 for the replacement decision. |
 | D-6 | **Plugin author / license** | **Legwork Media · GPL v2 or later.** Matches existing JFB-WC convention. | Plugin header in `je-data-bridge-cc.php`. `readme.txt` License field. Copyright notice in `LICENSE` file. |
@@ -1634,7 +1669,7 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | Debug log fills disk | Low | Medium | Log rotates at 5 MB (helper handles it); off by default in production. |
 | Custom DB tables conflict with someone else's plugin | Very Low | Low | Tables prefixed `wp_jedb_*` + plugin slug carries `_cc` suffix. |
 | Woo plugin updates break the meta box hooks | Low | Low | Use only documented hooks (`add_meta_boxes`, `woocommerce_process_product_meta`). |
-| **Variations: stock/attribute drift** between parent and managed variations | Medium | Medium | Variation reconciliation engine writes parent stock as sum of managed variation stock by default; admin can opt out per bridge. Attribute taxonomies (`pa_*`) are auto-created only when declared in the bridge type JSON; otherwise we error loudly rather than silently mis-assigning. |
+| **Variations: stock/attribute drift** between parent and managed variations | Medium → Low (post-L-032) | Low | Iframe-flip architecture (alpha.14+) delegates 100% of variation management to WC's native UI. WC's own UX handles stock-status, attribute taxonomy creation, menu_order, etc. The risk is now bounded to whatever WC's own UI surfaces — which is well-understood by anyone who has used WC variations before. The alpha.13 declarative reconciler that would have introduced bespoke drift modes was retired per L-032. |
 | **Variations: orphaned third-party variations** | Low | Medium | Reconciliation only touches variations whose `_jedb_variation_slug` meta matches a slug in the bridge type. Unmanaged variations are never auto-deleted. |
 | **Custom Snippets: malicious or buggy PHP fatal-erroring a save** | Medium | High if not gated | Triple gate: (1) capability check on edit + on run, (2) global "Enable Custom PHP Snippets" toggle default OFF, (3) `Snippet_Runner` wraps every invocation in try/catch + `set_error_handler` so a fatal returns the original value and logs the trace. |
 | **Custom Snippets: snippet file deleted from disk while DB row remains** | Low | Low | `Snippet_Loader::load()` re-checks file existence + hash before include; mismatched/missing → marks snippet `errored`, logs, returns passthrough. Admin notice surfaces orphaned snippets. |

@@ -2490,3 +2490,108 @@ v0.6.0-alpha.9.
 6. **L-031 and L-029 / L-027 / L-028 form the Phase 4 Day 2 lesson cluster.** Each addresses a different layer of the same workflow (modal flow, nested-form HTML, WP-chrome flash, cache freshness, meta-box granularity). The collective lesson: when wrapping a host plugin's UI in your own, every WP/host primitive that touches your wrapper needs verification against actual behavior — not against assumed behavior. The hosts are bigger than they look.
 
 ---
+
+## L-032: When the host plugin has a rich native UI for a complex feature, iframe-bridge to it. Don't reimplement declaratively. L-027 applies bidirectionally.
+
+**Discovered:** 2026-05-17 (Phase 4b retirement / version 0.6.0-alpha.14 — pre-implementation review)
+**Severity:** High
+**Category:** Architecture / Premature declarative abstraction
+
+### Context
+Phase 4b (alpha.13) shipped a `JEDB_Variation_Reconciler` engine that consumed a declarative `variations[]` block on the flatten config schema: each entry described one WooCommerce variation to manage with a `show_when` DSL deciding when it should exist, plus `price_field` / `downloads[]` / `attributes` declaring how to populate it from CCT data. The reconciler walked these entries on every push, created / updated / soft-deleted variations to match. The BBHQ "Has Instructions PDF" use case worked end-to-end. Staging tests passed.
+
+### Wrong
+The mental model assumed declarative reconciliation was clearer + more powerful than delegating to WC's native variations UI. In practice the configuration surface for `variations[]` was significantly more convoluted than the actual editorial decision being modeled, AND covered only a small subset of what WC's variations UI exposes natively.
+
+User flagged this within hours of staging alpha.13: *"Im realising this work is kind of redundant right... because if theres multiple variations the sync becomes quite convoluted. Im almost wondering if we do the same thing for woo commerce where added an Iframe into the metabox... but this time we do it backwards into jet engine CCT's where in the bridge we add an option like has variables which can be clicked after initial save and loads an Iframe of the product data and auto selects the product type to variable — this way the complexity of variables gets handled by woocommerce itself."*
+
+The user's instinct was right. The bridge type (alpha.1/alpha.2 / L-026) reckoning had the same shape: a config-driven layer we built to model editor intent turned out to be both more complex AND less expressive than just delegating to the host plugin's UI.
+
+### Evidence
+The pain points scale steeply with variation complexity:
+
+| Bridge has... | alpha.13 effort (declarative) | Iframe-flip effort (delegate) |
+|---|---|---|
+| 1 simple variation | 1 form row × 7 fields | 1 button click → WC's native UI |
+| 3-5 variations with different fields | 5 form rows × 7 fields = 35 fields to manage | Same: 1 button click |
+| Per-variation custom image | Not supported — would need `image_field` in schema | WC's native UI handles natively |
+| Per-variation stock management | Not supported — would need 4 stock-related fields | WC handles natively |
+| Per-variation shipping class | Not supported — would need `shipping_class_field` | WC handles natively |
+| Per-variation menu_order | Not supported — would need `menu_order` field | WC handles natively |
+| Variation attribute taxonomy auto-creation | Required pre-configuration in WC anyway | WC's UI walks editors through it |
+
+The gap between "what `variations[]` exposes" and "what WC supports per variation" is large and grows over time as WC adds features. Closing it means schema bloat. Not closing it means alpha.13 is forever an awkward subset of WC variation capabilities.
+
+### Reality
+The L-027 pattern works in both directions:
+
+| Direction | Pattern | Outcome |
+|---|---|---|
+| Edit CCT data from WC product page (L-027) | iframe to JE's CCT edit page, chrome-strip the admin | Every JE field type renders correctly because JE renders them. Zero per-type renderer code in our plugin. |
+| Edit WC variations from CCT edit screen (L-032) | iframe to WC's product edit page, chrome-strip the admin | Every WC variation field works correctly because WC renders them. Zero `variations[]` reconciliation code in our plugin. |
+
+The architectural pattern is symmetric. Once L-027 was in place, the cost of NOT mirroring it for WC variations was a 480-line reconciler + a declarative schema block + a Flatten admin tab section + JS row builder + a meta box diagnostic — all of which becomes obsolete the moment the iframe-flip lands.
+
+### Affected code (alpha.14 will remove)
+- `includes/flatten/class-variation-reconciler.php` (~480 lines).
+- `JEDB_Variation_Reconciler::instance()` registration in `JEDB_Plugin::load_core()`.
+- The reconciler invocation in `JEDB_Flattener::apply_bridge()` + the `variations_changed` / `variations_only` / Path 3 success branch logic added in alpha.13.
+- `default_variation()` factory + `variations[]` key on `default_config_json()` in `JEDB_Flatten_Config_Manager`.
+- `merge_with_defaults()` `variations[]` deep-merge code.
+- Variations section in `templates/admin/tab-flatten.php`.
+- Variation row builder (`makeVariationRow`, `readVariationsFromDom`, `renderVariations`, etc.) in `assets/js/flatten-admin.js`.
+- "Variations managed by this bridge" subsection in `templates/admin/meta-box-bridge.php` + the `$variations_status` data plumbing in `JEDB_Woo_Product_Meta_Box::render_linked_panel()`.
+- Variation status pill CSS in `assets/css/bridge-meta-box.css`.
+
+### Affected code (alpha.14 will retain, marked deprecated in docblocks)
+- `JEDB_Target_Woo_Variation::find_managed_variation()` (~50 lines)
+- `JEDB_Target_Woo_Variation::create_for_bridge()` (~30 lines)
+- `JEDB_Target_Woo_Variation::META_VARIATION_SLUG` / `META_VARIATION_BRIDGE` constants
+
+These are general-purpose Woo-variation utilities. They don't reference reconciler-specific logic. Defensive surface for any future automation hook (e.g. an optional "fix orphaned variations" admin button) that wants to find/create bridge-managed variations. Docblocks are updated to make their deprecated status explicit and reference BUILD-PLAN §4.7 + this lesson.
+
+### Replacement (alpha.14 will ship)
+**Per-bridge `cct_screen.wc_variations` panel** on the JE CCT edit screen:
+
+```json
+"cct_screen": {
+  "wc_variations": {
+    "enabled": false,
+    "title": "WooCommerce Variations",
+    "auto_force_variable_type": false
+  }
+}
+```
+
+When `enabled=true` AND the current CCT row has a linked WC product, a new panel renders below the JE save button on the CCT edit page. The panel contains:
+- The configured `title` as a heading
+- A short helper text: "After initial save you can add variations to this post."
+- A button **"Open variations editor →"** that opens the linked WC product's edit page in a chrome-stripped modal iframe (Phase A ships without the chrome strip; Phase B adds it)
+
+Modal mechanics REUSE the L-027/L-029 infrastructure entirely — same overlay, same Done/Cancel top bar, same sessionStorage close-on-save, same postMessage protocol. The only difference is the iframe URL (WC product edit instead of JE CCT edit).
+
+When `auto_force_variable_type=true` (admin-opt-in per D3): the iframe's chrome-strip script auto-triggers `jQuery('#product-type').val('variable').trigger('change')` on load so the editor doesn't have to manually flip the product type dropdown. Off by default — admin enables per bridge.
+
+The Flatten admin tab's "Enable WooCommerce Variations" section is hidden when `target_target !== 'posts::product'` (per D6 — irrelevant for non-product targets).
+
+Decisions locked before implementation (D1–D6 / 2026-05-17 discussion):
+- **D1: R3 — contextual replacement of `jedb-relations-block`.** The existing relation picker on CCT edit screens stays when the CCT row is unlinked (one-step workflow for editors creating rows from the CCT side preserved); the new variations panel takes its space once a link exists.
+- **D2: `cct_screen.wc_variations` namespace** for the new config block. Forward-extensible for future CCT-screen panels.
+- **D3: per-bridge admin opt-in for "auto-force variable product type"** instead of unconditionally auto-forcing. The code path is built but only fires when the admin explicitly enables it per bridge.
+- **D4: do NOT auto-jump to the Variations sub-tab inside Product Data.** Editor may need to configure attributes first; forcing the tab steals control.
+- **D5: silently hide the variations panel button when the CCT edit page is loaded inside an iframe context** (e.g. when accessed through the L-027 CCT-edit modal from a WC product page). Prevents nested-iframe chaos.
+- **D6: hide the "Enable WooCommerce Variations" checkbox in the Flatten admin tab when `target_target !== 'posts::product'`** since the feature only applies to Woo products.
+
+### Prevention
+1. **Ask "could we iframe to the host's UI for this?" BEFORE building a declarative reconciliation engine.** If the host plugin (WC, JE, Yoast, etc.) has a complete, polished UI for the feature, that's usually the answer. Declarative reconciliation is appropriate when (a) the data shape is small and stable, (b) host UI is poor or inaccessible, (c) automation has clear behavioral semantics with low policy ambiguity. None of these held for WC variations.
+2. **Bidirectional symmetry is a design smell in the GOOD direction.** Once L-027 worked for editing CCT from the WC side, the symmetric question "what about editing WC from the CCT side?" should have surfaced before alpha.13 instead of after. Going forward: when introducing an iframe-bridge pattern, immediately ask whether the symmetric counterpart belongs in the same release.
+3. **Declarative DSLs for "should this exist?" decisions are a slippery slope.** The `show_when` mini-DSL handled the BBHQ case, but extending it for new patterns (stock-dependent variations, time-windowed variations, etc.) means more DSL operators. Eventually the DSL becomes a programming language. The escape hatch — Phase 5b custom snippets — exists for a reason; declarative DSLs in config should stay simple and let snippets handle complex policy.
+4. **Premature reconciliation engines compound L-026.** L-026 documented retiring the bridge type template layer (alpha.1-alpha.2) for the same reason: a layer that modeled editor intent but turned out to be more complex than the underlying primitive. alpha.13's reconciler is its sibling. Whenever a feature requires "configure declaratively in our UI, we'll translate to the host's API," step back and ask whether the host's UI can be exposed directly instead.
+5. **Code retained as deprecated should reference both BUILD-PLAN and the lesson.** When code stays in the repo as defensive surface (like `find_managed_variation`), the docblock must reference the architecture doc that explains current usage (BUILD-PLAN §4.7) AND the lesson that explains why it's no longer wired (this lesson). Future AI / human readers grepping for "find_managed_variation" should immediately understand it's intentionally orphaned, not forgotten.
+
+### Cross-references
+- **L-026** ("Premature template-layer abstraction") — same architectural pattern, same fix family (delete the abstraction, expose the primitive directly). The bridge type layer was retired in alpha.3 for the same reasons alpha.13's `variations[]` is being retired in alpha.14.
+- **L-027** ("Don't rebuild every JE field type — delegate editing to JE itself via a chrome-stripped modal iframe") — the direct architectural parent of L-032. L-032 is the symmetric mirror: don't rebuild WC variation management — delegate to WC itself via the same chrome-stripped modal pattern.
+- **L-031** ("WP meta box label is set at `add_meta_box()` registration — register one box per bridge, not one umbrella box") — different specific lesson but same underlying principle: use the host platform's primitives at the right granularity, don't paper over them with abstractions.
+
+---

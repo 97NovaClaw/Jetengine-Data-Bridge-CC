@@ -258,14 +258,29 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 	}
 
 	/* -----------------------------------------------------------------------
-	 * Bridge-managed variation lookups (Phase 4b)
+	 * Bridge-managed variation utilities — DEPRECATED defensive surface.
 	 *
-	 * Managed variations carry two post meta keys:
-	 *   - `_jedb_variation_slug`   — the variations[] entry slug
-	 *   - `_jedb_variation_bridge` — the bridge config id that owns it
+	 * These methods + meta key constants were added in alpha.13 to support
+	 * the declarative `JEDB_Variation_Reconciler` engine. That engine is
+	 * RETIRED in alpha.14 per L-032 (see LESSONS-LEARNED.md). Variation
+	 * management has been delegated to WC's native UI via the iframe-flip
+	 * pattern described in BUILD-PLAN §4.7.
 	 *
-	 * The reconciler queries via this method on every push to decide
-	 * create-vs-update-vs-soft-delete per variation entry.
+	 * These methods are KEPT in the codebase as defensive surface for any
+	 * future automation hook that wants to find or create bridge-managed
+	 * variations (e.g. an admin "fix orphaned variations" tool after a
+	 * bridge deletion). They have ZERO production callers in alpha.14+.
+	 *
+	 * If you are reading this trying to understand the current variation
+	 * architecture: see BUILD-PLAN §4.7 + L-032. The PRIMARY way bridges
+	 * interact with variations now is via the `cct_screen.wc_variations`
+	 * panel on the CCT edit screen, which iframe-launches WC's native
+	 * product edit page. There is no longer any reconciliation engine.
+	 *
+	 * @deprecated since alpha.14 (production callers removed; methods
+	 *             retained per L-032 prevention rule #5). Do not wire new
+	 *             code through these without re-evaluating the iframe-flip
+	 *             architecture decision documented in L-032.
 	 * -------------------------------------------------------------------- */
 
 	const META_VARIATION_SLUG   = '_jedb_variation_slug';
@@ -273,17 +288,21 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 
 	/**
 	 * Return the variation post ID managed by `$bridge_id` for the given
-	 * parent product + variations[] slug, or 0 if none exists.
+	 * parent product + variation slug, or 0 if none exists.
 	 *
 	 * Direct SQL on the postmeta table (parent_id is on the variation's
 	 * post_parent column, not in postmeta) to avoid the cost of
 	 * instantiating WC_Product_Variation just to read meta. Returns the
-	 * FIRST matching variation if (somehow) multiple exist — duplicates
-	 * are a data anomaly and the reconciler logs a warning.
+	 * FIRST matching variation if (somehow) multiple exist.
+	 *
+	 * @deprecated since alpha.14 — production callers removed per L-032.
+	 *             Method retained as defensive surface for future
+	 *             automation hooks. See BUILD-PLAN §4.7 for the current
+	 *             iframe-flip variation architecture.
 	 *
 	 * @param int    $parent_post_id  The variable product post ID.
 	 * @param int    $bridge_id       The flatten config row id.
-	 * @param string $variation_slug  The variations[] entry slug.
+	 * @param string $variation_slug  Tracking slug (matches `_jedb_variation_slug` post meta).
 	 * @return int  Managed variation post ID, or 0.
 	 */
 	public function find_managed_variation( $parent_post_id, $bridge_id, $variation_slug ) {
@@ -328,13 +347,21 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 
 	/**
 	 * Create a new variation under the given parent product, stamping the
-	 * bridge ownership meta keys so the reconciler can find it next time.
+	 * bridge ownership meta keys.
 	 *
 	 * Caller-supplied `$fields` may include any typed-setter key (e.g.
 	 * `regular_price`, `sku`, `downloads`) plus arbitrary post meta. The
 	 * `_jedb_variation_slug` / `_jedb_variation_bridge` keys are forced
 	 * regardless of what's in `$fields` so the management tracking can't
 	 * be accidentally overwritten.
+	 *
+	 * @deprecated since alpha.14 — production callers removed per L-032.
+	 *             The alpha.13 reconciler used this to create managed
+	 *             variations from CCT state. Variation management is now
+	 *             delegated to WC's native UI via the iframe-flip pattern
+	 *             (BUILD-PLAN §4.7). Method retained as defensive surface
+	 *             for future automation hooks. New code should NOT wire
+	 *             through here without revisiting L-032.
 	 *
 	 * @param int    $parent_post_id
 	 * @param int    $bridge_id

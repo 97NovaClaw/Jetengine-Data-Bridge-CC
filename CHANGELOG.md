@@ -2,6 +2,56 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**Phase 4b reset — alpha.13's declarative variation reconciler is being retired in favor of an iframe-flip architecture (L-032). Documentation updated; code changes coming in alpha.14 + alpha.15.**
+
+### Decision (locked 2026-05-17)
+
+After staging alpha.13's `variations[]` reconciler end-to-end, the user identified that the configuration surface scaled poorly with variation complexity AND covered only a small subset of WC's per-variation feature set (no per-variation images, no stock management, no shipping class, no menu_order, no per-variation custom meta beyond the bridge's hardcoded fields). The symmetric application of the L-027 iframe-flip pattern — already proven for CCT editing from the WC product side — delegates 100% of variation UI to WC's native admin and gets all WC features for free with no schema bloat.
+
+L-032 documents the full architectural retrospective. BUILD-PLAN §4.7 has been rewritten with the new architecture spec.
+
+### Coming in alpha.14 (Phase A — iframe-flip without chrome strip)
+
+- **Retire alpha.13 reconciler.** Remove `JEDB_Variation_Reconciler` class, the `variations[]` block from `default_config_json()`, `default_variation()` factory, `merge_with_defaults()` variations handling, the reconciler invocation in `apply_bridge()` + the `variations_changed` / `variations_only` Path 3 branch, the Flatten admin tab Variations section, the variation row builder in `flatten-admin.js`, the meta box Advanced Details "Variations managed by this bridge" subsection + its data plumbing, and the variation status pill CSS.
+- **Retain as deprecated defensive surface** (kept with explicit docblock references to BUILD-PLAN §4.7 + L-032):
+  - `JEDB_Target_Woo_Variation::find_managed_variation()`
+  - `JEDB_Target_Woo_Variation::create_for_bridge()`
+  - `JEDB_Target_Woo_Variation::META_VARIATION_SLUG` / `META_VARIATION_BRIDGE` constants
+- **Add `cct_screen.wc_variations` config block** to flatten configs:
+  ```json
+  "cct_screen": {
+    "wc_variations": {
+      "enabled":                  false,
+      "title":                    "WooCommerce Variations",
+      "auto_force_variable_type": false
+    }
+  }
+  ```
+  with `default_cct_screen()` factory + `merge_with_defaults()` back-compat handling.
+- **Flatten admin tab gains an "Enable WooCommerce Variations" section** with enabled checkbox + title text field + auto-force-variable-type checkbox (D3 admin opt-in). Hidden in the Flatten admin tab when `target_target !== 'posts::product'` per D6.
+- **New `JEDB_CCT_Screen_Variations_Panel` class** that hooks into the JE CCT edit page render, walks bridges where `source_target = cct::{current_slug}` AND `cct_screen.wc_variations.enabled = true`, and emits one panel per matching bridge below the JE save button. Each panel: configured title heading, helper text ("After initial save you can add variations to this post."), "Open variations editor →" button. Button hidden silently when the CCT edit page is itself in an iframe context (D5).
+- **D1 / R3 contextual hide of `jedb-relations-block`** — the existing relations picker stays when CCT row is unlinked (one-step linking workflow preserved); the new variations panel takes its visual space once a link exists.
+- **Modal mechanics REUSE existing L-027/L-029 infrastructure** — same `openModal()` / postMessage protocol / sessionStorage close-on-save flag / chrome-strip injection-hook scaffolding. Phase A iframe loads the WC product edit page fully chromed; the Done/Cancel top bar overlays on top.
+
+### Coming in alpha.15 (Phase B — chrome-strip the iframe to Product Data + Submit only)
+
+- CSS that hides everything except `#woocommerce-product-data` + `#submitdiv` when `?jedb_chrome=stripped` is on the iframe URL.
+- Chrome-strip script for `post.php?post_type=product` page renders — same pattern as the L-027 CCT edit chrome strip, just targeting WC's product edit page. Form-submit interceptor on `form#post` sets the sessionStorage close flag.
+- D3 implementation: when `cct_screen.wc_variations.auto_force_variable_type=true` on the bridge, the chrome-strip script auto-triggers `jQuery('#product-type').val('variable').trigger('change')` on DOMContentLoaded.
+- D4: NOT auto-jumping to the Variations sub-tab inside Product Data (explicitly declined — editor may need to configure attributes first).
+
+### Documentation updated in this docs-only commit
+
+- **L-032 added to LESSONS-LEARNED.md** — "When the host plugin has a rich native UI for a complex feature, iframe-bridge to it. Don't reimplement declaratively. L-027 applies bidirectionally."
+- **BUILD-PLAN §4.7 rewritten** with the iframe-flip architecture spec replacing the alpha.13 declarative model description.
+- **BUILD-PLAN Phase 4b roadmap entry** rewritten with the alpha.13 retirement + alpha.14 / alpha.15 plan.
+- **BUILD-PLAN D-3 (Variations) + D-15-adjacent "Product variations" risk register row** updated to reference the new architecture.
+- **BUILD-PLAN risk register** — "Variations: stock/attribute drift" downgraded from Medium to Low post-L-032 (WC's native UI handles all the drift cases the alpha.13 reconciler would have introduced).
+- **BUILD-PLAN live status line** rewritten — Phase 4 still complete; Phase 4b shown as "reset, alpha.14 + alpha.15 planned."
+- **`JEDB_Target_Woo_Variation` docblocks** on `find_managed_variation()` + `create_for_bridge()` + `META_VARIATION_*` constants updated with explicit deprecation notes pointing to BUILD-PLAN §4.7 + L-032. The methods stay in the codebase but their production-wired callers are removed in alpha.14.
+
 ## [0.6.0-alpha.13] — 2026-05-17
 
 **Phase 4b — Variation reconciliation engine shipped (§4.7 / L-015).**
