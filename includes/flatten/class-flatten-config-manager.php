@@ -105,19 +105,20 @@ class JEDB_Flatten_Config_Manager {
 				'add'    => array(),
 				'remove' => array(),
 			),
-			// Phase 4b / §4.7: per-bridge variation reconciliation rules.
-			// Each entry describes ONE WooCommerce product variation that
-			// this bridge manages on the linked parent product. On every
-			// push, the variation reconciler walks this list, evaluates
-			// each entry's `show_when` against the source CCT row, and
-			// creates / updates / soft-deletes the variation accordingly.
-			// Woo-specific by nature (variations are a WC concept) but
-			// otherwise composed in the same bridge config as everything
-			// else — no separate template layer (D-25). Empty array by
-			// default; bridges that don't manage variations are
-			// unaffected. See default_variation() for the per-entry
-			// shape and BUILD-PLAN §4.7 for the full design.
-			'variations'                        => array(),
+			// Phase 4b (alpha.14, post-L-032): per-bridge CCT-edit-screen
+			// panels. Currently the only panel is `wc_variations` — opens
+			// the linked WC product's edit page in a chrome-stripped modal
+			// iframe so editors manage variations via WC's native UI. See
+			// BUILD-PLAN §4.7 for the architecture spec and L-032 for the
+			// retrospective on why this replaced the alpha.13 declarative
+			// `variations[]` reconciler.
+			'cct_screen'                        => array(
+				'wc_variations' => array(
+					'enabled'                  => false,
+					'title'                    => '',      // empty → fallback "WooCommerce Variations"
+					'auto_force_variable_type' => false,   // D3: admin opt-in to auto-flip product type to variable on iframe load
+				),
+			),
 			'origin_tag'                        => 'flatten',
 		);
 	}
@@ -162,57 +163,55 @@ class JEDB_Flatten_Config_Manager {
 	}
 
 	/**
-	 * Default shape for one entry in `variations[]` (Phase 4b / §4.7).
+	 * Default shape for the `cct_screen` block (Phase 4b / §4.7, alpha.14).
 	 *
-	 * Used as the merge target when reading existing variation rules
-	 * from saved config_json so editors who saved bridges before this
-	 * block existed get sensible defaults filled in. Each entry
-	 * describes ONE WooCommerce variation that the bridge manages on
-	 * the linked parent product:
+	 * This block configures per-bridge panels that render on the JE CCT
+	 * edit screen for the bridge's source CCT. The L-027 iframe-flip
+	 * pattern is applied in the reverse direction here — open WC's
+	 * native admin UI inside a chrome-stripped modal from the CCT side.
 	 *
-	 *   - `slug` (required): stable identifier used as the post meta
-	 *     key on managed variations (`_jedb_variation_slug`). Bridges
-	 *     find their managed variations by querying for variations
-	 *     whose parent matches the target post AND whose
-	 *     `_jedb_variation_slug` post meta equals this slug.
-	 *   - `label`: human-readable name for admin UIs.
-	 *   - `show_when`: DSL expression (same syntax as the bridge
-	 *     condition field). When the expression evaluates true against
-	 *     the source CCT row, the variation should EXIST and be
-	 *     active. When false, the variation should be soft-deleted
-	 *     (status=private). Empty `show_when` = always show.
-	 *   - `price_field`: source CCT field name whose value populates
-	 *     the variation's regular price on each push. Empty = leave
-	 *     variation price untouched by the reconciler.
-	 *   - `downloads`: list of source CCT field names whose values
-	 *     populate the variation's downloadable files on each push.
-	 *     Each field can hold a single attachment ID, a single URL,
-	 *     or an array of attachment IDs / URLs.
-	 *   - `attributes`: map of attribute slug -> attribute value used
-	 *     when creating new variations. Editor pre-configures the
-	 *     parent product with the matching attribute taxonomy (e.g.
-	 *     `pa_format` with values `digital` / `physical`); the bridge
-	 *     declares which attribute combination identifies each
-	 *     variation. When empty, the reconciler falls back to a
-	 *     plugin-managed `pa_jedb_variant` attribute auto-created on
-	 *     first use (pitfall per §4.7 — editors usually want to
-	 *     declare attributes upfront).
-	 *   - `enabled`: when false, the variation rule is skipped during
-	 *     reconciliation. Useful for staging variations without
-	 *     activating them.
+	 * Currently the only sub-panel is `wc_variations`. Future CCT-edit-
+	 * screen panels can be added as sibling keys without breaking
+	 * existing bridges (deep-merge in merge_with_defaults handles
+	 * back-compat).
 	 *
 	 * @return array
 	 */
-	public static function default_variation() {
+	public static function default_cct_screen() {
 		return array(
-			'slug'        => '',
-			'label'       => '',
-			'show_when'   => '',
-			'price_field' => '',
-			'downloads'   => array(),
-			'attributes'  => array(),
-			'enabled'     => true,
-			'note'        => '',
+			'wc_variations' => self::default_wc_variations_panel(),
+		);
+	}
+
+	/**
+	 * Default shape for the `cct_screen.wc_variations` panel.
+	 *
+	 * Drives the "Open variations editor →" button that the alpha.14
+	 * `JEDB_CCT_Screen_Variations_Panel` injects beneath the JE save
+	 * button on CCT edit pages whose CCT slug matches this bridge's
+	 * `source_target`.
+	 *
+	 *   - `enabled`: master toggle for the panel on this bridge. Off by
+	 *     default. Hidden from the Flatten admin tab UI entirely when
+	 *     `target_target !== 'posts::product'` per D6 — the feature
+	 *     only makes sense for Woo product targets.
+	 *   - `title`: heading shown on the panel. Empty → fallback to
+	 *     "WooCommerce Variations".
+	 *   - `auto_force_variable_type`: when true, the chrome-strip script
+	 *     inside the iframe (Phase B, alpha.15) auto-triggers
+	 *     `jQuery('#product-type').val('variable').trigger('change')` on
+	 *     load so the editor doesn't have to manually flip the product
+	 *     type dropdown. D3 admin opt-in — off by default because some
+	 *     bridges may want to leave product type management entirely to
+	 *     the editor.
+	 *
+	 * @return array
+	 */
+	public static function default_wc_variations_panel() {
+		return array(
+			'enabled'                  => false,
+			'title'                    => '',
+			'auto_force_variable_type' => false,
 		);
 	}
 
@@ -352,23 +351,32 @@ class JEDB_Flatten_Config_Manager {
 		}
 		unset( $rule );
 
-		// Phase 4b: variations[] back-compat — existing alpha.3-alpha.12
-		// bridges saved before this block existed get an empty array.
-		// Each rule is deep-merged against default_variation() so older
-		// rules missing newer keys still read cleanly.
-		if ( ! isset( $config['variations'] ) || ! is_array( $config['variations'] ) ) {
-			$config['variations'] = array();
-		}
-		foreach ( $config['variations'] as &$variation_rule ) {
-			if ( ! is_array( $variation_rule ) ) {
-				$variation_rule = self::default_variation();
-				continue;
+		// Phase 4b (alpha.14): cct_screen back-compat. Existing alpha.3-
+		// alpha.13 bridges saved before this block existed get filled in
+		// with default panel configs. Each sub-panel is deep-merged
+		// against its own default factory so older saved configs missing
+		// newer keys read cleanly.
+		//
+		// alpha.13 saved a `variations[]` array that's no longer read by
+		// the engine (the reconciler was retired per L-032). The field
+		// is intentionally left in saved configs as inert data — we
+		// don't strip it on read so editors who manually re-enable the
+		// helpers (find_managed_variation, create_for_bridge) for custom
+		// automation hooks keep the data they had. wp_parse_args adds
+		// missing keys but doesn't remove existing ones.
+		if ( ! isset( $config['cct_screen'] ) || ! is_array( $config['cct_screen'] ) ) {
+			$config['cct_screen'] = self::default_cct_screen();
+		} else {
+			$config['cct_screen'] = wp_parse_args( $config['cct_screen'], self::default_cct_screen() );
+			if ( ! isset( $config['cct_screen']['wc_variations'] ) || ! is_array( $config['cct_screen']['wc_variations'] ) ) {
+				$config['cct_screen']['wc_variations'] = self::default_wc_variations_panel();
+			} else {
+				$config['cct_screen']['wc_variations'] = wp_parse_args(
+					$config['cct_screen']['wc_variations'],
+					self::default_wc_variations_panel()
+				);
 			}
-			$variation_rule = wp_parse_args( $variation_rule, self::default_variation() );
-			if ( ! is_array( $variation_rule['downloads'] ) )  { $variation_rule['downloads']  = array(); }
-			if ( ! is_array( $variation_rule['attributes'] ) ) { $variation_rule['attributes'] = array(); }
 		}
-		unset( $variation_rule );
 
 		$defaults = self::default_config_json();
 

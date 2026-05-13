@@ -1,0 +1,140 @@
+/**
+ * CCT-screen Variations Panel — Phase 4b alpha.14 (§4.7 / L-032).
+ *
+ * Styles for the "Open variations editor →" panel that ships beneath
+ * the JE save button on CCT edit pages, plus the modal overlay that
+ * launches WC's product edit page in an iframe.
+ *
+ * The modal CSS is intentionally near-identical to .jedb-cct-modal-*
+ * in bridge-meta-box.css — same overlay z-index, same frame dimensions,
+ * same close button styling. The two modal subsystems live on different
+ * admin pages (Bridge meta box on product edit, this on CCT edit) and
+ * thus never collide in the DOM.
+ *
+ * @package JEDB
+ */
+
+/* ---------------------------------------------------------------------
+ * Panel — injected beneath the JE save button on CCT edit pages.
+ * ------------------------------------------------------------------ */
+
+.jedb-cct-screen-variations-wrap {
+	margin: 18px 0;
+}
+
+.jedb-cct-screen-variations-panel {
+	padding: 14px 16px;
+	margin-bottom: 12px;
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-left: 3px solid #2271b1;
+	border-radius: 3px;
+}
+
+.jedb-cct-screen-variations-panel .jedb-cctv-title {
+	margin: 0 0 6px 0;
+	font-size: 14px;
+	font-weight: 600;
+	color: #1d2327;
+}
+
+.jedb-cct-screen-variations-panel .jedb-cctv-helper {
+	margin: 4px 0 10px 0;
+	color: #50575e;
+	font-size: 13px;
+}
+
+.jedb-cct-screen-variations-panel .jedb-cctv-helper-missing {
+	color: #a04848;
+}
+
+.jedb-cct-screen-variations-panel .button {
+	margin-top: 2px;
+}
+
+/* ---------------------------------------------------------------------
+ * Modal overlay (chrome-stripped WC product edit page iframe)
+ * Same visual pattern as .jedb-cct-modal-overlay in bridge-meta-box.css.
+ * ------------------------------------------------------------------ */
+
+body.jedb-cctv-modal-open {
+	overflow: hidden;
+}
+
+.jedb-cctv-modal-overlay {
+	position: fixed;
+	inset: 0;
+	background: rgba( 29, 35, 39, 0.72 );
+	z-index: 160001;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 24px;
+}
+
+.jedb-cctv-modal-frame {
+	position: relative;
+	width: min( 1400px, 95vw );
+	height: 92vh;
+	background: #fff;
+	border-radius: 6px;
+	box-shadow: 0 24px 60px rgba( 0, 0, 0, 0.35 );
+	overflow: hidden;
+	display: flex;
+	flex-direction: column;
+}
+
+.jedb-cctv-modal-iframe {
+	flex: 1 1 auto;
+	width: 100%;
+	border: 0;
+	display: block;
+}
+
+.jedb-cctv-modal-close {
+	position: absolute;
+	top: 8px;
+	right: 12px;
+	z-index: 10;
+	width: 32px;
+	height: 32px;
+	border: none;
+	background: rgba( 0, 0, 0, 0.4 );
+	color: #fff;
+	font-size: 22px;
+	line-height: 1;
+	cursor: pointer;
+	border-radius: 50%;
+	padding: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+}
+
+.jedb-cctv-modal-close:hover {
+	background: rgba( 0, 0, 0, 0.6 );
+}
+
+.jedb-cctv-modal-saving {
+	position: absolute;
+	inset: 0;
+	background: rgba( 255, 255, 255, 0.85 );
+	z-index: 5;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 6px;
+}
+
+.jedb-cctv-modal-saving-inner {
+	background: #fff;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+	padding: 16px 22px;
+	font-size: 14px;
+	font-weight: 500;
+	color: #1d2327;
+	box-shadow: 0 4px 18px rgba( 0, 0, 0, 0.08 );
+	display: flex;
+	align-items: center;
+}

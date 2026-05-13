@@ -55,15 +55,6 @@
 		: { add: [], remove: [] };
 	var matchingPresets = bootstrap.matching_presets || [];
 
-	// Phase 4b: variations[] state — initial rows from bootstrap, default
-	// shape for the row builder so adding a fresh row uses canonical
-	// schema fields. Read live from the DOM on syncJSON.
-	var initialVariations = bootstrap.initial_variations || [];
-	var variationDefault  = bootstrap.variation_default || {
-		slug: '', label: '', show_when: '', price_field: '',
-		downloads: [], attributes: {}, enabled: true, note: ''
-	};
-
 	function transformerByName( name ) {
 		for ( var i = 0; i < transformers.length; i++ ) {
 			if ( transformers[ i ].name === name ) { return transformers[ i ]; }
@@ -305,9 +296,9 @@
 		create_if_missing: false, snippet: null, enabled: true, note: ''
 	};
 
-	// Phase 4b: variation section DOM hooks.
-	var $variationsSection = $( '#jedb_flatten_variations_section' );
-	var $variationsTbody   = $( '#jedb_flatten_variations tbody' );
+	// Phase 4b alpha.14: WC variations panel section visibility hook
+	// (Woo-product-target-only per D6). Toggled by refreshVariationsSectionVisibility().
+	var $wcVariationsSection = $( '#jedb_flatten_wc_variations_section' );
 
 	function findTaxonomyInCatalog( slug ) {
 		for ( var i = 0; i < taxonomyCatalog.length; i++ ) {
@@ -542,130 +533,16 @@
 			}
 		}
 
-		// Phase 4b: variations section is Woo-specific — only visible
-		// when target is `posts::product`. Variations on other CPTs
-		// don't make sense (they're a Woo construct).
-		if ( $variationsSection && $variationsSection.length ) {
+		// Phase 4b alpha.14: WC Variations panel section is Woo-specific
+		// (D6). Hidden when target isn't `posts::product`.
+		if ( $wcVariationsSection && $wcVariationsSection.length ) {
 			if ( 'posts::product' === targetVal ) {
-				$variationsSection.show().attr( 'data-visible', '1' );
+				$wcVariationsSection.show().attr( 'data-visible', '1' );
 			} else {
-				$variationsSection.hide().attr( 'data-visible', '0' );
+				$wcVariationsSection.hide().attr( 'data-visible', '0' );
 			}
 		}
 	}
-
-	/* =================================================================
-	 * Phase 4b — variation row builder + DOM round-trip
-	 *
-	 * Each variation row carries 8 cells: slug, label, show_when,
-	 * price_field, downloads (CSV of field names), attributes (CSV of
-	 * key=value pairs), enabled checkbox, Remove button. The bootstrap
-	 * default shape matches default_variation() in PHP; back-compat
-	 * with older saved bridges is handled server-side via
-	 * merge_with_defaults.
-	 * ============================================================== */
-
-	function makeVariationRow( rule ) {
-
-		rule = $.extend( true, {}, variationDefault, rule || {} );
-
-		var $tr = $( '<tr class="jedb-variation-row"/>' );
-
-		var $slugIn = $( '<input type="text" class="jedb-var-slug regular-text" placeholder="with-instructions" />' ).val( rule.slug || '' );
-		var $labelIn = $( '<input type="text" class="jedb-var-label regular-text" placeholder="Includes Instructions PDF" />' ).val( rule.label || '' );
-		var $whenIn = $( '<textarea class="jedb-var-show-when" rows="2" placeholder=\'{source.has_instructions_pdf} == "yes"\' style="width:100%;font-family:Consolas,Menlo,Monaco,monospace;font-size:11px;"/>' ).val( rule.show_when || '' );
-		var $priceIn = $( '<input type="text" class="jedb-var-price-field regular-text" placeholder="instructions_price" />' ).val( rule.price_field || '' );
-		var dlVal = ( rule.downloads || [] ).join( ', ' );
-		var $dlIn = $( '<input type="text" class="jedb-var-downloads regular-text" placeholder="instructions_pdf, bonus_pdf" />' ).val( dlVal );
-		var attrPairs = [];
-		if ( rule.attributes && typeof rule.attributes === 'object' ) {
-			$.each( rule.attributes, function ( k, v ) {
-				attrPairs.push( String( k ) + '=' + String( v ) );
-			} );
-		}
-		var $attrIn = $( '<input type="text" class="jedb-var-attrs regular-text" placeholder="pa_format=digital, pa_size=large" />' ).val( attrPairs.join( ', ' ) );
-		var $enabledIn = $( '<input type="checkbox" class="jedb-var-enabled" />' ).prop( 'checked', rule.enabled !== false );
-
-		var $rmBtn = $( '<button type="button" class="button button-small button-link-delete">Remove</button>' )
-			.on( 'click', function () {
-				$tr.remove();
-				syncJSON();
-			} );
-
-		$tr.append( $( '<td/>' ).append( $slugIn ) );
-		$tr.append( $( '<td/>' ).append( $labelIn ) );
-		$tr.append( $( '<td/>' ).append( $whenIn ) );
-		$tr.append( $( '<td/>' ).append( $priceIn ) );
-		$tr.append( $( '<td/>' ).append( $dlIn ) );
-		$tr.append( $( '<td/>' ).append( $attrIn ) );
-		$tr.append( $( '<td style="text-align:center;"/>' ).append( $enabledIn ) );
-		$tr.append( $( '<td/>' ).append( $rmBtn ) );
-
-		return $tr;
-	}
-
-	function readVariationsFromDom() {
-
-		var out = [];
-
-		$variationsTbody.children( 'tr' ).each( function () {
-			var $tr = $( this );
-			var slug = $.trim( $tr.find( '.jedb-var-slug' ).val() || '' );
-			if ( '' === slug ) {
-				// Skip empty rows so half-typed-then-abandoned rules
-				// don't poison the saved JSON.
-				return;
-			}
-
-			// Parse downloads CSV → string array, dropping empties.
-			var dlRaw = String( $tr.find( '.jedb-var-downloads' ).val() || '' );
-			var dlArr = dlRaw.split( ',' )
-				.map( function ( s ) { return $.trim( s ); } )
-				.filter( function ( s ) { return s.length > 0; } );
-
-			// Parse attributes CSV `key=value, key2=value2` → object.
-			var attrRaw = String( $tr.find( '.jedb-var-attrs' ).val() || '' );
-			var attrs   = {};
-			attrRaw.split( ',' ).forEach( function ( pair ) {
-				pair = $.trim( pair );
-				if ( ! pair ) { return; }
-				var eq = pair.indexOf( '=' );
-				if ( eq <= 0 ) { return; }
-				var k = $.trim( pair.substring( 0, eq ) );
-				var v = $.trim( pair.substring( eq + 1 ) );
-				if ( k ) { attrs[ k ] = v; }
-			} );
-
-			out.push( {
-				slug:        slug,
-				label:       String( $tr.find( '.jedb-var-label' ).val() || '' ),
-				show_when:   String( $tr.find( '.jedb-var-show-when' ).val() || '' ),
-				price_field: String( $tr.find( '.jedb-var-price-field' ).val() || '' ),
-				downloads:   dlArr,
-				attributes:  attrs,
-				enabled:     $tr.find( '.jedb-var-enabled' ).is( ':checked' ),
-				note:        ''
-			} );
-		} );
-
-		return out;
-	}
-
-	function renderVariations() {
-		$variationsTbody.empty();
-		( initialVariations || [] ).forEach( function ( v ) {
-			$variationsTbody.append( makeVariationRow( v ) );
-		} );
-	}
-
-	$( '#jedb_flatten_add_variation' ).on( 'click', function () {
-		$variationsTbody.append( makeVariationRow( {} ) );
-		syncJSON();
-	} );
-
-	// React to per-input changes so the hidden config_json stays in
-	// sync without waiting for form submit.
-	$variationsTbody.on( 'input change', 'input, textarea, select', syncJSON );
 
 	$( '#jedb_flatten_add_taxonomy_rule' ).on( 'click', function () {
 		// Push a fresh row both into in-memory state and DOM so the next
@@ -696,8 +573,16 @@
 
 		cfg.mappings   = readMappingsFromDom();
 		cfg.taxonomies = readTaxonomyRulesFromDom();
-		// Phase 4b: variation rules round-trip on every form sync.
-		cfg.variations = readVariationsFromDom();
+
+		// Phase 4b alpha.14: cct_screen.wc_variations panel config.
+		// Read straight from the form fields each sync.
+		cfg.cct_screen = $.extend( true, {}, cfg.cct_screen || {}, {
+			wc_variations: {
+				enabled:                  $form.find( 'input[name="cct_screen_wc_variations_enabled"]' ).is( ':checked' ),
+				title:                    String( $form.find( 'input[name="cct_screen_wc_variations_title"]' ).val() || '' ),
+				auto_force_variable_type: $form.find( 'input[name="cct_screen_wc_variations_auto_force_variable_type"]' ).is( ':checked' )
+			}
+		} );
 
 		cfg.condition = $condInput.val() || '';
 		cfg.priority  = parseInt( $form.find( '#jedb_flatten_priority' ).val(), 10 );
@@ -769,10 +654,6 @@
 			updateTaxonomySummary();
 		}
 
-		// Phase 4b: render variation rows from bootstrap. No catalog
-		// fetch needed — variations are pure form state, no AJAX.
-		renderVariations();
-
 		syncJSON();
 	}
 
@@ -783,8 +664,8 @@
 
 	$tbody.on( 'change', 'select, input, textarea', syncJSON );
 
-	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="meta_box_show_advanced"], input[name="direction"]', syncJSON );
-	$form.on( 'input',  '#jedb_flatten_condition, #jedb_flatten_meta_box_title, #jedb_flatten_meta_box_groups', syncJSON );
+	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="meta_box_show_advanced"], input[name="direction"], input[name="cct_screen_wc_variations_enabled"], input[name="cct_screen_wc_variations_auto_force_variable_type"]', syncJSON );
+	$form.on( 'input',  '#jedb_flatten_condition, #jedb_flatten_meta_box_title, #jedb_flatten_meta_box_groups, #jedb_flatten_wc_variations_title', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 
 	// alpha.10: hide the "Reverse-direction options" row whenever

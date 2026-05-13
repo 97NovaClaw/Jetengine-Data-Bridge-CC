@@ -709,47 +709,6 @@ class JEDB_Woo_Product_Meta_Box {
 			}
 		}
 
-		// alpha.13 (Phase 4b / §4.7): variations status snapshot for
-		// Advanced Details. Lists each variations[] entry with its
-		// current managed variation ID (if any) and whether show_when
-		// currently evaluates true against the source row. Read-only
-		// diagnostic — editors author variations in the Flatten admin
-		// tab. Only meaningful for Woo product targets.
-		$variations_status = array();
-		if ( $show_advanced && ! empty( $config['variations'] ) && 'posts::product' === ( $bridge['target_target'] ?? '' ) && class_exists( 'JEDB_Target_Woo_Variation' ) ) {
-			$variation_adapter = JEDB_Target_Registry::instance()->get( 'posts::product_variation' );
-			$evaluator         = class_exists( 'JEDB_Condition_Evaluator' ) ? JEDB_Condition_Evaluator::instance() : null;
-			$bridge_id_int     = (int) ( $bridge['id'] ?? 0 );
-			$dsl_context       = array(
-				'source' => $source_data,
-				'target' => $target_adapter ? (array) $target_adapter->get( (int) $post->ID ) : array(),
-			);
-
-			foreach ( $config['variations'] as $variation_rule ) {
-				if ( ! is_array( $variation_rule ) || empty( $variation_rule['slug'] ) ) {
-					continue;
-				}
-				$v_slug      = sanitize_text_field( (string) $variation_rule['slug'] );
-				$v_enabled   = isset( $variation_rule['enabled'] ) ? (bool) $variation_rule['enabled'] : true;
-				$v_when      = isset( $variation_rule['show_when'] ) ? (string) $variation_rule['show_when'] : '';
-				$existing_id = 0;
-				if ( $variation_adapter && method_exists( $variation_adapter, 'find_managed_variation' ) ) {
-					$existing_id = (int) $variation_adapter->find_managed_variation( (int) $post->ID, $bridge_id_int, $v_slug );
-				}
-				$should_show = true;
-				if ( '' !== trim( $v_when ) && $evaluator ) {
-					try { $should_show = (bool) $evaluator->evaluate( $v_when, $dsl_context ); } catch ( \Throwable $t ) { $should_show = false; }
-				}
-				$variations_status[] = array(
-					'slug'        => $v_slug,
-					'label'       => isset( $variation_rule['label'] ) ? (string) $variation_rule['label'] : '',
-					'enabled'     => $v_enabled,
-					'should_show' => $should_show,
-					'existing_id' => $existing_id,
-				);
-			}
-		}
-
 		// Flatten admin tab deep link for "Edit this bridge".
 		$flatten_edit_url = add_query_arg(
 			array(

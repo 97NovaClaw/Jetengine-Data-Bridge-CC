@@ -563,59 +563,62 @@ endif;
 		</details>
 
 		<?php
-		/* Phase 4b — Variations section. Woo-specific (only meaningful
-		 * when target_target is `posts::product`). Hidden when not
-		 * applicable; the JS reveals/hides on target dropdown change. */
-		$variations_visible = ( 'posts::product' === $current_target );
+		/* Phase 4b — alpha.14 / §4.7 / L-032: per-bridge "Enable
+		 * WooCommerce Variations" panel. When enabled, the CCT edit
+		 * screen for source rows of this bridge gains an "Open
+		 * variations editor" panel that launches WC's native product
+		 * edit page in a chrome-stripped modal iframe. Hidden in this
+		 * admin UI when target_target isn't posts::product per D6 —
+		 * the feature only applies to Woo product targets. The alpha.13
+		 * declarative variations[] reconciler was retired per L-032;
+		 * see BUILD-PLAN §4.7 for the current architecture. */
+		$wc_variations_section_visible = ( 'posts::product' === $current_target );
+		$cct_screen_cfg = isset( $config['cct_screen'] ) && is_array( $config['cct_screen'] ) ? $config['cct_screen'] : JEDB_Flatten_Config_Manager::default_cct_screen();
+		$wc_var_cfg     = isset( $cct_screen_cfg['wc_variations'] ) && is_array( $cct_screen_cfg['wc_variations'] ) ? $cct_screen_cfg['wc_variations'] : JEDB_Flatten_Config_Manager::default_wc_variations_panel();
 		?>
 		<details
-			class="jedb-flatten-variations-section"
-			id="jedb_flatten_variations_section"
-			data-visible="<?php echo $variations_visible ? '1' : '0'; ?>"
-			<?php echo $variations_visible ? 'open' : ''; ?>
-			<?php echo $variations_visible ? '' : 'style="display:none;"'; ?>
+			class="jedb-flatten-wc-variations-section"
+			id="jedb_flatten_wc_variations_section"
+			data-visible="<?php echo $wc_variations_section_visible ? '1' : '0'; ?>"
+			<?php echo $wc_variations_section_visible ? 'open' : ''; ?>
+			<?php echo $wc_variations_section_visible ? '' : 'style="display:none;"'; ?>
 		>
 			<summary>
-				<h3 style="display:inline-block;margin:0;"><?php esc_html_e( 'Variations (push only)', 'je-data-bridge-cc' ); ?></h3>
-				<span class="description" style="margin-left:8px;"><?php esc_html_e( '— manage WooCommerce product variations from this CCT row', 'je-data-bridge-cc' ); ?></span>
+				<h3 style="display:inline-block;margin:0;"><?php esc_html_e( 'Enable WooCommerce Variations', 'je-data-bridge-cc' ); ?></h3>
+				<span class="description" style="margin-left:8px;"><?php esc_html_e( '— iframe-launch WC variations editor from the CCT edit screen', 'je-data-bridge-cc' ); ?></span>
 			</summary>
 
 			<p class="description" style="max-width:820px;">
-				<?php esc_html_e( 'Each row describes ONE WooCommerce variation that this bridge manages on the linked parent product. On every push, the variation reconciler evaluates each entry\'s show_when against the source CCT row and creates / updates / soft-deletes the variation accordingly. Variations the bridge doesn\'t know about (third-party plugins, manual variations) are left untouched. Per L-015, variations come from the SAME CCT row as the parent — they are not separate bridges.', 'je-data-bridge-cc' ); ?>
+				<?php esc_html_e( 'When enabled, the JE CCT edit screen for source rows of this bridge gains a panel beneath the save button with an "Open variations editor →" button. Clicking it opens the linked WC product\'s edit page in a focused modal iframe — editors manage variations using WC\'s native admin (attributes, prices, downloads, stock, images, everything), no declarative configuration needed in this plugin. The panel only appears after the CCT row has been linked to a WC product via the relations picker.', 'je-data-bridge-cc' ); ?>
 			</p>
 
-			<table class="widefat jedb-flatten-variations" id="jedb_flatten_variations">
-				<thead>
-					<tr>
-						<th style="width:14%;"><?php esc_html_e( 'Slug', 'je-data-bridge-cc' ); ?></th>
-						<th style="width:16%;"><?php esc_html_e( 'Label', 'je-data-bridge-cc' ); ?></th>
-						<th style="width:22%;"><?php esc_html_e( 'show_when (DSL)', 'je-data-bridge-cc' ); ?></th>
-						<th style="width:13%;"><?php esc_html_e( 'Price field', 'je-data-bridge-cc' ); ?></th>
-						<th style="width:13%;"><?php esc_html_e( 'Downloads fields', 'je-data-bridge-cc' ); ?></th>
-						<th style="width:14%;"><?php esc_html_e( 'Attributes', 'je-data-bridge-cc' ); ?></th>
-						<th style="width:8%;"><?php esc_html_e( 'Enabled', 'je-data-bridge-cc' ); ?></th>
-						<th></th>
-					</tr>
-				</thead>
-				<tbody></tbody>
-				<tfoot>
-					<tr>
-						<td colspan="8">
-							<button type="button" class="button" id="jedb_flatten_add_variation"><?php esc_html_e( '+ Add variation rule', 'je-data-bridge-cc' ); ?></button>
-							<span id="jedb_flatten_variations_status" class="description" style="margin-left:12px;"></span>
-						</td>
-					</tr>
-				</tfoot>
+			<table class="form-table">
+				<tr>
+					<th><?php esc_html_e( 'Enabled', 'je-data-bridge-cc' ); ?></th>
+					<td>
+						<label><input type="checkbox" name="cct_screen_wc_variations_enabled" value="1" <?php checked( ! empty( $wc_var_cfg['enabled'] ) ); ?> /> <?php esc_html_e( 'Show the "Open variations editor" panel on this bridge\'s CCT edit screens', 'je-data-bridge-cc' ); ?></label>
+						<p class="description"><?php esc_html_e( 'Off = no panel rendered. The bridge still syncs CCT → product normally; this only adds the variations-editor launcher to the CCT edit screen.', 'je-data-bridge-cc' ); ?></p>
+					</td>
+				</tr>
+				<tr>
+					<th><label for="jedb_flatten_wc_variations_title"><?php esc_html_e( 'Panel title', 'je-data-bridge-cc' ); ?></label></th>
+					<td>
+						<input id="jedb_flatten_wc_variations_title" name="cct_screen_wc_variations_title" type="text" class="regular-text" value="<?php echo esc_attr( (string) ( $wc_var_cfg['title'] ?? '' ) ); ?>" placeholder="<?php esc_attr_e( 'WooCommerce Variations', 'je-data-bridge-cc' ); ?>" />
+						<p class="description"><?php esc_html_e( 'Heading shown on the CCT-edit-screen panel. Empty = "WooCommerce Variations".', 'je-data-bridge-cc' ); ?></p>
+					</td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Auto-force variable type', 'je-data-bridge-cc' ); ?></th>
+					<td>
+						<label><input type="checkbox" name="cct_screen_wc_variations_auto_force_variable_type" value="1" <?php checked( ! empty( $wc_var_cfg['auto_force_variable_type'] ) ); ?> /> <?php esc_html_e( 'Automatically set the linked product\'s type to "Variable product" on iframe load', 'je-data-bridge-cc' ); ?></label>
+						<p class="description"><?php esc_html_e( 'Helpful for first-time setup so editors don\'t have to manually flip the product type dropdown inside the iframe. Default off — admin opts in per bridge. Activates when the chrome-strip script is in place (alpha.15+).', 'je-data-bridge-cc' ); ?></p>
+					</td>
+				</tr>
 			</table>
 
-			<p class="description" style="max-width:820px;">
-				<strong><?php esc_html_e( 'How it works:', 'je-data-bridge-cc' ); ?></strong>
-				<?php esc_html_e( 'show_when uses the same DSL as the Condition field above — reference source fields with {source.field_name}. Examples: "true" (always show), "{source.has_instructions_pdf} == \"yes\"", "{source.price} > 0". Price field is a source CCT field name whose value writes to the variation\'s regular_price on push. Downloads is a comma-separated list of source CCT field names whose values (attachment IDs or URLs) populate the variation\'s downloadable files. Attributes is a comma-separated list of attribute_slug=value pairs (e.g. "pa_format=digital, pa_size=large") — when empty, falls back to a plugin-managed pa_jedb_variant attribute.', 'je-data-bridge-cc' ); ?>
-			</p>
-
-			<p class="description" style="max-width:820px;color:#996800;">
-				<strong><?php esc_html_e( 'Pre-configuration recommended:', 'je-data-bridge-cc' ); ?></strong>
-				<?php esc_html_e( 'For best results, set up your parent product\'s variation attributes (e.g. pa_format = digital | physical) IN WOOCOMMERCE FIRST, then declare each variation\'s attribute combination in the Attributes column. Auto-generated attributes work but are less editor-friendly. PULL direction (variation edits back to CCT) is not yet wired — push-only for now.', 'je-data-bridge-cc' ); ?>
+			<p class="description" style="max-width:820px;color:#646970;">
+				<strong><?php esc_html_e( 'Why this exists:', 'je-data-bridge-cc' ); ?></strong>
+				<?php esc_html_e( 'Per L-032, WC variation management is delegated to WC\'s native UI. The plugin doesn\'t try to model variations declaratively — WC already has a polished variations admin (drag-reorder, per-variation images, stock, attributes, downloads, etc.) and reimplementing any of that is open-ended scope. The iframe-flip pattern (the mirror image of the L-027 modal that lets editors edit CCT data from the WC product edit screen) gives editors quick access to WC\'s variations UI without leaving the CCT row they\'re editing.', 'je-data-bridge-cc' ); ?>
 			</p>
 		</details>
 
@@ -713,8 +716,5 @@ echo wp_json_encode( array(
 	'matching_presets'      => ( class_exists( 'JEDB_Field_Presets_Manager' ) && '' !== $current_target )
 		? array_values( JEDB_Field_Presets_Manager::instance()->get_for_target( $current_target ) )
 		: array(),
-	// Phase 4b: variations[] + default shape for the JS row builder.
-	'initial_variations'    => isset( $config['variations'] ) && is_array( $config['variations'] ) ? $config['variations'] : array(),
-	'variation_default'     => JEDB_Flatten_Config_Manager::default_variation(),
 ) ); ?>
 </script>

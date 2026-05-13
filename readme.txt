@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.13
+Stable tag: 0.6.0-alpha.14
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.13) ==
+== Current Capability (v0.6.0-alpha.14) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -94,10 +94,13 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Changelog ==
 
-= Unreleased (alpha.14 + alpha.15 planned) =
-* Phase 4b reset — alpha.13's declarative variations[] reconciler is being retired per L-032 in favor of an iframe-flip architecture (the L-027 symmetric mirror). The new model adds a per-bridge `cct_screen.wc_variations` panel on the JE CCT edit screen with an "Open variations editor →" button that launches WC's native product edit page in a chrome-stripped modal iframe. The plugin delegates 100% of variation UI to WC's native admin — every WC variation feature works out of the box (per-variation images, stock, shipping class, menu_order, etc.) with zero schema bloat in our config. Documentation (L-032 + BUILD-PLAN §4.7 + risk register + roadmap entries) updated in this docs-only commit. Code changes coming in alpha.14 (Phase A: panel + iframe, no chrome strip) and alpha.15 (Phase B: chrome-strip the iframe to Product Data + Submit boxes only).
+= Unreleased (alpha.15 planned) =
+* Phase 4b Phase B — chrome-strip the WC product edit iframe to Product Data + Submit meta boxes only. CSS injection + chrome-strip script + Done/Cancel top bar identical to the L-027 CCT-edit chrome strip pattern, just targeting `post.php?post_type=product`. Form-submit interceptor on WC's `form#post` to set the sessionStorage close-on-save flag. D3 auto-force variable product type on iframe load when the bridge has `cct_screen.wc_variations.auto_force_variable_type=true`.
 
-= 0.6.0-alpha.13 =
+= 0.6.0-alpha.14 =
+* Phase 4b reset shipped — alpha.13's declarative variations[] reconciler is RETIRED per L-032 in favor of an iframe-flip architecture (the L-027 symmetric mirror). Removed: JEDB_Variation_Reconciler class (~480 lines), the variations[] schema block + default_variation() factory + merge_with_defaults() handling, the Flatten admin tab Variations section, the variation row builder in flatten-admin.js, the meta box Advanced Details "Variations managed by this bridge" subsection + its data plumbing, the variation status pill CSS. Retained as deprecated defensive surface (zero production callers): Target_Woo_Variation::find_managed_variation() + create_for_bridge() + META_VARIATION_* constants — docblocks updated with explicit @deprecated notes pointing to BUILD-PLAN §4.7 + L-032. Added: cct_screen.wc_variations config block (`enabled` / `title` / `auto_force_variable_type`), new "Enable WooCommerce Variations" section in the Flatten admin tab (D6 hidden when target_target isn't posts::product), new JEDB_CCT_Screen_Variations_Panel class that injects a panel beneath the JE save button on CCT edit pages with an "Open variations editor →" button, new cct-screen-variations-panel.js with full modal mechanics mirroring the L-027/L-029 pattern (D1/R3 hide-relations-block when linked, D5 silent hide in iframe context, postMessage protocol, sessionStorage close-on-save flag wired for forward-compat with Phase B), new CSS. Phase A renders the iframe without chrome stripping — full WC admin chrome inside the modal but Done/Cancel top bar overlays. Phase B (alpha.15) will scope the iframe to Product Data + Submit only. Sync log context_json no longer carries a `variations` block. No schema migration — existing alpha.13 bridges read cleanly through merge_with_defaults() with the new cct_screen.wc_variations block defaulting to disabled.
+
+= 0.6.0-alpha.13 = (RETIRED in alpha.14 per L-032)
 * Phase 4b - Variation reconciliation engine shipped (§4.7 / L-015). New variations[] block on flatten configs + JEDB_Variation_Reconciler walks each bridge's variations on every push, evaluates show_when DSL against the source CCT row, and creates / updates / soft-deletes the corresponding WooCommerce variation under the linked parent product. Wired into JEDB_Flattener::apply_bridge() after mappings + taxonomies. Target_Woo_Variation gains find_managed_variation() + create_for_bridge() helpers. Flatten admin tab gains a Variations section (visible when target=posts::product) with per-variation rows for slug, label, show_when, price_field, downloads, attributes, enabled. Bridge meta box Advanced Details gains a "Variations managed by this bridge" diagnostic when show_advanced=true. The BBHQ "Has Instructions PDF" use case end-to-end: editing has_instructions_pdf on a Mosaic CCT row creates/removes the matching variation on the linked product, populates its price from instructions_price, attaches downloadable files from instructions_pdf_attachment. Tier 2 deferred: PULL direction (variation->CCT), variation attribute taxonomy auto-creation, menu_order, per-row Validate button. No engine changes outside the new reconciler insertion point. No schema migration.
 
 = 0.6.0-alpha.12 =
@@ -172,7 +175,10 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 == Upgrade Notice ==
 
-= 0.6.0-alpha.13 =
+= 0.6.0-alpha.14 =
+Phase 4b reset — alpha.13's declarative variations[] reconciler is retired per L-032. Replaced with a per-bridge "Enable WooCommerce Variations" panel on the JE CCT edit screen that launches WC's native product edit page in a modal iframe (Phase A — chrome strip coming in alpha.15). Editors manage variations using WC's full native UI; no declarative schema. Existing alpha.13 bridges read cleanly via merge_with_defaults. NO engine behavior change for non-variation bridges.
+
+= 0.6.0-alpha.13 = (retired)
 Phase 4b - Variation reconciliation. A bridge can now manage WooCommerce variations on its linked parent product from a variations[] array. show_when DSL decides per-push whether each variation should exist (active) or be soft-deleted (status=private). Push-only for this release; PULL deferred. No schema migration. No engine changes outside the new reconciler insertion point.
 
 = 0.6.0-alpha.12 =

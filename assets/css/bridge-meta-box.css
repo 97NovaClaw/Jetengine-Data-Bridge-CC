@@ -240,40 +240,6 @@
 	font-style: italic;
 }
 
-.jedb-bridge-variations-status {
-	margin: 4px 0 8px 0;
-	padding: 0;
-	list-style: none;
-}
-
-.jedb-bridge-variations-status li {
-	margin: 2px 0;
-	padding: 4px 8px;
-	border-radius: 3px;
-	font-size: 12px;
-	border-left: 3px solid #c3c4c7;
-	background: #f6f7f7;
-}
-
-.jedb-bridge-variations-status li.jedb-var-state-active   { border-left-color: #5fa370; background: #f0f7f1; }
-.jedb-bridge-variations-status li.jedb-var-state-pending  { border-left-color: #d39c2e; background: #fdf6e8; }
-.jedb-bridge-variations-status li.jedb-var-state-hidden   { border-left-color: #b88a8a; background: #fdf3f3; }
-.jedb-bridge-variations-status li.jedb-var-state-disabled { border-left-color: #a0a3a8; background: #f4f4f5; opacity: 0.85; }
-.jedb-bridge-variations-status li.jedb-var-state-inactive { border-left-color: #c3c4c7; background: #f6f7f7; }
-
-.jedb-bridge-variations-status code {
-	font-size: 11px;
-	padding: 1px 5px;
-}
-
-.jedb-bridge-variations-status small {
-	color: #707376;
-}
-
-.jedb-bridge-variations-status .jedb-var-state-label {
-	font-weight: 600;
-}
-
 .jedb-bridge-recent-log {
 	margin: 6px 0 6px 18px;
 	font-size: 12px;

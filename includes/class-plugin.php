@@ -95,7 +95,6 @@ class JEDB_Plugin {
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-condition-evaluator.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flatten-config-manager.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-taxonomy-applier.php';
-		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-variation-reconciler.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flattener.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-reverse-flattener.php';
 
@@ -113,7 +112,6 @@ class JEDB_Plugin {
 		JEDB_Sync_Guard::instance();
 		JEDB_Sync_Log::instance();
 		JEDB_Taxonomy_Applier::instance();
-		JEDB_Variation_Reconciler::instance();
 		JEDB_Flattener::instance();
 		JEDB_Reverse_Flattener::instance();
 		JEDB_CCT_Single_Redirect::instance();
@@ -194,6 +192,15 @@ class JEDB_Plugin {
 		if ( class_exists( 'WooCommerce' ) ) {
 			require_once JEDB_PLUGIN_DIR . 'includes/admin/class-woo-product-meta-box.php';
 			JEDB_Woo_Product_Meta_Box::instance();
+
+			// Phase 4b alpha.14 (§4.7 / L-032): CCT-screen panel that
+			// launches the linked WC product's edit page in a chrome-
+			// stripped modal iframe — the symmetric mirror of the
+			// Bridge meta box's CCT-edit modal. Same WC dependency:
+			// the iframe target is a `post.php?post_type=product`
+			// edit page, which only exists when WooCommerce is loaded.
+			require_once JEDB_PLUGIN_DIR . 'includes/admin/class-cct-screen-variations-panel.php';
+			JEDB_CCT_Screen_Variations_Panel::instance();
 		}
 	}
 }
