@@ -250,10 +250,22 @@ class JEDB_CCT_Screen_Variations_Panel {
 
 			$edit_url = '';
 			if ( $target_post_id > 0 ) {
+				// alpha.16: per-bridge admin choice between two chrome
+				// modes.
+				//   - `stripped` (default): hide WP chrome + strip down
+				//      to ONLY #woocommerce-product-data + #submitdiv.
+				//      Focused variations work.
+				//   - `light`: hide WP chrome only (admin bar, sidebar,
+				//      footer, notices, page title). Render the FULL
+				//      WC product editor inside the modal. Admin
+				//      discretion per bridge.
+				// Both modes still get the Done/Cancel top bar +
+				// form-submit interceptor + close-on-save handler.
+				$chrome_mode = ! empty( $wc_var['show_full_page'] ) ? 'light' : 'stripped';
 				$args = array(
 					'post'        => $target_post_id,
 					'action'      => 'edit',
-					'jedb_chrome' => 'stripped',
+					'jedb_chrome' => $chrome_mode,
 					'jedb_return' => rawurlencode( $return_url ),
 				);
 				// D3 (alpha.15): the chrome-strip script reads this
@@ -299,7 +311,7 @@ class JEDB_CCT_Screen_Variations_Panel {
 	}
 
 	/* -----------------------------------------------------------------------
-	 * Chrome-strip for the WC product edit page (Phase B / alpha.15)
+	 * Chrome-strip for the WC product edit page (Phase B / alpha.15+)
 	 * --------------------------------------------------------------------
 	 *
 	 * Symmetric mirror of JEDB_Woo_Product_Meta_Box::
@@ -315,12 +327,23 @@ class JEDB_CCT_Screen_Variations_Panel {
 	 *   postMessages the parent to close (clean save) or postMessages
 	 *   an error + un-hides (validation failure).
 	 *
-	 * Tier 2 (only when `?jedb_chrome=stripped`): the actual visual
-	 *   chrome strip — hides admin bar / sidebar / title / non-WC
-	 *   meta boxes, leaving only #woocommerce-product-data + #submitdiv
-	 *   visible. Adds a fixed top bar with Done + Cancel buttons.
-	 *   Intercepts `form#post` submit to set the close flag so Tier 1
-	 *   closes the modal after WC's post-save redirect.
+	 * Tier 2 (when `?jedb_chrome=stripped` or `?jedb_chrome=light`):
+	 *   chrome-hide CSS + Done/Cancel top bar + form submit interceptor.
+	 *
+	 *   Two modes (alpha.16):
+	 *     - `stripped` (default): hide everything inside `.wrap`
+	 *       except `#poststuff`, then hide every `.postbox` except
+	 *       `#woocommerce-product-data` and `#submitdiv`. Focused
+	 *       variations work — only Product Data + Submit visible.
+	 *     - `light`: hide WP chrome only (admin bar, sidebar, footer,
+	 *       page title, admin notices). The full product editor
+	 *       renders inside the modal — title editor, all meta boxes,
+	 *       sidebars. Admin discretion per bridge.
+	 *
+	 *   In both modes: kills the floating notice / Activity / Dismiss
+	 *   chrome that plugins inject into `.wrap` (Deployer for Git, Jet
+	 *   Woo Builder Data Update, etc.) — these were leaking through in
+	 *   alpha.15 and clipping the Publish meta box.
 	 *
 	 * D3 implementation (alpha.15): when the bridge has
 	 *   `cct_screen.wc_variations.auto_force_variable_type=true`, the
@@ -366,6 +389,11 @@ class JEDB_CCT_Screen_Variations_Panel {
 		if ( ! current_user_can( JEDB_CAPABILITY ) ) {
 			return;
 		}
+
+		// Valid chrome modes per alpha.16. Anything else → no Tier 2.
+		$valid_chrome_modes = array( 'stripped', 'light' );
+		$is_chrome_mode     = in_array( $chrome, $valid_chrome_modes, true );
+		$is_strict_mode     = ( 'stripped' === $chrome );
 
 		/* ------------------------------------------------------------
 		 * TIER 1 — Always injected on product edit pages.
@@ -440,16 +468,25 @@ class JEDB_CCT_Screen_Variations_Panel {
 		/* ------------------------------------------------------------
 		 * TIER 2 — Only when explicitly opened from the modal launcher.
 		 *
-		 * Chrome strip CSS (hides everything except #woocommerce-
-		 * product-data + #submitdiv) + Done/Cancel top bar + WC form
-		 * submit interceptor (sets the sessionStorage close flag so
-		 * Tier 1 closes the modal on the post-save reload).
+		 * Two modes (alpha.16):
+		 *   - `stripped` (default): focused variations work — only
+		 *     #woocommerce-product-data + #submitdiv visible.
+		 *   - `light`: full product editor with WP chrome hidden.
+		 *
+		 * In both modes: kill the floating notice / Activity / Dismiss
+		 * chrome that plugins inject into `.wrap` (Deployer for Git,
+		 * Jet Woo Builder Data Update, etc.). These were clipping the
+		 * Publish meta box in alpha.15.
 		 * ----------------------------------------------------------- */
-		if ( 'stripped' !== $chrome ) {
+		if ( ! $is_chrome_mode ) {
 			return;
 		}
 		?>
 		<style id="jedb-wc-chrome-strip">
+			/* =====================================================
+			 * Base layer (both `stripped` and `light` modes)
+			 * ===================================================== */
+
 			/* ---- Hide WP admin chrome ---- */
 			html.wp-toolbar { padding-top: 0 !important; }
 			#wpadminbar, #adminmenuwrap, #adminmenuback, #adminmenu, #wpfooter, #screen-meta, #screen-meta-links { display: none !important; }
@@ -457,29 +494,41 @@ class JEDB_CCT_Screen_Variations_Panel {
 			#wpbody { padding-top: 0 !important; }
 			body.wp-admin { background: #f6f7f7; }
 
-			/* ---- Hide page chrome (title bar, "Add New" button, header bars) ---- */
+			/* ---- Hide page chrome (title bar, "Add New" button) ---- */
+			.wrap h1,
 			.wrap > h1.wp-heading-inline,
 			.wrap > .page-title-action,
 			.wrap > .wp-header-end,
 			.wrap > hr.wp-header-end { display: none !important; }
 
-			/* ---- Hide title editor + permalink + visual editor ---- */
-			#post-body-content { display: none !important; }
-
-			/* ---- Hide all postboxes EXCEPT WC Product Data + Submit ---- */
-			.postbox:not(#woocommerce-product-data):not(#submitdiv) { display: none !important; }
-			/* Hide drag handle on the surviving boxes (we don't want
-			   editors collapsing the only useful meta box). */
-			#woocommerce-product-data .handlediv,
-			#submitdiv .handlediv { display: none !important; }
-			/* Force the remaining boxes to be expanded even if WP's
-			   user_meta postbox state has them collapsed. */
-			#woocommerce-product-data,
-			#submitdiv { display: block !important; }
-			#woocommerce-product-data.closed > .inside,
-			#submitdiv.closed > .inside { display: block !important; }
-			#woocommerce-product-data > .inside,
-			#submitdiv > .inside { display: block !important; }
+			/* ---- Kill admin notices ----
+			 *
+			 * Plugins (Deployer for Git, Jet Woo Builder, Yoast SEO,
+			 * WC's own update prompts, etc.) inject notices into
+			 * `.wrap` between the title and `#poststuff`. These leak
+			 * into the focused modal and frequently overlap the
+			 * Publish meta box via floating .notice-dismiss buttons.
+			 * Kill them all inside the iframe — editors can dismiss
+			 * them on a direct admin visit.
+			 */
+			.notice,
+			.notice-info,
+			.notice-success,
+			.notice-warning,
+			.notice-error,
+			.updated,
+			.update-nag,
+			.error,
+			div.notice,
+			div[class*="-notice"],
+			.wrap > .notice,
+			.wrap > .updated,
+			.wrap > .error,
+			.wrap > .update-nag,
+			#wpbody-content > .notice,
+			#wpbody-content > .updated,
+			#wpbody-content > .error,
+			.notice-dismiss { display: none !important; }
 
 			/* ---- Reserve room for the floating Done bar at the top ---- */
 			#wpbody-content > .wrap { padding-top: 56px !important; }
@@ -516,6 +565,25 @@ class JEDB_CCT_Screen_Variations_Panel {
 				border-color: rgba(255,255,255,0.3);
 			}
 			.jedb-wc-frame-bar button:hover { opacity: 0.9; }
+
+			<?php if ( $is_strict_mode ) : ?>
+			/* =====================================================
+			 * Strict layer — `stripped` mode only.
+			 *
+			 * Hide title editor + permalink + visual editor + every
+			 * postbox EXCEPT #woocommerce-product-data + #submitdiv.
+			 * Forces survivors visible even if WP's user_meta postbox
+			 * state had them collapsed.
+			 * ===================================================== */
+			#post-body-content { display: none !important; }
+			.postbox:not(#woocommerce-product-data):not(#submitdiv) { display: none !important; }
+			#woocommerce-product-data,
+			#submitdiv { display: block !important; }
+			#woocommerce-product-data.closed > .inside,
+			#submitdiv.closed > .inside { display: block !important; }
+			#woocommerce-product-data > .inside,
+			#submitdiv > .inside { display: block !important; }
+			<?php endif; ?>
 		</style>
 		<script id="jedb-wc-chrome-strip-js">
 			(function () {
@@ -536,6 +604,11 @@ class JEDB_CCT_Screen_Variations_Panel {
 					} catch ( e ) {}
 				}
 
+				function startSave() {
+					setCloseFlag();
+					notifyParent( { type: 'jedb:wc-save-starting' } );
+				}
+
 				function postClose( reload ) {
 					try {
 						window.parent.postMessage(
@@ -551,30 +624,62 @@ class JEDB_CCT_Screen_Variations_Panel {
 
 				document.addEventListener( 'DOMContentLoaded', function () {
 
-					/* ---- WC form submit interceptor ---- */
-					// WC's product edit uses the standard WP `form#post`
-					// which posts to post.php?action=editpost. We attach
-					// a submit listener that (a) sets the close flag so
-					// Tier 1 closes the modal on the post-save reload,
-					// and (b) tells the parent to show a "Saving…"
-					// overlay. The listener fires for both the Update
-					// button click AND for our Done button below (which
-					// clicks WC's Update button programmatically).
 					var wcForm = document.querySelector( 'form#post' );
+
+					/* ---- WC form submit interceptor ----
+					 *
+					 * Belt-and-suspenders coverage for Issue 3 (alpha.15
+					 * staging report): the close flag wasn't always
+					 * being set on save, so Tier 1 couldn't auto-close
+					 * the modal after WC's redirect.
+					 *
+					 * Three triggers, in priority order:
+					 *   1. `submit` event on `form#post` — fires for
+					 *      ANY form submission path, including direct
+					 *      user clicks on the Publish button.
+					 *   2. `click` event on each submit button
+					 *      (`#publish`, `#save-post`, `input[name="save"]`).
+					 *      Fires BEFORE the form submit so we definitely
+					 *      set the flag even if WC's own submit handler
+					 *      stops propagation on the submit event.
+					 *   3. `beforeunload` on the window — last-ditch
+					 *      fallback to catch programmatic form.submit()
+					 *      calls that don't fire submit events.
+					 *
+					 * `beforeunload` is guarded by an `armed` flag — we
+					 * only set the close flag if the user has actually
+					 * intent-signalled a save (clicked Done or a save
+					 * button). Otherwise navigation from the iframe to
+					 * a non-product page (e.g., clicking a link in
+					 * "Linked Products") would incorrectly close the
+					 * modal.
+					 */
+					var saveArmed = false;
+
 					if ( wcForm ) {
 						wcForm.addEventListener( 'submit', function () {
-							setCloseFlag();
-							notifyParent( { type: 'jedb:wc-save-starting' } );
-						} );
+							saveArmed = true;
+							startSave();
+						}, true ); // capture phase — fires even if WC's handlers stopPropagation
 					}
 
+					var submitButtons = document.querySelectorAll(
+						'form#post #publish, form#post #save-post, form#post input[name="save"], form#post input[type="submit"][name="save"]'
+					);
+					Array.prototype.forEach.call( submitButtons, function ( btn ) {
+						btn.addEventListener( 'click', function () {
+							saveArmed = true;
+							startSave();
+						} );
+					} );
+
+					window.addEventListener( 'beforeunload', function () {
+						if ( saveArmed ) {
+							setCloseFlag();
+						}
+					} );
+
 					/* ---- D3: auto-flip product type to variable ---- */
-					// When the bridge has auto_force_variable_type=true,
-					// pre-select "Variable product" in the #product-type
-					// dropdown and trigger WC's change handlers so the
-					// Product Data tabs re-render with variation-aware
-					// state. Skipped silently if WC's jQuery handlers
-					// aren't loaded yet or if the type is already set.
 					if ( FORCE_VARIABLE ) {
 						try {
 							if ( typeof jQuery !== 'undefined' ) {
@@ -597,11 +702,6 @@ class JEDB_CCT_Screen_Variations_Panel {
 					var actions = document.createElement( 'span' );
 					actions.className = 'jedb-wc-frame-actions';
 
-					// Done = click WC's Update button so all WC's
-					// internal submit handlers fire (variation save,
-					// attribute serialization, downloadable file
-					// processing, etc.). Fall back to form.submit() if
-					// the button isn't found.
 					var doneBtn = document.createElement( 'button' );
 					doneBtn.type = 'button';
 					doneBtn.textContent = <?php echo wp_json_encode( __( 'Done · Save & return to CCT', 'je-data-bridge-cc' ) ); ?>;
@@ -611,16 +711,22 @@ class JEDB_CCT_Screen_Variations_Panel {
 							return;
 						}
 
-						setCloseFlag();
-						notifyParent( { type: 'jedb:wc-save-starting' } );
+						saveArmed = true;
+						startSave();
 
 						// Prefer clicking WC's Update button so all its
 						// submit handlers fire. WC's Publish meta box
 						// uses #publish (or #save-post for drafts);
-						// we'll grab whichever is present.
-						var submitBtn = wcForm.querySelector( '#publish, #save-post, input[type="submit"][name="save"], button[type="submit"]' );
+						// we'll grab whichever is present. Last resort:
+						// requestSubmit() (modern) or form.submit().
+						var submitBtn = wcForm.querySelector( '#publish, #save-post, input[type="submit"][name="save"]' );
 						if ( submitBtn ) {
 							submitBtn.click();
+							return;
+						}
+
+						if ( typeof wcForm.requestSubmit === 'function' ) {
+							wcForm.requestSubmit();
 						} else {
 							wcForm.submit();
 						}

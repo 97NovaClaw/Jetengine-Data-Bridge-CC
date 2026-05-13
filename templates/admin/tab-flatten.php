@@ -611,7 +611,14 @@ endif;
 					<th><?php esc_html_e( 'Auto-force variable type', 'je-data-bridge-cc' ); ?></th>
 					<td>
 						<label><input type="checkbox" name="cct_screen_wc_variations_auto_force_variable_type" value="1" <?php checked( ! empty( $wc_var_cfg['auto_force_variable_type'] ) ); ?> /> <?php esc_html_e( 'Automatically set the linked product\'s type to "Variable product" on iframe load', 'je-data-bridge-cc' ); ?></label>
-						<p class="description"><?php esc_html_e( 'Helpful for first-time setup so editors don\'t have to manually flip the product type dropdown inside the iframe. Default off — admin opts in per bridge. Activates when the chrome-strip script is in place (alpha.15+).', 'je-data-bridge-cc' ); ?></p>
+						<p class="description"><?php esc_html_e( 'Helpful for first-time setup so editors don\'t have to manually flip the product type dropdown inside the iframe. Default off — admin opts in per bridge.', 'je-data-bridge-cc' ); ?></p>
+					</td>
+				</tr>
+				<tr>
+					<th><?php esc_html_e( 'Show full product editor', 'je-data-bridge-cc' ); ?></th>
+					<td>
+						<label><input type="checkbox" name="cct_screen_wc_variations_show_full_page" value="1" <?php checked( ! empty( $wc_var_cfg['show_full_page'] ) ); ?> /> <?php esc_html_e( 'Render the entire WC product page (no chrome strip)', 'je-data-bridge-cc' ); ?></label>
+						<p class="description"><?php esc_html_e( 'When off (default), the iframe shows ONLY the Product Data + Update meta boxes — focused for variations work. When on, the iframe renders the FULL product editor (title, content, all meta boxes — SEO, attributes, featured image, etc.) with only the WP admin chrome hidden. Per-bridge admin discretion — pick whichever UX scope fits the bridge.', 'je-data-bridge-cc' ); ?></p>
 					</td>
 				</tr>
 			</table>

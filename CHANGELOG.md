@@ -4,7 +4,68 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
-No items currently queued. Phase 4b is complete — both Phase A (alpha.14) and Phase B (alpha.15) have shipped. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+No items currently queued. Phase 4b is complete. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+## [0.6.0-alpha.16] — 2026-05-17
+
+**Phase 4b polish — three staging-report fixes on top of alpha.15's chrome strip + new per-bridge "Show full product editor" mode for admin UX discretion.**
+
+Staging the alpha.15 chrome strip surfaced three issues:
+
+1. **Right-side overlay clipping Publish meta box.** WP admin notices, page title (`Edit Product`), and plugin-injected floating elements (Deployer for Git badge, Jet Woo Builder data-update notice, Yoast SEO Activity panel, generic `.notice-dismiss` floaters) were leaking through the chrome strip and overlapping the Publish meta box's Update button on the right edge of the iframe.
+2. **Modal didn't auto-close after Done button save.** Clicking the Done button in the top bar would submit WC's product form, but on the post-save reload the modal stayed open instead of auto-closing — leaving a WP-chromed product edit page inside the iframe that the editor had to manually close.
+3. **Admin discretion needed.** alpha.15 always stripped down to Product Data + Submit. Some bridges may want editors to access the full WC product editor (title, content, all meta boxes — SEO, attributes, featured image) inside the modal, not just the variations work.
+
+This release fixes all three.
+
+### Added
+
+- **`cct_screen.wc_variations.show_full_page` flag** on the flatten config schema. Default `false` (current behavior — strip to Product Data + Submit only). When `true`, the iframe URL gets `?jedb_chrome=light` instead of `?jedb_chrome=stripped`, and Tier 2 skips the strip-to-Product-Data CSS while keeping everything else (WP chrome hidden, notices killed, page title hidden, Done/Cancel bar, form-submit interceptor, close-on-save).
+- **New "Show full product editor" checkbox** in the Flatten admin tab's "Enable WooCommerce Variations" section. Sits below the auto-force-variable-type checkbox. Helper text explains the two modes — focused (default) vs. full editor — and notes that WP admin chrome is hidden in both.
+- **`flatten-admin.js`** rounds-trips the new field via `cfg.cct_screen.wc_variations.show_full_page` in `buildConfig` + change listener.
+
+### Fixed (Issue 1: right-side overlay)
+
+- **Aggressive notice-killer CSS** in Tier 2 base layer (applies to both `stripped` and `light` modes): hides `.notice`, `.notice-info`, `.notice-success`, `.notice-warning`, `.notice-error`, `.updated`, `.update-nag`, `.error`, `div.notice`, `div[class*="-notice"]`, `.notice-dismiss`, plus `.wrap > .notice`, `.wrap > .updated`, `.wrap > .error`, `.wrap > .update-nag`, and the same set under `#wpbody-content >`. Kills the Deployer for Git badge + Jet Woo Builder Data Update banner + any other plugin-injected admin notices that leak into the modal.
+- **Stronger page-title hide**: `.wrap h1`, `.wrap > h1.wp-heading-inline`, `.wrap > .page-title-action`, `.wrap > .wp-header-end`, `.wrap > hr.wp-header-end` (was only the `.wrap > h1.wp-heading-inline` variant in alpha.15 — some themes nest the title differently).
+- Editors can still dismiss legitimate admin notices on a direct (non-iframe) admin visit — the kill only applies inside the focused modal context (gated on `?jedb_chrome=stripped` or `light`).
+
+### Fixed (Issue 2: modal didn't auto-close after Done save)
+
+Belt-and-suspenders coverage on the close-on-save flag — three independent triggers:
+
+- **`submit` event on `form#post`** with capture phase (`addEventListener('submit', ..., true)`) so we fire even if WC's own submit handlers call `stopPropagation()` on the bubbled event.
+- **`click` event on each submit button** (`#publish`, `#save-post`, `input[name="save"]`, `input[type="submit"][name="save"]`) — fires BEFORE the form submit event, catching cases where WP/WC's onclick handlers call `form.submit()` (method, doesn't fire submit event) instead of letting the click bubble normally.
+- **`beforeunload` on the window** — last-ditch fallback to catch programmatic form submissions that don't fire either submit OR click events. Guarded by a `saveArmed` boolean flag — only sets the close flag if the editor has actually intent-signalled a save (clicked Done, or clicked a submit button, or triggered a submit event). Otherwise navigation from the iframe to a non-product page (clicking a "Linked Products" link, etc.) would incorrectly auto-close the modal.
+
+This trio guarantees the close flag is set in sessionStorage before WC's redirect-after-save, which is what Tier 1's close-on-save handler reads on the post-save page reload to trigger the modal close + parent reload.
+
+- **Done button fallback chain** now also includes `wcForm.requestSubmit()` (modern, fires submit event) before falling back to `wcForm.submit()` (legacy, does NOT fire submit event). The button-click handlers above catch the legacy fallback path too.
+
+### Fixed (Issue 1 follow-on, bonus)
+
+- The user-visible "Activity / Dismiss" floating widget on the right edge was a `.notice-dismiss` button rendered inside a plugin's `.notice` — killed by the new notice-killer CSS.
+
+### Changed
+
+- **PHP iframe URL builder** (`build_panels_for()`) now picks `?jedb_chrome=light` or `?jedb_chrome=stripped` based on the per-bridge `show_full_page` flag instead of always `stripped`.
+- **`maybe_inject_wc_chrome_strip()`** Tier 2 gate broadened from `'stripped' !== $chrome` to `! in_array( $chrome, ['stripped', 'light'], true )`. Tier 2 CSS now split into a base layer (always applied in any chrome mode — WP chrome hide + notice killer + page title hide + top bar reservation + bar styling) and a strict layer (only applied in `stripped` mode — `#post-body-content` hide + `.postbox:not(...)` filter).
+- The Tier 2 method docblock now documents the two-mode design + the notice-killer rationale + the alpha.16 staging report context.
+
+### Migration
+
+Zero. Existing alpha.15 bridges that have `cct_screen.wc_variations.enabled = true` continue to use the focused stripped mode (`show_full_page` defaults to false via `merge_with_defaults()`). Admins who want the full-editor mode tick the new checkbox on their bridge and re-save.
+
+### Verification
+
+1. **Notice killer**: open a CCT row with the variations panel enabled. Click "Open variations editor →". Inside the modal, you should see NO admin notices regardless of how many your install has (Deployer for Git, Jet Woo Builder Data Update, Yoast SEO Activity, etc. — all hidden). The Publish meta box should be fully visible on the right with no clipping.
+2. **Page title gone**: the `Edit Product` title heading should NOT appear above the Product Data box.
+3. **Done button auto-close**: edit a variation, click the top-bar Done button. The Saving overlay should appear, then the modal should auto-close + the CCT page should reload. No more manual "click × to close" required.
+4. **Save via WC's Update button**: same outcome as #3 — Done is just a shortcut for clicking WC's Update.
+5. **Cancel still works**: click Cancel. Modal closes without saving. CCT page does NOT reload.
+6. **Non-save navigation doesn't close**: open the modal, click a link inside the iframe that navigates somewhere (e.g., "Linked Products" cross-sell picker if applicable). The modal should NOT auto-close — the `saveArmed` flag prevents that.
+7. **`show_full_page=false` (default)**: stripped mode renders only Product Data + Submit, same as alpha.15 — confirm no regression.
+8. **`show_full_page=true`**: tick the checkbox, save the bridge, reopen the modal. You should see the FULL WC product editor (title editor, content editor, ALL meta boxes including SEO, Attributes, Featured Image, Linked Products, etc.) inside the modal — only WP admin chrome (admin bar, sidebar, footer, notices, page title) hidden. The Done/Cancel top bar still shows. Save/close behavior identical to stripped mode.
 
 ## [0.6.0-alpha.15] — 2026-05-17
 

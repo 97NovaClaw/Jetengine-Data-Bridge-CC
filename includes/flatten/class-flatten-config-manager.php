@@ -204,6 +204,16 @@ class JEDB_Flatten_Config_Manager {
 	 *     type dropdown. D3 admin opt-in — off by default because some
 	 *     bridges may want to leave product type management entirely to
 	 *     the editor.
+	 *   - `show_full_page` (alpha.16): when true, the iframe renders the
+	 *     FULL WC product edit page inside the modal — title editor,
+	 *     all meta boxes (SEO, attributes, featured image, etc.), the
+	 *     works — with only WP admin chrome (admin bar, sidebar,
+	 *     footer, notices, page title) hidden. The Done/Cancel top bar
+	 *     + close-on-save still apply. When false (default), the
+	 *     iframe is stripped down to ONLY the Product Data + Submit
+	 *     meta boxes for focused variations work. Per-bridge admin
+	 *     discretion — different bridges may want different UX
+	 *     scopes.
 	 *
 	 * @return array
 	 */
@@ -212,6 +222,7 @@ class JEDB_Flatten_Config_Manager {
 			'enabled'                  => false,
 			'title'                    => '',
 			'auto_force_variable_type' => false,
+			'show_full_page'           => false,
 		);
 	}
 

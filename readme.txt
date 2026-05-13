@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.15
+Stable tag: 0.6.0-alpha.16
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.15) ==
+== Current Capability (v0.6.0-alpha.16) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -96,6 +96,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 = Unreleased =
 * No items currently queued. Phase 4b is complete. Next focus per roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+= 0.6.0-alpha.16 =
+* Phase 4b polish — three staging-report fixes on top of alpha.15's chrome strip + new per-bridge "Show full product editor" mode for admin UX discretion. (1) Notice killer: aggressive CSS that hides all admin notices (.notice, .notice-info, .notice-success, .notice-warning, .notice-error, .updated, .update-nag, .error, div.notice, div[class*="-notice"], .notice-dismiss, .wrap > .notice family, #wpbody-content > .notice family) plus stronger page-title hide (.wrap h1, .wrap > h1.wp-heading-inline, .wrap > .page-title-action, .wrap > .wp-header-end, .wrap > hr.wp-header-end). Kills the Deployer for Git badge + Jet Woo Builder Data Update banner + .notice-dismiss floaters that were leaking through the chrome strip and overlapping the Publish meta box in alpha.15. Applies in both chrome modes (stripped/light). (2) Modal auto-close fix: belt-and-suspenders coverage on the close-on-save flag via three independent triggers — submit event with capture phase on form#post (fires even if WC's handlers stopPropagation), click events on each submit button (#publish, #save-post, input[name="save"]) to catch form.submit() method calls that don't fire submit events, and beforeunload on the window as last-ditch fallback (guarded by a saveArmed flag so non-save navigation doesn't incorrectly close). Done button now also tries requestSubmit() (modern, fires submit event) before falling back to form.submit() (legacy). (3) New cct_screen.wc_variations.show_full_page boolean schema field (default false), new "Show full product editor" checkbox in the Flatten admin tab's WC Variations section, JS round-trip via cfg.cct_screen.wc_variations.show_full_page. When true, iframe URL gets ?jedb_chrome=light instead of ?jedb_chrome=stripped, and Tier 2 skips the strip-to-Product-Data CSS while keeping everything else (WP chrome hidden, notices killed, page title hidden, Done/Cancel bar, form-submit interceptor, close-on-save). Per-bridge admin discretion — focused (default) vs. full WC editor inside the modal.
 
 = 0.6.0-alpha.15 =
 * Phase 4b Phase B shipped — chrome-strip the WC product edit iframe to Product Data + Submit meta boxes only. New JEDB_CCT_Screen_Variations_Panel::maybe_inject_wc_chrome_strip() symmetric mirror of JEDB_Woo_Product_Meta_Box::maybe_inject_cct_chrome_strip(). Hooked on admin_head for post.php where post_type=product. Two-tier structure: Tier 1 (always on product edit pages) is the iframe-aware close-on-save handler reading sessionStorage jedb_close_wc_modal_on_load flag (distinct from CCT-side jedb_close_modal_on_load to prevent cross-contamination); Tier 2 (only when ?jedb_chrome=stripped) hides admin bar / sidebar / footer / screen options / page title / #post-body-content / ALL .postbox except #woocommerce-product-data and #submitdiv, forces the surviving boxes open + visible, removes drag handles, reserves 56px for the .jedb-wc-frame-bar top bar with title text + Cancel + Done buttons, and intercepts form#post submit to set the close flag. D3 auto-force variable product type: when bridge has cct_screen.wc_variations.auto_force_variable_type=true, iframe URL includes &jedb_force_variable=1 which the chrome-strip script reads via PHP server-side gate and auto-triggers jQuery('#product-type').val('variable').trigger('change') on DOMContentLoaded. D4 explicit non-action: no code that auto-clicks the Variations sub-tab inside Product Data (editor may need to configure attributes first). assets/js/cct-screen-variations-panel.js postMessage listener renamed from jedb:cct-* to jedb:wc-* to match the new chrome-strip script. Phase 4b is now complete.
@@ -177,6 +180,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.16 =
+Phase 4b polish — three staging fixes: (1) kill admin-notice leak that was overlapping the Publish meta box, (2) defensive close-on-save coverage so the modal auto-closes after Done click, (3) new per-bridge "Show full product editor" admin option to render the entire WC product page inside the modal (with WP chrome hidden) instead of stripping to Product Data + Submit only.
 
 = 0.6.0-alpha.15 =
 Phase 4b complete — chrome-strip the WC product edit iframe to Product Data + Submit meta boxes only. Done/Cancel top bar overlays. Form-submit interceptor + sessionStorage close flag auto-closes the modal after WC's post-save redirect. D3 auto-force variable product type on iframe load when bridge has auto_force_variable_type=true. Mirrors the L-027/L-029 chrome-strip pattern from the CCT side, just targeting WC product edit pages.
