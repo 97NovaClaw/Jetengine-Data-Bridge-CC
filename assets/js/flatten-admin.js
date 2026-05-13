@@ -42,6 +42,19 @@
 	var targetRequired = bootstrap.target_required || [];
 	var mappings       = bootstrap.initial_mappings || [];
 
+	// alpha.12 (Phase 4 Day 4): live mutable state for required_overrides
+	// + matching field presets. The Apply preset handler writes to
+	// `liveRequiredOverrides`; buildConfig reads from it instead of
+	// from the original bootstrap so changes flow into the submitted
+	// config_json on save. `matchingPresets` is read-only — refreshes
+	// require a page reload (would need a new server-side load to
+	// recompute target-matching presets, since target_target changes
+	// also force a reload via the existing source/target dropdowns).
+	var liveRequiredOverrides = bootstrap.required_overrides
+		? { add: ( bootstrap.required_overrides.add || [] ).slice(), remove: ( bootstrap.required_overrides.remove || [] ).slice() }
+		: { add: [], remove: [] };
+	var matchingPresets = bootstrap.matching_presets || [];
+
 	function transformerByName( name ) {
 		for ( var i = 0; i < transformers.length; i++ ) {
 			if ( transformers[ i ].name === name ) { return transformers[ i ]; }
@@ -586,9 +599,13 @@
 		if ( ! cfg.trigger ) {
 			cfg.trigger = { type: 'cct_save', args: {} };
 		}
-		if ( ! cfg.required_overrides ) {
-			cfg.required_overrides = { add: [], remove: [] };
-		}
+
+		// alpha.12: required_overrides is mutated by the Apply preset
+		// handler. We mirror that mutation into the config we're about
+		// to ship by reading from `liveRequiredOverrides` (kept in sync
+		// by the handler below) rather than relying on whatever was in
+		// the initial config_json. Falls back to bootstrap's initial.
+		cfg.required_overrides = $.extend( true, {}, liveRequiredOverrides );
 
 		return cfg;
 	}
@@ -673,6 +690,194 @@
 	// Phase 3.6: target-target change re-fetches the taxonomy catalog so the
 	// dropdowns inside the Taxonomies section reflect the new post type.
 	$targetSel.on( 'change', refreshTaxonomySectionVisibility );
+
+	/* =================================================================
+	 * alpha.12 (Phase 4 Day 4) — Mandatory coverage actions
+	 *
+	 * Apply preset: snapshots the selected preset's mandatory field
+	 *   names into liveRequiredOverrides.add. The next form save
+	 *   persists the change via buildConfig() → config_json.
+	 *
+	 * Scaffold missing mappings: for every effective required field
+	 *   not yet present in the mappings table, appends a passthrough
+	 *   mapping row (target_field set, source_field empty, push/pull
+	 *   chain = passthrough). Editor fills in source side.
+	 *
+	 * Both are pure client-side mutations — no AJAX. The visible
+	 *   coverage badges are updated in-place after each action so the
+	 *   editor sees immediate feedback without a page reload.
+	 * ============================================================== */
+
+	var $coveragePanel = $( '#jedb_flatten_required_panel' );
+	var $coverageStatus = $( '#jedb_flatten_coverage_status' );
+	var $presetSelect = $( '#jedb_flatten_preset_select' );
+
+	function presetBySlug( slug ) {
+		for ( var i = 0; i < matchingPresets.length; i++ ) {
+			if ( matchingPresets[ i ].slug === slug ) {
+				return matchingPresets[ i ];
+			}
+		}
+		return null;
+	}
+
+	function effectiveRequiredFields() {
+		// Mirrors JEDB_Field_Presets_Manager::compute_effective_required_fields
+		// on the JS side: adapter required ∪ overrides.add ∖ overrides.remove.
+		// Returns [ {name, origin} ].
+		var seen = {};
+		var out  = [];
+		( targetRequired || [] ).forEach( function ( n ) {
+			n = String( n );
+			if ( ! n || seen[ n ] ) { return; }
+			seen[ n ] = true;
+			out.push( { name: n, origin: 'adapter' } );
+		} );
+		( liveRequiredOverrides.add || [] ).forEach( function ( n ) {
+			n = String( n );
+			if ( ! n || seen[ n ] ) { return; }
+			seen[ n ] = true;
+			out.push( { name: n, origin: 'override' } );
+		} );
+		var removeLookup = {};
+		( liveRequiredOverrides.remove || [] ).forEach( function ( n ) {
+			removeLookup[ String( n ) ] = true;
+		} );
+		return out.filter( function ( row ) {
+			return ! removeLookup[ row.name ];
+		} );
+	}
+
+	function mappedTargetFields() {
+		var seen = {};
+		readMappingsFromDom().forEach( function ( m ) {
+			if ( m.target_field ) {
+				seen[ String( m.target_field ) ] = true;
+			}
+		} );
+		return seen;
+	}
+
+	function renderCoverage() {
+		if ( ! $coveragePanel.length ) { return; }
+
+		var required = effectiveRequiredFields();
+		var mapped   = mappedTargetFields();
+
+		var covered = 0;
+		var missing = 0;
+		required.forEach( function ( row ) {
+			if ( mapped[ row.name ] ) { covered++; } else { missing++; }
+		} );
+
+		// Remove the "no required fields" placeholder if present —
+		// we're about to render a real list.
+		$coveragePanel.find( '.jedb-coverage-empty-placeholder' ).remove();
+
+		var $list = $coveragePanel.find( '.jedb-coverage-list' );
+		if ( ! $list.length ) {
+			// Coverage list didn't exist on initial render (no required
+			// fields at all). Insert a list above the actions block.
+			$list = $( '<ul class="jedb-required-list jedb-coverage-list"/>' );
+			$coveragePanel.find( '.jedb-coverage-actions' ).before( $list );
+		}
+		$list.empty();
+		required.forEach( function ( row ) {
+			var isCovered = !! mapped[ row.name ];
+			var glyph     = isCovered ? '\u2713' : '\u26a0';
+			var originLbl = row.origin === 'adapter' ? 'required by adapter' : 'required by override / preset';
+			$list.append(
+				$( '<li class="jedb-coverage-row"/>' )
+					.addClass( isCovered ? 'jedb-coverage-ok' : 'jedb-coverage-missing' )
+					.append( $( '<span class="jedb-coverage-badge" aria-hidden="true"/>' ).text( glyph ) )
+					.append( $( '<code/>' ).text( row.name ) )
+					.append( $( '<small class="jedb-coverage-origin"/>' ).text( originLbl ) )
+			);
+		} );
+
+		var $summary = $coveragePanel.find( '.jedb-coverage-summary' );
+		if ( ! $summary.length ) {
+			$summary = $( '<p class="jedb-coverage-summary"/>' );
+			$list.before( $summary );
+		}
+		$summary.empty();
+		if ( required.length > 0 ) {
+			$summary.append( $( '<strong/>' ).text( 'Coverage: ' + covered + ' of ' + required.length + ' required fields mapped.' ) );
+			if ( missing > 0 ) {
+				$summary.append( ' ' ).append( $( '<span class="jedb-coverage-missing-pill"/>' ).text( missing + ' missing' ) );
+			}
+		}
+	}
+
+	$presetSelect.on( 'change', function () {
+		// Lightweight UX cue — disable the Apply button when nothing's
+		// selected. Doesn't gate the click handler.
+		var $applyBtn = $( '#jedb_flatten_apply_preset' );
+		$applyBtn.prop( 'disabled', ! $presetSelect.val() );
+	} ).trigger( 'change' );
+
+	$( document ).on( 'click', '#jedb_flatten_apply_preset', function ( e ) {
+		e.preventDefault();
+		var slug = $presetSelect.val();
+		if ( ! slug ) {
+			$coverageStatus.text( 'Pick a preset first.' );
+			return;
+		}
+		var preset = presetBySlug( slug );
+		if ( ! preset ) {
+			$coverageStatus.text( 'Selected preset not found in bootstrap.' );
+			return;
+		}
+
+		var added = 0;
+		( preset.fields || [] ).forEach( function ( f ) {
+			if ( ! f || ! f.name || ! f.mandatory ) { return; }
+			if ( liveRequiredOverrides.add.indexOf( f.name ) === -1 ) {
+				liveRequiredOverrides.add.push( f.name );
+				added++;
+			}
+		} );
+
+		syncJSON();
+		renderCoverage();
+
+		$coverageStatus.text(
+			added > 0
+				? 'Applied preset "' + preset.label + '" — ' + added + ' field(s) added to required_overrides. Save the bridge to persist.'
+				: 'Preset "' + preset.label + '" applied — no new fields added (all already in required_overrides).'
+		);
+	} );
+
+	$( document ).on( 'click', '#jedb_flatten_scaffold_missing', function ( e ) {
+		e.preventDefault();
+
+		var required = effectiveRequiredFields();
+		var mapped   = mappedTargetFields();
+		var missing  = required.filter( function ( row ) { return ! mapped[ row.name ]; } );
+
+		if ( missing.length === 0 ) {
+			$coverageStatus.text( 'Nothing to scaffold — all required fields already have mappings.' );
+			return;
+		}
+
+		// Append one passthrough mapping per missing field.
+		missing.forEach( function ( row ) {
+			$tbody.append( makeMappingRow( {
+				source_field:   '',
+				target_field:   row.name,
+				push_transform: [ { name: 'passthrough', args: { comment: '' } } ],
+				pull_transform: [ { name: 'passthrough', args: { comment: '' } } ],
+				enabled:        true
+			} ) );
+		} );
+
+		syncJSON();
+		renderCoverage();
+
+		$coverageStatus.text(
+			'Scaffolded ' + missing.length + ' passthrough mapping(s). Fill in the source side of each and save the bridge.'
+		);
+	} );
 
 	renderInitial();
 

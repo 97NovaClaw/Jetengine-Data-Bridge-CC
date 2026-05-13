@@ -207,6 +207,39 @@
 	margin-bottom: 4px;
 }
 
+.jedb-bridge-coverage-missing {
+	margin: 4px 0 8px 0;
+	padding: 0;
+	list-style: none;
+}
+
+.jedb-bridge-coverage-missing li {
+	margin: 2px 0;
+	padding: 3px 8px;
+	background: #fdf3f3;
+	border-left: 3px solid #d28484;
+	border-radius: 3px;
+	font-size: 12px;
+	display: flex;
+	align-items: center;
+	gap: 6px;
+}
+
+.jedb-bridge-coverage-missing code {
+	font-size: 11px;
+	padding: 1px 5px;
+}
+
+.jedb-bridge-coverage-missing .jedb-coverage-badge {
+	color: #a51919;
+	font-weight: 700;
+}
+
+.jedb-bridge-coverage-missing small {
+	color: #707376;
+	font-style: italic;
+}
+
 .jedb-bridge-recent-log {
 	margin: 6px 0 6px 18px;
 	font-size: 12px;

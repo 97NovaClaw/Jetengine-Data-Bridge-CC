@@ -382,21 +382,132 @@ endif;
 			</p>
 		</details>
 
+		<?php
+		// Mandatory coverage — alpha.12 (Phase 4 Day 4) integration.
+		// Combines adapter-required fields + bridge's required_overrides
+		// into one provenance-tagged list. Provides:
+		//   - Apply preset dropdown (writes preset's mandatory fields
+		//     into required_overrides.add — snapshot model per §4.12).
+		//   - Scaffold missing mappings button (stubs passthrough rows
+		//     for any required field not yet mapped).
+		//   - Coverage badges: green when a mapping exists for the field,
+		//     red when it doesn't. "X of Y covered" summary.
+		//   - Provenance labels: adapter / override (preset-applied
+		//     fields end up tagged as override per the snapshot model).
+		$effective_required = class_exists( 'JEDB_Field_Presets_Manager' )
+			? JEDB_Field_Presets_Manager::compute_effective_required_fields( $config, $target_required )
+			: array();
+
+		$mapped_target_fields = array();
+		foreach ( (array) ( $config['mappings'] ?? array() ) as $m ) {
+			if ( is_array( $m ) && ! empty( $m['target_field'] ) ) {
+				$mapped_target_fields[ (string) $m['target_field'] ] = true;
+			}
+		}
+
+		$matching_presets = ( class_exists( 'JEDB_Field_Presets_Manager' ) && '' !== $current_target )
+			? JEDB_Field_Presets_Manager::instance()->get_for_target( $current_target )
+			: array();
+
+		$covered_count = 0;
+		$missing_count = 0;
+		foreach ( $effective_required as $row ) {
+			if ( isset( $mapped_target_fields[ $row['name'] ] ) ) {
+				$covered_count++;
+			} else {
+				$missing_count++;
+			}
+		}
+		$total_required = $covered_count + $missing_count;
+		?>
 		<h3><?php esc_html_e( 'Mandatory coverage (target side)', 'je-data-bridge-cc' ); ?></h3>
-		<div id="jedb_flatten_required_panel" class="jedb-flatten-required">
-			<?php if ( empty( $target_required ) ) : ?>
-				<p><em><?php esc_html_e( 'The selected target reports no inherent required fields. (You can still add some via the JSON editor below.)', 'je-data-bridge-cc' ); ?></em></p>
-			<?php else : ?>
-				<p><?php esc_html_e( 'These fields are required by the target adapter. The Mappings table below should map at least one source field onto each:', 'je-data-bridge-cc' ); ?></p>
-				<ul class="jedb-required-list">
-					<?php foreach ( $target_required as $f ) : ?>
-						<li><code><?php echo esc_html( $f ); ?></code></li>
+		<div id="jedb_flatten_required_panel" class="jedb-flatten-required" data-bridge-id="<?php echo (int) $edit_id; ?>" data-target="<?php echo esc_attr( $current_target ); ?>">
+
+			<?php if ( $total_required > 0 ) : ?>
+				<p class="jedb-coverage-summary">
+					<strong>
+						<?php
+						printf(
+							/* translators: %1$d = covered count, %2$d = total required */
+							esc_html__( 'Coverage: %1$d of %2$d required fields mapped.', 'je-data-bridge-cc' ),
+							$covered_count,
+							$total_required
+						);
+						?>
+					</strong>
+					<?php if ( $missing_count > 0 ) : ?>
+						<span class="jedb-coverage-missing-pill"><?php
+							/* translators: %d = number of missing fields */
+							echo esc_html( sprintf( _n( '%d missing', '%d missing', $missing_count, 'je-data-bridge-cc' ), $missing_count ) );
+						?></span>
+					<?php endif; ?>
+				</p>
+
+				<ul class="jedb-required-list jedb-coverage-list">
+					<?php foreach ( $effective_required as $row ) :
+						$covered = isset( $mapped_target_fields[ $row['name'] ] );
+						$origin  = $row['origin'];
+					?>
+						<li class="jedb-coverage-row jedb-coverage-<?php echo $covered ? 'ok' : 'missing'; ?>">
+							<span class="jedb-coverage-badge" aria-hidden="true"><?php echo $covered ? '&#10003;' : '&#9888;'; ?></span>
+							<code><?php echo esc_html( $row['name'] ); ?></code>
+							<small class="jedb-coverage-origin">
+								<?php
+								if ( 'adapter' === $origin ) {
+									esc_html_e( 'required by adapter', 'je-data-bridge-cc' );
+								} else {
+									esc_html_e( 'required by override / preset', 'je-data-bridge-cc' );
+								}
+								?>
+							</small>
+						</li>
 					<?php endforeach; ?>
 				</ul>
+			<?php else : ?>
+				<p class="jedb-coverage-empty-placeholder"><em><?php esc_html_e( 'No required fields detected for this target. Apply a preset below to seed mandatory coverage, or add fields manually via the JSON editor.', 'je-data-bridge-cc' ); ?></em></p>
 			<?php endif; ?>
-			<p class="description" style="max-width:760px;color:#646970;">
-				<?php esc_html_e( 'A future Field Presets feature will overlay curated lists of mandatory fields per target adapter onto this panel and add "Apply" / "Scaffold missing" actions, so common configurations (e.g. "WooCommerce storefront-visible product") can be applied with one click.', 'je-data-bridge-cc' ); ?>
-			</p>
+
+			<?php if ( ! empty( $matching_presets ) ) : ?>
+				<div class="jedb-coverage-actions">
+					<label for="jedb_flatten_preset_select"><?php esc_html_e( 'Apply preset:', 'je-data-bridge-cc' ); ?></label>
+					<select id="jedb_flatten_preset_select">
+						<option value=""><?php esc_html_e( '— Select a preset —', 'je-data-bridge-cc' ); ?></option>
+						<?php foreach ( $matching_presets as $p ) :
+							$mandatory_count = 0;
+							foreach ( $p['fields'] as $f ) {
+								if ( ! empty( $f['mandatory'] ) ) { $mandatory_count++; }
+							}
+						?>
+							<option value="<?php echo esc_attr( $p['slug'] ); ?>"><?php
+								echo esc_html( sprintf(
+									/* translators: %1$s = preset label, %2$d = mandatory field count */
+									_n( '%1$s (%2$d mandatory field)', '%1$s (%2$d mandatory fields)', $mandatory_count, 'je-data-bridge-cc' ),
+									$p['label'],
+									$mandatory_count
+								) );
+							?></option>
+						<?php endforeach; ?>
+					</select>
+					<button type="button" class="button" id="jedb_flatten_apply_preset"><?php esc_html_e( 'Apply (adds mandatory fields to required_overrides)', 'je-data-bridge-cc' ); ?></button>
+					<?php if ( $missing_count > 0 ) : ?>
+						<button type="button" class="button" id="jedb_flatten_scaffold_missing"><?php esc_html_e( 'Scaffold missing mappings', 'je-data-bridge-cc' ); ?></button>
+					<?php endif; ?>
+					<span id="jedb_flatten_coverage_status" class="description"></span>
+				</div>
+				<p class="description" style="max-width:760px;">
+					<?php esc_html_e( 'Apply writes the preset\'s mandatory fields into this bridge\'s required_overrides.add (snapshot model — editing the preset later does not auto-update applied bridges). Scaffold stubs a passthrough mapping for every missing required field; you fill in the source side. Both actions modify the form locally — save the bridge to persist.', 'je-data-bridge-cc' ); ?>
+				</p>
+			<?php elseif ( '' !== $current_target ) : ?>
+				<p class="description" style="max-width:760px;color:#646970;">
+					<?php
+					printf(
+						/* translators: %s = target adapter slug */
+						esc_html__( 'No field presets exist for target "%s" yet. Create one in the Field Presets tab to enable Apply / Scaffold actions here.', 'je-data-bridge-cc' ),
+						esc_html( $current_target )
+					);
+					?>
+				</p>
+			<?php endif; ?>
 		</div>
 
 		<?php
@@ -517,9 +628,9 @@ if ( $current_target && 0 === strpos( $current_target, 'posts::' ) ) {
 }
 
 echo wp_json_encode( array(
-	'ajax_url'           => admin_url( 'admin-ajax.php' ),
-	'nonce'              => wp_create_nonce( 'jedb_flatten_admin' ),
-	'transformers'       => array_values( array_map(
+	'ajax_url'              => admin_url( 'admin-ajax.php' ),
+	'nonce'                 => wp_create_nonce( 'jedb_flatten_admin' ),
+	'transformers'          => array_values( array_map(
 		static function ( $t ) {
 			return array(
 				'name'        => $t->get_name(),
@@ -530,12 +641,20 @@ echo wp_json_encode( array(
 		},
 		JEDB_Transformer_Registry::instance()->all()
 	) ),
-	'source_schema'      => $source_schema,
-	'target_schema'      => $target_schema,
-	'target_required'    => $target_required,
-	'initial_mappings'   => isset( $config['mappings'] )   && is_array( $config['mappings'] )   ? $config['mappings']   : array(),
-	'initial_taxonomies' => isset( $config['taxonomies'] ) && is_array( $config['taxonomies'] ) ? $config['taxonomies'] : array(),
-	'initial_post_type'  => $initial_post_type,
+	'source_schema'         => $source_schema,
+	'target_schema'         => $target_schema,
+	'target_required'       => $target_required,
+	'initial_mappings'      => isset( $config['mappings'] )   && is_array( $config['mappings'] )   ? $config['mappings']   : array(),
+	'initial_taxonomies'    => isset( $config['taxonomies'] ) && is_array( $config['taxonomies'] ) ? $config['taxonomies'] : array(),
+	'initial_post_type'     => $initial_post_type,
 	'taxonomy_default_rule' => JEDB_Flatten_Config_Manager::default_taxonomy_rule(),
+	'required_overrides'    => isset( $config['required_overrides'] ) && is_array( $config['required_overrides'] ) ? $config['required_overrides'] : array( 'add' => array(), 'remove' => array() ),
+	// alpha.12: presets matching this bridge's target so the JS Apply /
+	// Scaffold handlers can resolve field lists without an extra AJAX
+	// round trip. Empty array when no target is selected or no matching
+	// presets exist.
+	'matching_presets'      => ( class_exists( 'JEDB_Field_Presets_Manager' ) && '' !== $current_target )
+		? array_values( JEDB_Field_Presets_Manager::instance()->get_for_target( $current_target ) )
+		: array(),
 ) ); ?>
 </script>

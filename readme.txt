@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.11
+Stable tag: 0.6.0-alpha.12
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.11) ==
+== Current Capability (v0.6.0-alpha.12) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -93,6 +93,9 @@ JetEngine Relations supports auto-creating the related record on CCT save (e.g.,
 Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enable Custom PHP Snippets" toggle ON) can write small PHP transformers in a CodeMirror editor from the admin UI. Errors are caught and logged; a broken snippet returns the unmodified input rather than killing a save.
 
 == Changelog ==
+
+= 0.6.0-alpha.12 =
+* Phase 4 Day 4 - Field Presets admin tab + Mandatory coverage integration shipped (§4.12). New JEDB_Tab_Field_Presets with full CRUD + JSON export/import. JEDB_Field_Presets_Manager extended with upsert / delete / replace_all / merge_import / prepare_for_storage / compute_effective_required_fields. Flatten admin tab's Mandatory coverage panel rebuilt with green/red badges, "X of Y covered" summary, Apply preset dropdown (snapshot model writes into required_overrides.add), Scaffold missing mappings (stubs passthrough rows), provenance labels (adapter / override). Bridge meta box's Advanced Details gained the same coverage breakdown for editors who opt into the verbose surface (meta_box.show_advanced=true). All client-side mutations - no extra AJAX. NO engine code touched. Tier 2 "display-only overlay" mode deferred.
 
 = 0.6.0-alpha.11 =
 * Phase 4 Day 3 — CCT-single → linked-post redirect shim shipped (§4.6). New JEDB_CCT_Single_Redirect class hooked at template_redirect priority 5. Detects CCT-single page renders via reverse-lookup on cct_single_post_id (JE-version-agnostic). Opt-in per bridge via the existing cct_single_redirect flag (default false). Direction guard skips pull-only bridges. Loop guard silently no-ops when the bridge target IS the queried post (BBHQ Pattern X). Admin escape hatch via ?jedb_no_redirect=1 requires the JEDB capability (anonymous bypass blocked). Re-uses JEDB_Flattener::resolve_target_id() so link resolution stays in lock-step with the engine. Reads source data via Target_CCT::get_fresh() (L-030). No engine code touched. No schema migration.
@@ -162,6 +165,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.12 =
+Phase 4 Day 4 - Field Presets admin tab + Mandatory coverage integration. Curate target-scoped lists of mandatory fields once, export as JSON, drop into other sites. Apply presets to bridges to seed mandatory coverage; Scaffold to auto-stub passthrough mappings for missing fields; green/red coverage badges + provenance labels on every required field. Same coverage breakdown surfaces in the Bridge meta box's Advanced Details when show_advanced=true. No engine changes. No schema migration.
 
 = 0.6.0-alpha.11 =
 Phase 4 Day 3 — CCT-single → linked-post redirect shim. Opt in per bridge by ticking "CCT-single redirect" in the Flatten admin tab. Default OFF, no behavior change unless you opt in. Loop guard silently handles the common "Has Single Page points at the bridge target" pattern. Admin escape hatch via ?jedb_no_redirect=1.

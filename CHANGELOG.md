@@ -2,6 +2,69 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.12] — 2026-05-17
+
+**Phase 4 / Day 4 — Field Presets admin tab + Mandatory coverage integration shipped (§4.12).**
+
+Field Presets are portable, target-scoped knowledge artifacts that answer "for adapter X, what does a complete bridge look like?". Each preset binds to one target adapter (e.g. `posts::product`, `cct::mosaics_data`) and carries a list of fields with `mandatory` flags, freeform `group` labels, and optional `hint` text. The Flatten admin tab's Mandatory coverage panel now lets editors apply a preset's mandatory fields onto a bridge in one click, scaffold passthrough mappings for any missing required fields, and see at-a-glance green/red coverage badges. The meta box's Advanced Details adds the same coverage breakdown when the bridge has `show_advanced=true`.
+
+### Added
+
+- **`JEDB_Field_Presets_Manager` writes** (alpha.3 shipped reads only):
+  - `upsert($entry)` — create or update by slug, stamps `created_at` / `updated_at`, returns canonical slug or `WP_Error`.
+  - `delete($slug)` — idempotent removal.
+  - `replace_all($entries)` — destructive import (overwrites everything), returns `{accepted, dropped}` with per-entry rejection reasons.
+  - `merge_import($entries)` — non-destructive import (existing presets with same slug get overwritten, others kept).
+  - `prepare_for_storage($entry)` — validation + sanitization. Enforces non-empty slug + label + target. Target must resolve through `JEDB_Target_Registry` (falls back to a `cct::*` / `posts::*` regex match if registry isn't loaded yet). Field entries with empty `name` are silently dropped; duplicates within the same preset are de-duped by name.
+  - `compute_effective_required_fields($bridge_config, $adapter_required)` — static helper that combines adapter-required ∪ overrides.add ∖ overrides.remove and tags each result with provenance (`adapter` / `override`). Used by both the Flatten tab's coverage panel AND the meta box's Advanced Details so behavior is identical across surfaces.
+- **`includes/admin/class-tab-field-presets.php`** — new `JEDB_Tab_Field_Presets` class. Registers tab at priority 35 (after Flatten). admin-post handlers for save / delete / import / export. JSON export streams `attachment; filename="jedb-field-presets-{ts}.json"` with envelope `{ jedb_field_presets_version: 1, exported_at, site_url, presets: [...] }`. JSON import accepts either the envelope or a bare top-level array. Notice round-trip via query args (`jedb_notice` + counts).
+- **`templates/admin/tab-field-presets.php`** — list of saved presets in a `widefat striped` table + add/edit form (slug, label, target, description, notes) + dynamic per-field rows table (name, label, mandatory, group, hint) + Export button + Import textarea with replace-all checkbox.
+- **`assets/js/field-presets-admin.js`** — dynamic add/remove of field rows. Seeds an empty row when editing a preset with no fields. Pure client-side; the form is a regular POST.
+- **Mandatory coverage panel rewrite in `templates/admin/tab-flatten.php`**:
+  - Coverage summary header ("Coverage: X of Y required fields mapped") + missing-count pill.
+  - Per-required-field list with green ✓ / red ⚠ badges and provenance labels ("required by adapter" / "required by override / preset").
+  - Apply preset dropdown — populated only with presets whose `target` matches the bridge's `target_target`. Selecting a preset and clicking Apply pushes the preset's mandatory field names into `required_overrides.add` (snapshot model — preset edits later don't auto-propagate to applied bridges; editor re-applies if needed).
+  - Scaffold missing mappings button — appears when `missing_count > 0`. Appends one passthrough mapping row to the mappings table per missing field.
+  - Empty-state placeholder gets a class hook so the JS coverage re-render cleans it up after Apply seeds the first overrides.
+- **`assets/js/flatten-admin.js`** extension:
+  - `liveRequiredOverrides` state variable seeded from bootstrap; `buildConfig()` reads from it on every form-state sync so Apply changes flow into the saved `config_json`.
+  - `effectiveRequiredFields()` mirrors the PHP `compute_effective_required_fields()` so coverage badges re-render client-side after each Apply / Scaffold action without a page reload.
+  - `mappedTargetFields()` walks the mappings table for "which target fields are already mapped?".
+  - `renderCoverage()` rebuilds the coverage list + summary + missing pill from current form state. Called after each Apply / Scaffold.
+  - `#jedb_flatten_apply_preset` click handler — looks up the selected preset in `matchingPresets`, dedups against existing overrides, pushes mandatory field names into `liveRequiredOverrides.add`, syncs JSON, re-renders coverage, shows a status message.
+  - `#jedb_flatten_scaffold_missing` click handler — for every missing required field, appends a `passthrough` push/pull mapping row via the existing `makeMappingRow()`. Syncs JSON, re-renders coverage, shows count.
+- **Bootstrap extensions in tab-flatten.php** — `matching_presets` (presets whose target matches the bridge's target_target — empty when no target selected) + `required_overrides` (initial state for the live mutable variable).
+- **Bridge meta box Advanced Details coverage subsection** (`templates/admin/meta-box-bridge.php`) — rendered ONLY when `show_advanced=true`. Shows "X of Y required fields mapped" + a `<ul>` of missing fields with provenance labels + a "Flatten admin tab" deep link. The compact surface stays uncluttered for editors who don't opt in.
+- **CSS** for `.jedb-coverage-summary` / `.jedb-coverage-missing-pill` / `.jedb-coverage-row` (green / red variants) / `.jedb-coverage-badge` / `.jedb-coverage-origin` / `.jedb-coverage-actions` in `admin.css`, plus the meta box's `.jedb-bridge-coverage-missing` in `bridge-meta-box.css`.
+
+### Changed
+
+- **`JEDB_Admin_Shell::enqueue_assets()`** enqueues `assets/js/field-presets-admin.js` when `?tab=field-presets`.
+- **`JEDB_Admin_Shell::load_admin()`** requires + instantiates `JEDB_Tab_Field_Presets` alongside the other tabs.
+- **`JEDB_Woo_Product_Meta_Box::render_linked_panel()`** computes coverage data only when `show_advanced=true`, passes `$coverage_required` + `$coverage_missing` into template scope.
+- **`buildConfig()` in flatten-admin.js** now writes `required_overrides` from `liveRequiredOverrides` instead of relying on whatever was in the initial config_json.
+
+### Engine code unchanged
+
+No changes to any flattener, transformer, condition evaluator, target adapter, taxonomy applier, sync log path, or the meta box modal flow. Field Presets are purely an authoring-time convenience — they seed `required_overrides.add` and stub passthrough mappings, but the engine reads bridges identically to before.
+
+### Migration
+
+Zero migration. The `jedb_field_presets` site option has existed (empty default) since alpha.3. The `required_overrides` block on flatten configs has existed since alpha.3 too. This release just exposes both with full UIs.
+
+### Verification
+
+1. **Create a preset.** Go to JE Data Bridge → Field Presets → Add new preset. Set slug `woocommerce-storefront-visible`, label `WooCommerce — Storefront Visible`, target `posts::product`, then add fields: `name` (mandatory), `regular_price` (mandatory), `category_ids` (mandatory), `_visibility` (mandatory). Save.
+2. **Apply to a bridge.** Open an existing Mosaics→Product bridge in the Flatten tab. Scroll to Mandatory coverage. The Apply preset dropdown should list the preset you just created. Pick it, click Apply. The required_overrides.add should grow; the coverage summary should reflect "4 of N required fields mapped" with green / red badges per field. Save the bridge.
+3. **Scaffold missing mappings.** If after Apply some fields are still missing mappings, click "Scaffold missing mappings". The mappings table should gain one passthrough row per missing field with target_field pre-filled. Save the bridge.
+4. **Coverage in meta box Advanced Details.** Enable `meta_box.show_advanced=true` on the bridge. Open a linked product. Open the Bridge meta box's "Advanced Details" `<details>`. You should see the same coverage breakdown — "X of Y required fields mapped" + missing field list + link back to the Flatten admin tab.
+5. **Export / Import.** From Field Presets tab, click "Export presets as JSON" — should download `jedb-field-presets-{timestamp}.json`. Open the file, confirm envelope shape. Paste back into the Import textarea with replace-all OFF; submit. Notice should report "X accepted, 0 dropped". Try with replace-all ON; same result. Try pasting malformed JSON; notice should report `preset_import_invalid_json`.
+6. **Validation errors.** Try saving a preset with no slug or no label or an unregistered target slug — save handler should reject with a redirect-back notice carrying the error message.
+
+### Known limitation
+
+"Display-only overlay" mode (preview a preset's fields layered onto the coverage panel WITHOUT writing to `required_overrides`) was scoped out of alpha.12. The Apply-then-Save workflow is the supported authoring path; overlay-without-apply would add a second display state and modest JS complexity for marginal gain. Can be added later if the editor experience needs it.
+
 ## [0.6.0-alpha.11] — 2026-05-17
 
 **Phase 4 / Day 3 — CCT-single → linked-post redirect shim shipped (§4.6).**

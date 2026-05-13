@@ -684,6 +684,31 @@ class JEDB_Woo_Product_Meta_Box {
 		$recent_log       = $show_advanced ? $this->recent_log_for_post( $bridge, $post->ID ) : array();
 		$last_manual_id   = (int) get_post_meta( $post->ID, self::META_LAST_MANUAL, true );
 
+		// alpha.12 (Phase 4 Day 4): compute mandatory coverage for the
+		// Advanced Details section. Only meaningful when show_advanced
+		// is on — keep the compact surface uncluttered. Combines the
+		// target adapter's required fields with the bridge's
+		// required_overrides (provenance-tagged), then cross-references
+		// the bridge's mappings to flag covered vs missing.
+		$coverage_required = array();
+		$coverage_missing  = array();
+		if ( $show_advanced && class_exists( 'JEDB_Field_Presets_Manager' ) && $target_adapter && method_exists( $target_adapter, 'get_required_fields' ) ) {
+			$adapter_required  = (array) $target_adapter->get_required_fields();
+			$coverage_required = JEDB_Field_Presets_Manager::compute_effective_required_fields( $config, $adapter_required );
+
+			$mapped_targets = array();
+			foreach ( $mappings as $m ) {
+				if ( is_array( $m ) && ! empty( $m['target_field'] ) ) {
+					$mapped_targets[ (string) $m['target_field'] ] = true;
+				}
+			}
+			foreach ( $coverage_required as $row ) {
+				if ( ! isset( $mapped_targets[ $row['name'] ] ) ) {
+					$coverage_missing[] = $row;
+				}
+			}
+		}
+
 		// Flatten admin tab deep link for "Edit this bridge".
 		$flatten_edit_url = add_query_arg(
 			array(

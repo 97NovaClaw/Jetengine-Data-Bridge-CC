@@ -35,6 +35,8 @@
  *   @var string                 $panel_title
  *   @var string                 $flatten_edit_url
  *   @var bool                   $show_advanced     Render the <details> Advanced section at bottom.
+ *   @var array                  $coverage_required Effective mandatory fields (empty when show_advanced=false).
+ *   @var array                  $coverage_missing  Subset of coverage_required not yet mapped.
  *
  * @package JEDB
  */
@@ -216,6 +218,56 @@ $ajax_url      = admin_url( 'admin-post.php' );
 				<?php esc_html_e( 'These overrides are stored as post meta and respected by the engine guards added in v0.6.0-alpha.3. They do NOT modify the bridge config itself — toggle them off to restore default behavior.', 'je-data-bridge-cc' ); ?>
 			</p>
 		</fieldset>
+
+		<?php
+		/* Mandatory coverage subsection — alpha.12 (Phase 4 Day 4).
+		 * Compact summary of "how many required fields are mapped?" with
+		 * a list of missing fields when any are absent. Editors who need
+		 * more detail (apply preset, scaffold) go to the Flatten admin
+		 * tab — the meta box surface only reports, doesn't author. */
+		?>
+		<?php if ( ! empty( $coverage_required ) ) :
+			$total_required = count( $coverage_required );
+			$missing_count  = count( $coverage_missing );
+			$covered_count  = $total_required - $missing_count;
+		?>
+			<p><strong><?php esc_html_e( 'Mandatory coverage:', 'je-data-bridge-cc' ); ?></strong>
+				<?php
+				printf(
+					/* translators: %1$d = covered, %2$d = total required */
+					esc_html__( '%1$d of %2$d required fields mapped.', 'je-data-bridge-cc' ),
+					(int) $covered_count,
+					(int) $total_required
+				);
+				?>
+			</p>
+			<?php if ( $missing_count > 0 ) : ?>
+				<ul class="jedb-bridge-coverage-missing">
+					<?php foreach ( $coverage_missing as $row ) : ?>
+						<li>
+							<span class="jedb-coverage-badge" aria-hidden="true">&#9888;</span>
+							<code><?php echo esc_html( $row['name'] ); ?></code>
+							<small><?php
+								if ( 'adapter' === $row['origin'] ) {
+									esc_html_e( '(required by adapter)', 'je-data-bridge-cc' );
+								} else {
+									esc_html_e( '(required by override / preset)', 'je-data-bridge-cc' );
+								}
+							?></small>
+						</li>
+					<?php endforeach; ?>
+				</ul>
+				<p class="description" style="margin-top:4px;">
+					<?php
+					printf(
+						/* translators: %s = link to Flatten admin tab editor for this bridge */
+						wp_kses_post( __( 'Add mappings for these fields in the <a href="%s">Flatten admin tab</a>, or apply / scaffold from a Field Preset there.', 'je-data-bridge-cc' ) ),
+						esc_url( $flatten_edit_url )
+					);
+					?>
+				</p>
+			<?php endif; ?>
+		<?php endif; ?>
 
 		<?php if ( ! empty( $recent_log ) ) : ?>
 			<p><strong><?php esc_html_e( 'Recent syncs:', 'je-data-bridge-cc' ); ?></strong></p>

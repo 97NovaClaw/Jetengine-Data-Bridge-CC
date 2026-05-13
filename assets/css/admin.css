@@ -358,6 +358,108 @@
 	margin: 2px 0;
 }
 
+/* ---------------------------------------------------------------------
+ * Mandatory coverage panel — alpha.12 (Phase 4 Day 4)
+ * ------------------------------------------------------------------ */
+
+.jedb-coverage-summary {
+	margin: 6px 0 8px 0;
+	font-size: 13px;
+}
+
+.jedb-coverage-missing-pill {
+	display: inline-block;
+	margin-left: 8px;
+	padding: 1px 8px;
+	font-size: 11px;
+	font-weight: 600;
+	color: #8a4400;
+	background: #fcf0e2;
+	border: 1px solid #f0d0a0;
+	border-radius: 11px;
+}
+
+.jedb-coverage-list {
+	list-style: none;
+	margin: 0 0 12px 0;
+	padding: 0;
+}
+
+.jedb-coverage-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 4px 8px;
+	margin: 2px 0;
+	border-radius: 3px;
+	font-size: 12px;
+}
+
+.jedb-coverage-row code {
+	background: rgba( 0, 0, 0, 0.04 );
+	padding: 1px 5px;
+	font-size: 12px;
+}
+
+.jedb-coverage-row .jedb-coverage-badge {
+	display: inline-block;
+	width: 16px;
+	font-weight: 700;
+}
+
+.jedb-coverage-ok {
+	background: #f0f7f1;
+	border-left: 3px solid #5fa370;
+}
+
+.jedb-coverage-ok .jedb-coverage-badge {
+	color: #1e6b2c;
+}
+
+.jedb-coverage-missing {
+	background: #fdf3f3;
+	border-left: 3px solid #d28484;
+}
+
+.jedb-coverage-missing .jedb-coverage-badge {
+	color: #a51919;
+}
+
+.jedb-coverage-origin {
+	margin-left: auto;
+	color: #707376;
+	font-size: 11px;
+	font-style: italic;
+}
+
+.jedb-coverage-actions {
+	margin: 10px 0 6px 0;
+	padding: 10px 12px;
+	background: #f6f7f7;
+	border: 1px solid #dcdcde;
+	border-radius: 4px;
+}
+
+.jedb-coverage-actions label {
+	margin-right: 6px;
+	font-weight: 600;
+}
+
+.jedb-coverage-actions select {
+	margin-right: 6px;
+	max-width: 360px;
+}
+
+.jedb-coverage-actions .button {
+	margin-right: 6px;
+}
+
+#jedb_flatten_coverage_status {
+	display: inline-block;
+	margin-left: 10px;
+	color: #50575e;
+}
+
 .jedb-flatten-manual-sync {
 	background: #f0f6fc;
 	border: 1px solid #c3d6ec;
