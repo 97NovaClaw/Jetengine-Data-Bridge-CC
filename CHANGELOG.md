@@ -6,6 +6,49 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 No items currently queued. Phase 4b is complete. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
 
+## [0.6.0-alpha.17] — 2026-05-17
+
+**Phase 4b CSS patch — kill WC admin layout's right-edge activity panel + Freemius SDK marketing notices inside the chrome-stripped modal. Affects both `stripped` and `light` modes.**
+
+The alpha.16 notice-killer caught most admin notices via `.notice` family classes, but two specific cases survived and created the right-edge grey gutter clipping the Publish meta box that the staging report flagged (with the WC variations editor open via the modal):
+
+1. **`.woocommerce-layout__activity-panel-wrapper`** — WC's new wc-admin React layer injects this element + a couple of siblings even on legacy product edit pages, and the layout JS reserves a right gutter on `#wpcontent` for the activity panel. Hiding the wrapper alone doesn't close the gutter — we also need to reset `#wpcontent { margin-right: 0 !important; }`.
+2. **`.fs-notice`** — Freemius SDK plugin marketing notices (the staging "Deployer for Git — 14-day free trial" promotion is the canonical example). The element carries `.updated`, which alpha.16's CSS already targets, but Freemius's promotional notices use inline styles + late injection that win against generic `.updated { display: none !important; }`. Target the `.fs-*` family directly.
+
+### Added
+
+WC admin layout selectors in the Tier 2 base layer (applies in both `stripped` and `light` modes):
+
+- `.woocommerce-layout__activity-panel-wrapper`
+- `.woocommerce-layout__activity-panel`
+- `.woocommerce-layout__header`
+- `.woocommerce-layout__notice-list`
+- `[class*="woocommerce-layout__activity"]`
+- `[class*="woocommerce-layout__header"]`
+
+Freemius selectors (catches any Freemius-monetized plugin's marketing notices, not just Deployer for Git):
+
+- `.fs-notice`
+- `.fs-sticky`
+- `[class^="fs-notice"]`
+- `[class*=" fs-notice"]`
+
+Layout reset:
+
+- `#wpcontent, #wpbody-content { margin-right: 0 !important; }` — closes the right gutter the WC layout JS reserves for the activity panel.
+
+### Migration
+
+Zero. CSS-only patch — nothing changes in saved config, behavior, or admin UI surfaces. The selectors only activate inside the iframe modal when `?jedb_chrome=stripped` or `?jedb_chrome=light` is in the URL.
+
+### Verification
+
+1. Open a CCT row with the variations panel enabled. Click "Open variations editor →".
+2. Inside the modal, you should see NO right-edge grey gutter and NO floating "Activity" widget. The Publish meta box (in `stripped` mode) should fully reach the right edge of the modal frame with the Update button completely visible.
+3. The Freemius "Deployer for Git" promotional notice should be hidden (along with similar notices from any other Freemius-monetized plugin you have installed).
+4. Same result in `show_full_page=true` (`light`) mode — the WC layout chrome + Freemius notices are hidden but everything else stays.
+5. Direct (non-iframe) admin visits to product edit pages: the WC activity panel + Freemius notices are STILL visible (these selectors only activate on the chrome-stripped iframe URL).
+
 ## [0.6.0-alpha.16] — 2026-05-17
 
 **Phase 4b polish — three staging-report fixes on top of alpha.15's chrome strip + new per-bridge "Show full product editor" mode for admin UX discretion.**

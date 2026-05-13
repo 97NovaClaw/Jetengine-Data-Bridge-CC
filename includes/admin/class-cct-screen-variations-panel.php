@@ -490,9 +490,40 @@ class JEDB_CCT_Screen_Variations_Panel {
 			/* ---- Hide WP admin chrome ---- */
 			html.wp-toolbar { padding-top: 0 !important; }
 			#wpadminbar, #adminmenuwrap, #adminmenuback, #adminmenu, #wpfooter, #screen-meta, #screen-meta-links { display: none !important; }
-			#wpcontent, #wpbody-content { margin-left: 0 !important; padding-top: 0 !important; }
+			/* Also reset margin-right — WC's new admin layout JS reserves
+			 * a right gutter for the activity panel even when we hide
+			 * the panel itself (see WC layout selectors below). Without
+			 * this reset, the Publish meta box is clipped on the right
+			 * edge by an empty grey gutter. */
+			#wpcontent, #wpbody-content { margin-left: 0 !important; margin-right: 0 !important; padding-top: 0 !important; }
 			#wpbody { padding-top: 0 !important; }
 			body.wp-admin { background: #f6f7f7; }
+
+			/* ---- Kill WC admin layout's React-injected chrome ----
+			 *
+			 * WC's new "wc-admin" React layer injects elements outside
+			 * the legacy `.wrap` structure even on legacy product edit
+			 * pages — notably the right-edge activity panel that
+			 * appears as a fixed grey gutter clipping the Publish
+			 * meta box (staging report alpha.16). Hide them. */
+			.woocommerce-layout__activity-panel-wrapper,
+			.woocommerce-layout__activity-panel,
+			.woocommerce-layout__header,
+			.woocommerce-layout__notice-list,
+			[class*="woocommerce-layout__activity"],
+			[class*="woocommerce-layout__header"] { display: none !important; }
+
+			/* ---- Kill Freemius SDK plugin marketing notices ----
+			 *
+			 * Freemius-powered plugins (Deployer for Git, etc.) inject
+			 * promotional notices via `.fs-notice` that use the
+			 * `.updated` admin-notice class but fight our generic
+			 * `display: none !important` rule via inline styles or
+			 * late injection. Hit them directly. */
+			.fs-notice,
+			.fs-sticky,
+			[class^="fs-notice"],
+			[class*=" fs-notice"] { display: none !important; }
 
 			/* ---- Hide page chrome (title bar, "Add New" button) ---- */
 			.wrap h1,

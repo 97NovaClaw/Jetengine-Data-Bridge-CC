@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.16
+Stable tag: 0.6.0-alpha.17
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.16) ==
+== Current Capability (v0.6.0-alpha.17) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -96,6 +96,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 = Unreleased =
 * No items currently queued. Phase 4b is complete. Next focus per roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+= 0.6.0-alpha.17 =
+* Phase 4b CSS patch — kill WC admin layout's right-edge activity panel + Freemius SDK marketing notices inside the chrome-stripped modal. Adds .woocommerce-layout__activity-panel-wrapper / activity-panel / header / notice-list + [class*="woocommerce-layout__activity"] / [class*="woocommerce-layout__header"] to the chrome-strip base layer. Adds .fs-notice / .fs-sticky / [class^="fs-notice"] / [class*=" fs-notice"] for Freemius-monetized plugins (Deployer for Git, etc.). Adds #wpcontent, #wpbody-content { margin-right: 0 !important; } to close the right gutter that WC's layout JS reserves for the activity panel — without this reset, the Publish meta box was clipped on the right edge. Applies in both stripped and light chrome modes. CSS-only patch, zero migration.
 
 = 0.6.0-alpha.16 =
 * Phase 4b polish — three staging-report fixes on top of alpha.15's chrome strip + new per-bridge "Show full product editor" mode for admin UX discretion. (1) Notice killer: aggressive CSS that hides all admin notices (.notice, .notice-info, .notice-success, .notice-warning, .notice-error, .updated, .update-nag, .error, div.notice, div[class*="-notice"], .notice-dismiss, .wrap > .notice family, #wpbody-content > .notice family) plus stronger page-title hide (.wrap h1, .wrap > h1.wp-heading-inline, .wrap > .page-title-action, .wrap > .wp-header-end, .wrap > hr.wp-header-end). Kills the Deployer for Git badge + Jet Woo Builder Data Update banner + .notice-dismiss floaters that were leaking through the chrome strip and overlapping the Publish meta box in alpha.15. Applies in both chrome modes (stripped/light). (2) Modal auto-close fix: belt-and-suspenders coverage on the close-on-save flag via three independent triggers — submit event with capture phase on form#post (fires even if WC's handlers stopPropagation), click events on each submit button (#publish, #save-post, input[name="save"]) to catch form.submit() method calls that don't fire submit events, and beforeunload on the window as last-ditch fallback (guarded by a saveArmed flag so non-save navigation doesn't incorrectly close). Done button now also tries requestSubmit() (modern, fires submit event) before falling back to form.submit() (legacy). (3) New cct_screen.wc_variations.show_full_page boolean schema field (default false), new "Show full product editor" checkbox in the Flatten admin tab's WC Variations section, JS round-trip via cfg.cct_screen.wc_variations.show_full_page. When true, iframe URL gets ?jedb_chrome=light instead of ?jedb_chrome=stripped, and Tier 2 skips the strip-to-Product-Data CSS while keeping everything else (WP chrome hidden, notices killed, page title hidden, Done/Cancel bar, form-submit interceptor, close-on-save). Per-bridge admin discretion — focused (default) vs. full WC editor inside the modal.
@@ -180,6 +183,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.17 =
+Phase 4b CSS patch — kill the WC admin layout's right-edge activity panel (.woocommerce-layout__activity-panel-wrapper + family) and Freemius SDK marketing notices (.fs-notice + family) that were still leaking through the chrome strip and clipping the Publish meta box. Adds margin-right: 0 reset on #wpcontent to close the gutter WC's layout JS reserves for the activity panel.
 
 = 0.6.0-alpha.16 =
 Phase 4b polish — three staging fixes: (1) kill admin-notice leak that was overlapping the Publish meta box, (2) defensive close-on-save coverage so the modal auto-closes after Done click, (3) new per-bridge "Show full product editor" admin option to render the entire WC product page inside the modal (with WP chrome hidden) instead of stripping to Product Data + Submit only.
