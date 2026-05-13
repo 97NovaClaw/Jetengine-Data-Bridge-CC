@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.12
+Stable tag: 0.6.0-alpha.13
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.12) ==
+== Current Capability (v0.6.0-alpha.13) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -93,6 +93,9 @@ JetEngine Relations supports auto-creating the related record on CCT save (e.g.,
 Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enable Custom PHP Snippets" toggle ON) can write small PHP transformers in a CodeMirror editor from the admin UI. Errors are caught and logged; a broken snippet returns the unmodified input rather than killing a save.
 
 == Changelog ==
+
+= 0.6.0-alpha.13 =
+* Phase 4b - Variation reconciliation engine shipped (§4.7 / L-015). New variations[] block on flatten configs + JEDB_Variation_Reconciler walks each bridge's variations on every push, evaluates show_when DSL against the source CCT row, and creates / updates / soft-deletes the corresponding WooCommerce variation under the linked parent product. Wired into JEDB_Flattener::apply_bridge() after mappings + taxonomies. Target_Woo_Variation gains find_managed_variation() + create_for_bridge() helpers. Flatten admin tab gains a Variations section (visible when target=posts::product) with per-variation rows for slug, label, show_when, price_field, downloads, attributes, enabled. Bridge meta box Advanced Details gains a "Variations managed by this bridge" diagnostic when show_advanced=true. The BBHQ "Has Instructions PDF" use case end-to-end: editing has_instructions_pdf on a Mosaic CCT row creates/removes the matching variation on the linked product, populates its price from instructions_price, attaches downloadable files from instructions_pdf_attachment. Tier 2 deferred: PULL direction (variation->CCT), variation attribute taxonomy auto-creation, menu_order, per-row Validate button. No engine changes outside the new reconciler insertion point. No schema migration.
 
 = 0.6.0-alpha.12 =
 * Phase 4 Day 4 - Field Presets admin tab + Mandatory coverage integration shipped (§4.12). New JEDB_Tab_Field_Presets with full CRUD + JSON export/import. JEDB_Field_Presets_Manager extended with upsert / delete / replace_all / merge_import / prepare_for_storage / compute_effective_required_fields. Flatten admin tab's Mandatory coverage panel rebuilt with green/red badges, "X of Y covered" summary, Apply preset dropdown (snapshot model writes into required_overrides.add), Scaffold missing mappings (stubs passthrough rows), provenance labels (adapter / override). Bridge meta box's Advanced Details gained the same coverage breakdown for editors who opt into the verbose surface (meta_box.show_advanced=true). All client-side mutations - no extra AJAX. NO engine code touched. Tier 2 "display-only overlay" mode deferred.
@@ -165,6 +168,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.13 =
+Phase 4b - Variation reconciliation. A bridge can now manage WooCommerce variations on its linked parent product from a variations[] array. show_when DSL decides per-push whether each variation should exist (active) or be soft-deleted (status=private). Push-only for this release; PULL deferred. No schema migration. No engine changes outside the new reconciler insertion point.
 
 = 0.6.0-alpha.12 =
 Phase 4 Day 4 - Field Presets admin tab + Mandatory coverage integration. Curate target-scoped lists of mandatory fields once, export as JSON, drop into other sites. Apply presets to bridges to seed mandatory coverage; Scaffold to auto-stub passthrough mappings for missing fields; green/red coverage badges + provenance labels on every required field. Same coverage breakdown surfaces in the Bridge meta box's Advanced Details when show_advanced=true. No engine changes. No schema migration.

@@ -55,6 +55,15 @@
 		: { add: [], remove: [] };
 	var matchingPresets = bootstrap.matching_presets || [];
 
+	// Phase 4b: variations[] state — initial rows from bootstrap, default
+	// shape for the row builder so adding a fresh row uses canonical
+	// schema fields. Read live from the DOM on syncJSON.
+	var initialVariations = bootstrap.initial_variations || [];
+	var variationDefault  = bootstrap.variation_default || {
+		slug: '', label: '', show_when: '', price_field: '',
+		downloads: [], attributes: {}, enabled: true, note: ''
+	};
+
 	function transformerByName( name ) {
 		for ( var i = 0; i < transformers.length; i++ ) {
 			if ( transformers[ i ].name === name ) { return transformers[ i ]; }
@@ -296,6 +305,10 @@
 		create_if_missing: false, snippet: null, enabled: true, note: ''
 	};
 
+	// Phase 4b: variation section DOM hooks.
+	var $variationsSection = $( '#jedb_flatten_variations_section' );
+	var $variationsTbody   = $( '#jedb_flatten_variations tbody' );
+
 	function findTaxonomyInCatalog( slug ) {
 		for ( var i = 0; i < taxonomyCatalog.length; i++ ) {
 			if ( taxonomyCatalog[ i ].slug === slug ) { return taxonomyCatalog[ i ]; }
@@ -519,19 +532,140 @@
 			$taxSection.hide().attr( 'data-visible', '0' );
 			currentPostType = '';
 			taxonomyCatalog = [];
-			return;
+		} else {
+			$taxSection.show().attr( 'data-visible', '1' );
+
+			var newPostType = targetVal.substring( 7 );
+			if ( newPostType !== currentPostType || ! taxonomyCatalog.length ) {
+				currentPostType = newPostType;
+				fetchTaxonomies( currentPostType, renderTaxonomyRules );
+			}
 		}
 
-		$taxSection.show().attr( 'data-visible', '1' );
-
-		var newPostType = targetVal.substring( 7 );
-		if ( newPostType === currentPostType && taxonomyCatalog.length ) {
-			return;
+		// Phase 4b: variations section is Woo-specific — only visible
+		// when target is `posts::product`. Variations on other CPTs
+		// don't make sense (they're a Woo construct).
+		if ( $variationsSection && $variationsSection.length ) {
+			if ( 'posts::product' === targetVal ) {
+				$variationsSection.show().attr( 'data-visible', '1' );
+			} else {
+				$variationsSection.hide().attr( 'data-visible', '0' );
+			}
 		}
-
-		currentPostType = newPostType;
-		fetchTaxonomies( currentPostType, renderTaxonomyRules );
 	}
+
+	/* =================================================================
+	 * Phase 4b — variation row builder + DOM round-trip
+	 *
+	 * Each variation row carries 8 cells: slug, label, show_when,
+	 * price_field, downloads (CSV of field names), attributes (CSV of
+	 * key=value pairs), enabled checkbox, Remove button. The bootstrap
+	 * default shape matches default_variation() in PHP; back-compat
+	 * with older saved bridges is handled server-side via
+	 * merge_with_defaults.
+	 * ============================================================== */
+
+	function makeVariationRow( rule ) {
+
+		rule = $.extend( true, {}, variationDefault, rule || {} );
+
+		var $tr = $( '<tr class="jedb-variation-row"/>' );
+
+		var $slugIn = $( '<input type="text" class="jedb-var-slug regular-text" placeholder="with-instructions" />' ).val( rule.slug || '' );
+		var $labelIn = $( '<input type="text" class="jedb-var-label regular-text" placeholder="Includes Instructions PDF" />' ).val( rule.label || '' );
+		var $whenIn = $( '<textarea class="jedb-var-show-when" rows="2" placeholder=\'{source.has_instructions_pdf} == "yes"\' style="width:100%;font-family:Consolas,Menlo,Monaco,monospace;font-size:11px;"/>' ).val( rule.show_when || '' );
+		var $priceIn = $( '<input type="text" class="jedb-var-price-field regular-text" placeholder="instructions_price" />' ).val( rule.price_field || '' );
+		var dlVal = ( rule.downloads || [] ).join( ', ' );
+		var $dlIn = $( '<input type="text" class="jedb-var-downloads regular-text" placeholder="instructions_pdf, bonus_pdf" />' ).val( dlVal );
+		var attrPairs = [];
+		if ( rule.attributes && typeof rule.attributes === 'object' ) {
+			$.each( rule.attributes, function ( k, v ) {
+				attrPairs.push( String( k ) + '=' + String( v ) );
+			} );
+		}
+		var $attrIn = $( '<input type="text" class="jedb-var-attrs regular-text" placeholder="pa_format=digital, pa_size=large" />' ).val( attrPairs.join( ', ' ) );
+		var $enabledIn = $( '<input type="checkbox" class="jedb-var-enabled" />' ).prop( 'checked', rule.enabled !== false );
+
+		var $rmBtn = $( '<button type="button" class="button button-small button-link-delete">Remove</button>' )
+			.on( 'click', function () {
+				$tr.remove();
+				syncJSON();
+			} );
+
+		$tr.append( $( '<td/>' ).append( $slugIn ) );
+		$tr.append( $( '<td/>' ).append( $labelIn ) );
+		$tr.append( $( '<td/>' ).append( $whenIn ) );
+		$tr.append( $( '<td/>' ).append( $priceIn ) );
+		$tr.append( $( '<td/>' ).append( $dlIn ) );
+		$tr.append( $( '<td/>' ).append( $attrIn ) );
+		$tr.append( $( '<td style="text-align:center;"/>' ).append( $enabledIn ) );
+		$tr.append( $( '<td/>' ).append( $rmBtn ) );
+
+		return $tr;
+	}
+
+	function readVariationsFromDom() {
+
+		var out = [];
+
+		$variationsTbody.children( 'tr' ).each( function () {
+			var $tr = $( this );
+			var slug = $.trim( $tr.find( '.jedb-var-slug' ).val() || '' );
+			if ( '' === slug ) {
+				// Skip empty rows so half-typed-then-abandoned rules
+				// don't poison the saved JSON.
+				return;
+			}
+
+			// Parse downloads CSV → string array, dropping empties.
+			var dlRaw = String( $tr.find( '.jedb-var-downloads' ).val() || '' );
+			var dlArr = dlRaw.split( ',' )
+				.map( function ( s ) { return $.trim( s ); } )
+				.filter( function ( s ) { return s.length > 0; } );
+
+			// Parse attributes CSV `key=value, key2=value2` → object.
+			var attrRaw = String( $tr.find( '.jedb-var-attrs' ).val() || '' );
+			var attrs   = {};
+			attrRaw.split( ',' ).forEach( function ( pair ) {
+				pair = $.trim( pair );
+				if ( ! pair ) { return; }
+				var eq = pair.indexOf( '=' );
+				if ( eq <= 0 ) { return; }
+				var k = $.trim( pair.substring( 0, eq ) );
+				var v = $.trim( pair.substring( eq + 1 ) );
+				if ( k ) { attrs[ k ] = v; }
+			} );
+
+			out.push( {
+				slug:        slug,
+				label:       String( $tr.find( '.jedb-var-label' ).val() || '' ),
+				show_when:   String( $tr.find( '.jedb-var-show-when' ).val() || '' ),
+				price_field: String( $tr.find( '.jedb-var-price-field' ).val() || '' ),
+				downloads:   dlArr,
+				attributes:  attrs,
+				enabled:     $tr.find( '.jedb-var-enabled' ).is( ':checked' ),
+				note:        ''
+			} );
+		} );
+
+		return out;
+	}
+
+	function renderVariations() {
+		$variationsTbody.empty();
+		( initialVariations || [] ).forEach( function ( v ) {
+			$variationsTbody.append( makeVariationRow( v ) );
+		} );
+	}
+
+	$( '#jedb_flatten_add_variation' ).on( 'click', function () {
+		$variationsTbody.append( makeVariationRow( {} ) );
+		syncJSON();
+	} );
+
+	// React to per-input changes so the hidden config_json stays in
+	// sync without waiting for form submit.
+	$variationsTbody.on( 'input change', 'input, textarea, select', syncJSON );
 
 	$( '#jedb_flatten_add_taxonomy_rule' ).on( 'click', function () {
 		// Push a fresh row both into in-memory state and DOM so the next
@@ -562,6 +696,8 @@
 
 		cfg.mappings   = readMappingsFromDom();
 		cfg.taxonomies = readTaxonomyRulesFromDom();
+		// Phase 4b: variation rules round-trip on every form sync.
+		cfg.variations = readVariationsFromDom();
 
 		cfg.condition = $condInput.val() || '';
 		cfg.priority  = parseInt( $form.find( '#jedb_flatten_priority' ).val(), 10 );
@@ -632,6 +768,10 @@
 			$taxSection.hide().attr( 'data-visible', '0' );
 			updateTaxonomySummary();
 		}
+
+		// Phase 4b: render variation rows from bootstrap. No catalog
+		// fetch needed — variations are pure form state, no AJAX.
+		renderVariations();
 
 		syncJSON();
 	}

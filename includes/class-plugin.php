@@ -95,6 +95,7 @@ class JEDB_Plugin {
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-condition-evaluator.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flatten-config-manager.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-taxonomy-applier.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-variation-reconciler.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flattener.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-reverse-flattener.php';
 
@@ -112,6 +113,7 @@ class JEDB_Plugin {
 		JEDB_Sync_Guard::instance();
 		JEDB_Sync_Log::instance();
 		JEDB_Taxonomy_Applier::instance();
+		JEDB_Variation_Reconciler::instance();
 		JEDB_Flattener::instance();
 		JEDB_Reverse_Flattener::instance();
 		JEDB_CCT_Single_Redirect::instance();

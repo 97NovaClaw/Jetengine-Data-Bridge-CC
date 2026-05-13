@@ -105,6 +105,19 @@ class JEDB_Flatten_Config_Manager {
 				'add'    => array(),
 				'remove' => array(),
 			),
+			// Phase 4b / §4.7: per-bridge variation reconciliation rules.
+			// Each entry describes ONE WooCommerce product variation that
+			// this bridge manages on the linked parent product. On every
+			// push, the variation reconciler walks this list, evaluates
+			// each entry's `show_when` against the source CCT row, and
+			// creates / updates / soft-deletes the variation accordingly.
+			// Woo-specific by nature (variations are a WC concept) but
+			// otherwise composed in the same bridge config as everything
+			// else — no separate template layer (D-25). Empty array by
+			// default; bridges that don't manage variations are
+			// unaffected. See default_variation() for the per-entry
+			// shape and BUILD-PLAN §4.7 for the full design.
+			'variations'                        => array(),
 			'origin_tag'                        => 'flatten',
 		);
 	}
@@ -145,6 +158,61 @@ class JEDB_Flatten_Config_Manager {
 			'snippet'             => null,       // forward-compat with Phase 5b
 			'enabled'             => true,
 			'note'                => '',
+		);
+	}
+
+	/**
+	 * Default shape for one entry in `variations[]` (Phase 4b / §4.7).
+	 *
+	 * Used as the merge target when reading existing variation rules
+	 * from saved config_json so editors who saved bridges before this
+	 * block existed get sensible defaults filled in. Each entry
+	 * describes ONE WooCommerce variation that the bridge manages on
+	 * the linked parent product:
+	 *
+	 *   - `slug` (required): stable identifier used as the post meta
+	 *     key on managed variations (`_jedb_variation_slug`). Bridges
+	 *     find their managed variations by querying for variations
+	 *     whose parent matches the target post AND whose
+	 *     `_jedb_variation_slug` post meta equals this slug.
+	 *   - `label`: human-readable name for admin UIs.
+	 *   - `show_when`: DSL expression (same syntax as the bridge
+	 *     condition field). When the expression evaluates true against
+	 *     the source CCT row, the variation should EXIST and be
+	 *     active. When false, the variation should be soft-deleted
+	 *     (status=private). Empty `show_when` = always show.
+	 *   - `price_field`: source CCT field name whose value populates
+	 *     the variation's regular price on each push. Empty = leave
+	 *     variation price untouched by the reconciler.
+	 *   - `downloads`: list of source CCT field names whose values
+	 *     populate the variation's downloadable files on each push.
+	 *     Each field can hold a single attachment ID, a single URL,
+	 *     or an array of attachment IDs / URLs.
+	 *   - `attributes`: map of attribute slug -> attribute value used
+	 *     when creating new variations. Editor pre-configures the
+	 *     parent product with the matching attribute taxonomy (e.g.
+	 *     `pa_format` with values `digital` / `physical`); the bridge
+	 *     declares which attribute combination identifies each
+	 *     variation. When empty, the reconciler falls back to a
+	 *     plugin-managed `pa_jedb_variant` attribute auto-created on
+	 *     first use (pitfall per §4.7 — editors usually want to
+	 *     declare attributes upfront).
+	 *   - `enabled`: when false, the variation rule is skipped during
+	 *     reconciliation. Useful for staging variations without
+	 *     activating them.
+	 *
+	 * @return array
+	 */
+	public static function default_variation() {
+		return array(
+			'slug'        => '',
+			'label'       => '',
+			'show_when'   => '',
+			'price_field' => '',
+			'downloads'   => array(),
+			'attributes'  => array(),
+			'enabled'     => true,
+			'note'        => '',
 		);
 	}
 
@@ -283,6 +351,24 @@ class JEDB_Flatten_Config_Manager {
 			if ( ! is_array( $rule['apply_terms_inverse'] ) ) { $rule['apply_terms_inverse'] = array(); }
 		}
 		unset( $rule );
+
+		// Phase 4b: variations[] back-compat — existing alpha.3-alpha.12
+		// bridges saved before this block existed get an empty array.
+		// Each rule is deep-merged against default_variation() so older
+		// rules missing newer keys still read cleanly.
+		if ( ! isset( $config['variations'] ) || ! is_array( $config['variations'] ) ) {
+			$config['variations'] = array();
+		}
+		foreach ( $config['variations'] as &$variation_rule ) {
+			if ( ! is_array( $variation_rule ) ) {
+				$variation_rule = self::default_variation();
+				continue;
+			}
+			$variation_rule = wp_parse_args( $variation_rule, self::default_variation() );
+			if ( ! is_array( $variation_rule['downloads'] ) )  { $variation_rule['downloads']  = array(); }
+			if ( ! is_array( $variation_rule['attributes'] ) ) { $variation_rule['attributes'] = array(); }
+		}
+		unset( $variation_rule );
 
 		$defaults = self::default_config_json();
 

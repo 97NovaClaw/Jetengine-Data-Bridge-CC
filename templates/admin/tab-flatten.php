@@ -562,6 +562,63 @@ endif;
 			</p>
 		</details>
 
+		<?php
+		/* Phase 4b — Variations section. Woo-specific (only meaningful
+		 * when target_target is `posts::product`). Hidden when not
+		 * applicable; the JS reveals/hides on target dropdown change. */
+		$variations_visible = ( 'posts::product' === $current_target );
+		?>
+		<details
+			class="jedb-flatten-variations-section"
+			id="jedb_flatten_variations_section"
+			data-visible="<?php echo $variations_visible ? '1' : '0'; ?>"
+			<?php echo $variations_visible ? 'open' : ''; ?>
+			<?php echo $variations_visible ? '' : 'style="display:none;"'; ?>
+		>
+			<summary>
+				<h3 style="display:inline-block;margin:0;"><?php esc_html_e( 'Variations (push only)', 'je-data-bridge-cc' ); ?></h3>
+				<span class="description" style="margin-left:8px;"><?php esc_html_e( '— manage WooCommerce product variations from this CCT row', 'je-data-bridge-cc' ); ?></span>
+			</summary>
+
+			<p class="description" style="max-width:820px;">
+				<?php esc_html_e( 'Each row describes ONE WooCommerce variation that this bridge manages on the linked parent product. On every push, the variation reconciler evaluates each entry\'s show_when against the source CCT row and creates / updates / soft-deletes the variation accordingly. Variations the bridge doesn\'t know about (third-party plugins, manual variations) are left untouched. Per L-015, variations come from the SAME CCT row as the parent — they are not separate bridges.', 'je-data-bridge-cc' ); ?>
+			</p>
+
+			<table class="widefat jedb-flatten-variations" id="jedb_flatten_variations">
+				<thead>
+					<tr>
+						<th style="width:14%;"><?php esc_html_e( 'Slug', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:16%;"><?php esc_html_e( 'Label', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:22%;"><?php esc_html_e( 'show_when (DSL)', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:13%;"><?php esc_html_e( 'Price field', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:13%;"><?php esc_html_e( 'Downloads fields', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:14%;"><?php esc_html_e( 'Attributes', 'je-data-bridge-cc' ); ?></th>
+						<th style="width:8%;"><?php esc_html_e( 'Enabled', 'je-data-bridge-cc' ); ?></th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody></tbody>
+				<tfoot>
+					<tr>
+						<td colspan="8">
+							<button type="button" class="button" id="jedb_flatten_add_variation"><?php esc_html_e( '+ Add variation rule', 'je-data-bridge-cc' ); ?></button>
+							<span id="jedb_flatten_variations_status" class="description" style="margin-left:12px;"></span>
+						</td>
+					</tr>
+				</tfoot>
+			</table>
+
+			<p class="description" style="max-width:820px;">
+				<strong><?php esc_html_e( 'How it works:', 'je-data-bridge-cc' ); ?></strong>
+				<?php esc_html_e( 'show_when uses the same DSL as the Condition field above — reference source fields with {source.field_name}. Examples: "true" (always show), "{source.has_instructions_pdf} == \"yes\"", "{source.price} > 0". Price field is a source CCT field name whose value writes to the variation\'s regular_price on push. Downloads is a comma-separated list of source CCT field names whose values (attachment IDs or URLs) populate the variation\'s downloadable files. Attributes is a comma-separated list of attribute_slug=value pairs (e.g. "pa_format=digital, pa_size=large") — when empty, falls back to a plugin-managed pa_jedb_variant attribute.', 'je-data-bridge-cc' ); ?>
+			</p>
+
+			<p class="description" style="max-width:820px;color:#996800;">
+				<strong><?php esc_html_e( 'Pre-configuration recommended:', 'je-data-bridge-cc' ); ?></strong>
+				<?php esc_html_e( 'For best results, set up your parent product\'s variation attributes (e.g. pa_format = digital | physical) IN WOOCOMMERCE FIRST, then declare each variation\'s attribute combination in the Attributes column. Auto-generated attributes work but are less editor-friendly. PULL direction (variation edits back to CCT) is not yet wired — push-only for now.', 'je-data-bridge-cc' ); ?>
+			</p>
+		</details>
+
 		<h3><?php esc_html_e( 'Field mappings', 'je-data-bridge-cc' ); ?></h3>
 
 		<p class="description">
@@ -656,5 +713,8 @@ echo wp_json_encode( array(
 	'matching_presets'      => ( class_exists( 'JEDB_Field_Presets_Manager' ) && '' !== $current_target )
 		? array_values( JEDB_Field_Presets_Manager::instance()->get_for_target( $current_target ) )
 		: array(),
+	// Phase 4b: variations[] + default shape for the JS row builder.
+	'initial_variations'    => isset( $config['variations'] ) && is_array( $config['variations'] ) ? $config['variations'] : array(),
+	'variation_default'     => JEDB_Flatten_Config_Manager::default_variation(),
 ) ); ?>
 </script>

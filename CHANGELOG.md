@@ -2,6 +2,61 @@
 
 All notable changes to this plugin are documented here. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0-alpha.13] — 2026-05-17
+
+**Phase 4b — Variation reconciliation engine shipped (§4.7 / L-015).**
+
+A bridge can now manage WooCommerce product variations on its linked parent product from a `variations[]` array on the flatten config. On every push, the reconciler walks each variation entry, evaluates its `show_when` against the source CCT row, and creates / updates / soft-deletes the corresponding variation. The BBHQ "Has Instructions PDF" use case is the canonical driver — set `has_instructions_pdf=true` on a Mosaic CCT row and the bridge spawns the "Includes Instructions PDF" variation on the linked product, populates its price + downloadable file from configured CCT fields, and tears it back down when toggled off. Push-only for this release; PULL deferred to a follow-up.
+
+### Added
+
+- **Flatten config schema — `variations[]` block.** New `default_variation()` factory returns the canonical entry shape: `slug` (required, used as the `_jedb_variation_slug` post meta key on managed variations), `label`, `show_when` (DSL expression, same syntax as the bridge condition field), `price_field` (source CCT field name whose value populates the variation's `regular_price`), `downloads[]` (source CCT field names whose values populate WC downloadable files — accepts attachment IDs or URLs), `attributes[]` (map of `attribute_slug => value` for WC variation identification; falls back to a plugin-managed `pa_jedb_variant` slot when empty), `enabled`, `note`. `merge_with_defaults()` deep-merges each rule against the default shape — existing alpha.3–alpha.12 bridges read cleanly with an empty `variations[]` array (no migration needed).
+- **`Target_Woo_Variation` extensions:**
+  - `find_managed_variation($parent_post_id, $bridge_id, $variation_slug)` — reverse-lookup via direct SQL on `wp_postmeta` + `wp_posts`. Returns the variation post ID or 0. Cheap; no `WC_Product_Variation` instantiation just to read meta.
+  - `create_for_bridge($parent_post_id, $bridge_id, $variation_slug, $fields)` — wrapper around `create()` that forces `parent_id`, stamps `_jedb_variation_slug` + `_jedb_variation_bridge` post meta (the management tracking keys), and defaults `status=publish` if the caller didn't specify.
+- **`JEDB_Variation_Reconciler` class** in `includes/flatten/class-variation-reconciler.php`. Singleton, registered in `JEDB_Plugin::load_core()`. The `reconcile()` method:
+  - Bails fast on non-Woo targets (`target_target !== 'posts::product'`), bridges with empty `variations[]`, and environments where `WC_Product_Variation` isn't loaded.
+  - Walks each variation rule. Sanitizes the slug; skips entries with empty slugs or `enabled=false`. Evaluates `show_when` via the existing `JEDB_Condition_Evaluator` with the same `$context` shape (`source`, `target`, `direction`, etc.) the engine uses elsewhere — DSL errors fail closed (variation is treated as `should_show=false`, matches the condition evaluator's existing semantics).
+  - For `should_show=true`: if the variation exists (managed lookup), updates it with the rule's computed fields + `status=publish` (recovers from prior soft-deletes). If it doesn't exist, calls `create_for_bridge()` with the rule's attributes + computed fields.
+  - For `should_show=false`: if the variation exists, soft-deletes via `status=private`. If it doesn't exist, noop.
+  - `compute_variation_fields()` translates the rule + source row into a fields payload: `description` from label, `regular_price` from `price_field`, `downloads` from each `downloads[]` source field (handles both attachment IDs and URLs via `build_download_entry()`), `downloadable=true` + `virtual=true` when downloads are present.
+  - Returns a summary `{ran, examined, created, updated, hidden, skipped, errors, per_variation}` that the caller includes in `sync_log.context_json`.
+- **`JEDB_Flattener::apply_bridge()` integration.** Reconciler invoked after mappings + taxonomies, before status determination. The four result paths updated:
+  - Path 1 (mapping error) → includes `variations` summary in context.
+  - Path 2 (mappings wrote) → message string includes variation reconciliation count when non-zero.
+  - Path 3 (mappings noop, taxonomies OR variations changed) → status `success` instead of `noop`. New `variations_only` marker mirrors the existing `taxonomies_only` marker.
+  - Path 4 (everything noop) → noop status with `variations` summary in context.
+- **Flatten admin tab Variations section** in `templates/admin/tab-flatten.php`. Collapsible `<details>` visible only when `target_target = posts::product`. Per-variation row: slug, label, show_when textarea, price_field, downloads (CSV), attributes (CSV of `key=value` pairs), enabled checkbox, Remove button. Add row button + status pill. Detailed help paragraph explains the DSL syntax + attribute pre-configuration recommendation + push-only-for-now caveat.
+- **`assets/js/flatten-admin.js` extensions:** `$variationsSection` / `$variationsTbody` DOM hooks. `initialVariations` + `variationDefault` from bootstrap. `makeVariationRow()` builds rows from rule objects (handles CSV serialization for downloads + attributes). `readVariationsFromDom()` parses rows back to JSON; drops rows with empty slugs to avoid poisoning saved config. `renderVariations()` populates the tbody from bootstrap on initial render. `refreshTaxonomySectionVisibility()` extended to also hide/show the variations section based on the target dropdown (Woo product only). `cfg.variations = readVariationsFromDom()` in `buildConfig()` so the round-trip persists on every form sync.
+- **Bridge meta box Advanced Details — "Variations managed by this bridge" subsection** in `templates/admin/meta-box-bridge.php`. Visible only when `meta_box.show_advanced=true` AND bridge has non-empty `variations[]` AND target is `posts::product`. Per-variation pill: `active` (green) / `will create on next push` (amber) / `hidden (will soft-delete on next push)` (pink) / `rule disabled` (gray) / `inactive` (gray). Read-only diagnostic — authoring lives in the Flatten tab. The `class-woo-product-meta-box.php` `render_linked_panel()` computes the snapshot via the same `JEDB_Condition_Evaluator` the reconciler uses, so the displayed state matches what the next push would do.
+- **CSS for variation status pills** in `bridge-meta-box.css` (`.jedb-bridge-variations-status` + per-state border-left colors).
+
+### Engine code unchanged outside the new reconciler hook
+
+The new variation reconciliation runs as a clearly-bounded step inserted after taxonomies in `apply_bridge()`. Mappings, taxonomies, transformers, condition evaluator, target adapters (other than the Woo Variation adapter's new helpers), sync guard, sync log are unchanged. Bridges without variations and bridges targeting non-Woo post types see ZERO behavior change — the reconciler bails before doing any work.
+
+### Migration
+
+Zero migration. The `variations[]` array is a new optional block on the flatten config; existing alpha.12 bridges automatically read it as an empty array via `wp_parse_args()` in `merge_with_defaults()`. To enable variation reconciliation on a bridge, edit the bridge in the Flatten admin tab, scroll to the Variations section (only shown when target=posts::product), add one or more variation rules, save. Subsequent CCT saves trigger the reconciler.
+
+### Verification
+
+1. **Setup.** Edit a Mosaic→Product bridge in the Flatten tab. Confirm a Variations section appears (target=posts::product). Click "+ Add variation rule." Fill in: slug=`with-instructions`, label=`Includes Instructions PDF`, show_when=`{source.has_instructions_pdf} == true`, price_field=`instructions_price`, downloads=`instructions_pdf_attachment`, attributes=`pa_format=digital` (assuming you've pre-configured `pa_format` on the parent product). Save bridge.
+2. **Create path.** On a Mosaic CCT row that has `has_instructions_pdf=true` and a non-empty `instructions_price` + `instructions_pdf_attachment`, save (or click Sync now). Confirm a new variation appears under the linked product in WC > Products > {product} > Variations panel. SKU/name should reflect the configured attribute. Regular price should equal `instructions_price`. Downloadable files should include the configured attachment.
+3. **Update path.** Change the CCT row's `instructions_price`. Save. Confirm the variation's regular price updates to match.
+4. **Hide path (soft-delete).** Toggle `has_instructions_pdf` to false on the CCT row. Save. Confirm the variation still exists but its post_status is now `private` (visible in WC's variations panel marked as Private, not visible on the storefront).
+5. **Restore path.** Toggle `has_instructions_pdf` back to true. Save. Confirm the variation's status returns to `publish` and the variation is visible again on the storefront.
+6. **Diagnostic surface.** Enable `meta_box.show_advanced=true` on the bridge. Open the linked product. Expand Advanced Details. The "Variations managed by this bridge" list should show the variation's current state (active / will create / hidden / etc.) matching the CCT row's current `has_instructions_pdf` value.
+7. **Sync log.** Inspect the latest `wp_jedb_sync_log` row for the bridge. `context_json` should contain a `variations` block with `{ran:true, examined:1, created/updated/hidden: 1, errors:0, per_variation: [{slug:"with-instructions", outcome:"created"|"updated"|"hidden", variation_id:N}]}`.
+8. **Non-Woo target sanity.** A bridge targeting a non-product CPT (e.g. `posts::event`) should NOT see the Variations section in the Flatten admin tab. If you manually paste a `variations[]` array via the raw JSON editor and save, the engine logs an info-level `[Variation_Reconciler] non-product target — variations[] block ignored` and reconciliation no-ops.
+
+### Known limitations (Tier 2, deferred)
+
+1. **PULL direction not implemented.** When the editor changes a managed variation's price / downloads / etc. directly via WC's variations panel, the change persists in WC but doesn't back-propagate to the source CCT field. Push-only suffices for the BBHQ Mosaic use case. PULL would require hooking `woocommerce_update_product_variation` + walking each bridge's `variations[]` to find the matching slug + writing back to source; not blocking, can ship in a follow-up.
+2. **Variation attribute taxonomy auto-creation.** Editors must pre-configure attribute taxonomies (`pa_format`, `pa_size`, etc.) in WooCommerce Products > Attributes BEFORE declaring them in a bridge's variation rules. When `attributes` is empty in a variation rule, the reconciler falls back to a plugin-managed `pa_jedb_variant` slot with the variation's slug as the value — usable but not editor-friendly (no taxonomy term row, no admin UI for the attribute). Auto-creation of `pa_jedb_variant` as a proper attribute taxonomy on first use can ship later.
+3. **`menu_order` field not exposed.** Variations get the WC default ordering. A future enhancement could add `menu_order` to the variation rule shape and the row UI.
+4. **No DSL validate button on the show_when textarea yet.** Editors who want to validate a `show_when` expression before save can copy/paste it into the bridge's main Condition field, click Validate, then move it back. Adding a per-row Validate button is straightforward but wasn't in scope for alpha.13.
+
 ## [0.6.0-alpha.12] — 2026-05-17
 
 **Phase 4 / Day 4 — Field Presets admin tab + Mandatory coverage integration shipped (§4.12).**

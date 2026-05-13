@@ -257,6 +257,120 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 		return in_array( $field_name, array( 'id', 'date_created', 'date_modified' ), true );
 	}
 
+	/* -----------------------------------------------------------------------
+	 * Bridge-managed variation lookups (Phase 4b)
+	 *
+	 * Managed variations carry two post meta keys:
+	 *   - `_jedb_variation_slug`   — the variations[] entry slug
+	 *   - `_jedb_variation_bridge` — the bridge config id that owns it
+	 *
+	 * The reconciler queries via this method on every push to decide
+	 * create-vs-update-vs-soft-delete per variation entry.
+	 * -------------------------------------------------------------------- */
+
+	const META_VARIATION_SLUG   = '_jedb_variation_slug';
+	const META_VARIATION_BRIDGE = '_jedb_variation_bridge';
+
+	/**
+	 * Return the variation post ID managed by `$bridge_id` for the given
+	 * parent product + variations[] slug, or 0 if none exists.
+	 *
+	 * Direct SQL on the postmeta table (parent_id is on the variation's
+	 * post_parent column, not in postmeta) to avoid the cost of
+	 * instantiating WC_Product_Variation just to read meta. Returns the
+	 * FIRST matching variation if (somehow) multiple exist — duplicates
+	 * are a data anomaly and the reconciler logs a warning.
+	 *
+	 * @param int    $parent_post_id  The variable product post ID.
+	 * @param int    $bridge_id       The flatten config row id.
+	 * @param string $variation_slug  The variations[] entry slug.
+	 * @return int  Managed variation post ID, or 0.
+	 */
+	public function find_managed_variation( $parent_post_id, $bridge_id, $variation_slug ) {
+
+		$parent_post_id = absint( $parent_post_id );
+		$bridge_id      = absint( $bridge_id );
+		$variation_slug = sanitize_text_field( (string) $variation_slug );
+
+		if ( ! $parent_post_id || ! $bridge_id || '' === $variation_slug ) {
+			return 0;
+		}
+
+		global $wpdb;
+
+		// phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.DirectDatabaseQuery
+		$sql = "
+			SELECT p.ID
+			FROM {$wpdb->posts} p
+			INNER JOIN {$wpdb->postmeta} m_slug   ON m_slug.post_id   = p.ID AND m_slug.meta_key   = %s AND m_slug.meta_value   = %s
+			INNER JOIN {$wpdb->postmeta} m_bridge ON m_bridge.post_id = p.ID AND m_bridge.meta_key = %s AND m_bridge.meta_value = %d
+			WHERE p.post_parent = %d
+			  AND p.post_type   = %s
+			  AND p.post_status IN ( 'publish', 'private', 'draft' )
+			ORDER BY p.ID ASC
+			LIMIT 1
+		";
+		$id = $wpdb->get_var(
+			$wpdb->prepare(
+				$sql,
+				self::META_VARIATION_SLUG,
+				$variation_slug,
+				self::META_VARIATION_BRIDGE,
+				$bridge_id,
+				$parent_post_id,
+				self::POST_TYPE
+			)
+		);
+		// phpcs:enable
+
+		return $id ? (int) $id : 0;
+	}
+
+	/**
+	 * Create a new variation under the given parent product, stamping the
+	 * bridge ownership meta keys so the reconciler can find it next time.
+	 *
+	 * Caller-supplied `$fields` may include any typed-setter key (e.g.
+	 * `regular_price`, `sku`, `downloads`) plus arbitrary post meta. The
+	 * `_jedb_variation_slug` / `_jedb_variation_bridge` keys are forced
+	 * regardless of what's in `$fields` so the management tracking can't
+	 * be accidentally overwritten.
+	 *
+	 * @param int    $parent_post_id
+	 * @param int    $bridge_id
+	 * @param string $variation_slug
+	 * @param array  $fields  Typed setters + meta keys.
+	 * @return int|null  Created variation ID, or null on failure.
+	 */
+	public function create_for_bridge( $parent_post_id, $bridge_id, $variation_slug, array $fields ) {
+
+		$parent_post_id = absint( $parent_post_id );
+		$bridge_id      = absint( $bridge_id );
+		$variation_slug = sanitize_text_field( (string) $variation_slug );
+
+		if ( ! $parent_post_id || ! $bridge_id || '' === $variation_slug ) {
+			return null;
+		}
+
+		// Force parent_id + tracking meta. We strip any caller-supplied
+		// _jedb_variation_* keys so they can't override the management
+		// tracking on accident.
+		unset( $fields['_jedb_variation_slug'], $fields['_jedb_variation_bridge'], $fields[ self::META_VARIATION_SLUG ], $fields[ self::META_VARIATION_BRIDGE ] );
+
+		$fields['parent_id']                 = $parent_post_id;
+		$fields[ self::META_VARIATION_SLUG ] = $variation_slug;
+		$fields[ self::META_VARIATION_BRIDGE ] = $bridge_id;
+
+		// Default status to publish if the caller didn't specify — newly
+		// created variations should be visible by default. Soft-delete
+		// happens later via update(..., ['status' => 'private']).
+		if ( ! isset( $fields['status'] ) ) {
+			$fields['status'] = 'publish';
+		}
+
+		return $this->create( $fields );
+	}
+
 	public function list_records( array $args = array() ) {
 
 		if ( ! function_exists( 'wc_get_products' ) ) {

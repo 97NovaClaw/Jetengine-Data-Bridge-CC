@@ -37,6 +37,7 @@
  *   @var bool                   $show_advanced     Render the <details> Advanced section at bottom.
  *   @var array                  $coverage_required Effective mandatory fields (empty when show_advanced=false).
  *   @var array                  $coverage_missing  Subset of coverage_required not yet mapped.
+ *   @var array                  $variations_status Per-variation status list (Phase 4b).
  *
  * @package JEDB
  */
@@ -267,6 +268,52 @@ $ajax_url      = admin_url( 'admin-post.php' );
 					?>
 				</p>
 			<?php endif; ?>
+		<?php endif; ?>
+
+		<?php if ( ! empty( $variations_status ) ) : ?>
+			<p><strong><?php esc_html_e( 'Variations managed by this bridge:', 'je-data-bridge-cc' ); ?></strong></p>
+			<ul class="jedb-bridge-variations-status">
+				<?php foreach ( $variations_status as $v ) :
+					$state_label = '';
+					$state_class = '';
+					if ( ! $v['enabled'] ) {
+						$state_label = __( 'rule disabled', 'je-data-bridge-cc' );
+						$state_class = 'jedb-var-state-disabled';
+					} elseif ( $v['should_show'] && $v['existing_id'] > 0 ) {
+						$state_label = __( 'active', 'je-data-bridge-cc' );
+						$state_class = 'jedb-var-state-active';
+					} elseif ( $v['should_show'] && $v['existing_id'] <= 0 ) {
+						$state_label = __( 'will create on next push', 'je-data-bridge-cc' );
+						$state_class = 'jedb-var-state-pending';
+					} elseif ( ! $v['should_show'] && $v['existing_id'] > 0 ) {
+						$state_label = __( 'hidden (will soft-delete on next push)', 'je-data-bridge-cc' );
+						$state_class = 'jedb-var-state-hidden';
+					} else {
+						$state_label = __( 'inactive', 'je-data-bridge-cc' );
+						$state_class = 'jedb-var-state-inactive';
+					}
+				?>
+					<li class="<?php echo esc_attr( $state_class ); ?>">
+						<code><?php echo esc_html( $v['slug'] ); ?></code>
+						<?php if ( '' !== $v['label'] ) : ?>
+							<small> · <?php echo esc_html( $v['label'] ); ?></small>
+						<?php endif; ?>
+						<small class="jedb-var-state-label"> · <?php echo esc_html( $state_label ); ?></small>
+						<?php if ( $v['existing_id'] > 0 ) : ?>
+							<small>· <?php
+								printf(
+									/* translators: %d = variation post id */
+									esc_html__( 'variation #%d', 'je-data-bridge-cc' ),
+									(int) $v['existing_id']
+								);
+							?></small>
+						<?php endif; ?>
+					</li>
+				<?php endforeach; ?>
+			</ul>
+			<p class="description" style="margin-top:4px;">
+				<?php esc_html_e( 'Snapshot reads — variation reconciliation runs on the next CCT save / push. Edit the variation rules in the Flatten admin tab.', 'je-data-bridge-cc' ); ?>
+			</p>
 		<?php endif; ?>
 
 		<?php if ( ! empty( $recent_log ) ) : ?>
