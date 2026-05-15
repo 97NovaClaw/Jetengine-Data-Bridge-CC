@@ -177,6 +177,22 @@ class JEDB_Reverse_Flattener {
 			return;
 		}
 
+		// alpha.18: emit info-level entry log so jedb-debug.log
+		// reflects every reverse-flatten hook firing. `log_status()`
+		// writes to the sync_log DB only — without this line, the
+		// file log only shows hook REGISTRATION, never INVOCATION,
+		// which makes diagnosing "did the hook even fire?" impossible
+		// without DB access.
+		if ( function_exists( 'jedb_log' ) ) {
+			jedb_log( '[Reverse_Flattener] hook fired', 'info', array(
+				'post_type'     => $post_type,
+				'post_id'       => $post_id,
+				'context'       => $context_label,
+				'bridge_count'  => count( $bridges ),
+				'bridge_ids'    => array_map( static function ( $b ) { return isset( $b['id'] ) ? (int) $b['id'] : 0; }, $bridges ),
+			) );
+		}
+
 		usort( $bridges, static function ( $a, $b ) {
 			$pa = isset( $a['config']['priority'] ) ? (int) $a['config']['priority'] : 100;
 			$pb = isset( $b['config']['priority'] ) ? (int) $b['config']['priority'] : 100;
@@ -215,6 +231,20 @@ class JEDB_Reverse_Flattener {
 		$source_target = isset( $bridge['source_target'] ) ? (string) $bridge['source_target'] : '';
 		$target_target = isset( $bridge['target_target'] ) ? (string) $bridge['target_target'] : '';
 		$config        = isset( $bridge['config'] ) && is_array( $bridge['config'] ) ? $bridge['config'] : array();
+
+		// alpha.18: emit info-level entry log so file log reflects
+		// every bridge attempt. Outcome (status + SKIPPED reason) is
+		// still captured in the sync_log DB via log_status() below.
+		if ( function_exists( 'jedb_log' ) ) {
+			jedb_log( '[Reverse_Flattener] apply_bridge entry', 'info', array(
+				'bridge_id'     => isset( $bridge['id'] ) ? (int) $bridge['id'] : 0,
+				'source_target' => $source_target,
+				'target_target' => $target_target,
+				'post_id'       => $post_id,
+				'origin'        => $origin_tag,
+				'direction'     => isset( $bridge['direction'] ) ? (string) $bridge['direction'] : '(unset)',
+			) );
+		}
 
 		$registry      = JEDB_Target_Registry::instance();
 		$source_adapter = $registry->get( $source_target );
@@ -711,5 +741,22 @@ class JEDB_Reverse_Flattener {
 			'message'       => $message,
 			'context'       => $context,
 		) );
+
+		// alpha.18: also emit a one-line status to the file debug log
+		// so editors can diagnose "did it sync?" from jedb-debug.log
+		// alone, without needing to query the sync_log DB table.
+		if ( function_exists( 'jedb_log' ) ) {
+			$level = ( JEDB_Sync_Log::STATUS_ERRORED === $status )
+				? 'error'
+				: ( ( JEDB_Sync_Log::STATUS_SUCCESS === $status || JEDB_Sync_Log::STATUS_NOOP === $status ) ? 'info' : 'warn' );
+
+			jedb_log( '[Reverse_Flattener] ' . $status, $level, array(
+				'bridge_id'  => isset( $bridge['id'] ) ? (int) $bridge['id'] : 0,
+				'source_id'  => $source_id,
+				'target_id'  => $target_id,
+				'origin'     => $origin,
+				'message'    => $message,
+			) );
+		}
 	}
 }

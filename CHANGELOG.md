@@ -6,6 +6,68 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 No items currently queued. Phase 4b is complete. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
 
+## [0.6.0-alpha.18] — 2026-05-17
+
+**Phase 4b iframe-save defensive guard + diagnostic logging — addresses staging report that WC product fields edited inside the iframe modal aren't reverse-flattening back to the CCT on bidirectional bridges.**
+
+The staging report described editing a non-variation field on the linked WC product from inside the new CCT-screen variations panel iframe and finding that the change didn't sync back to the linked CCT row, even though the bridge has both `push_transform` and `pull_transform` configured on the affected mapping.
+
+The reverse-pull (`product → CCT`) hangs on three independent gates, any of which can silently block: (a) the bridge ROW-level `direction` column must be `pull` or `bidirectional` for `Reverse_Flattener` to even register the `woocommerce_update_product` hook for it; (b) the post-meta `_jedb_bridge_direction_override` must not be `push` or `none`; (c) the post-meta `_jedb_bridge_locked` must not be set. All three of these are visible-by-design in the admin UI, but invisible in the modal context — the iframe's WC product edit page in `stripped` mode hides the JEDB meta box via CSS, and even in `light` mode the per-product override controls are only rendered when `meta_box.show_advanced=true`. The actual root cause needs sync_log inspection to confirm, but the defensive guard below eliminates one entire class of potential blockers preventatively, AND the new debug logging makes the next staging cycle self-diagnostic.
+
+### Added
+
+- **`JEDB_Woo_Product_Meta_Box::is_save_from_jedb_iframe()`** — detects whether the current WC product save POST originates from inside our CCT-screen variations iframe modal. Detection: HTTP `Referer` header carries `jedb_chrome=stripped` or `jedb_chrome=light` query parameter. Same-origin iframe so Referer is reliably present.
+- **iframe-aware skip in `handle_save()`** — when `is_save_from_jedb_iframe()` returns true, SKIP the per-product `_jedb_bridge_locked` + `_jedb_bridge_direction_override` writes. Rationale: those overrides are authored on a direct (non-iframe) product edit visit and should never be touched by an iframe-context save that the editor opened to manage variations. Today this is a defensive no-op (the meta box's lock + direction radios only render when `meta_box.show_advanced=true`, otherwise they aren't in the DOM and aren't in `$_POST`) — but if the staging report's bridge ever flips show_advanced on AND has a stale radio selection, the iframe save would silently stomp the override. This guard makes that impossible.
+- **`Reverse_Flattener::run_for_post_event()`** now emits an `info`-level `jedb_log` call on every hook firing, with post_id + bridge_count + bridge_ids in context. Lets editors confirm "did the reverse-flatten hook fire at all?" from `jedb-debug.log` alone, without DB access.
+- **`Reverse_Flattener::apply_bridge()`** now emits an `info`-level `jedb_log` call at entry showing bridge_id + source_target + target_target + post_id + origin + direction. The `direction` field exposes the bridge ROW's direction column — invaluable for diagnosing "is this bridge actually bidirectional or did it default to push?"
+- **`Reverse_Flattener::log_status()`** now ALSO emits to `jedb_log` (in addition to the existing sync_log DB write). Level scales with status — `error` for `STATUS_ERRORED`, `info` for `STATUS_SUCCESS` and `STATUS_NOOP`, `warn` for every `STATUS_SKIPPED_*`. Means the file log carries the entire reverse-flatten lifecycle (hook fired → bridge attempted → final status + message) for every save, eliminating the previous gap where only the DB had outcome info.
+
+### Diagnostic procedure (use when sync isn't behaving)
+
+The most likely cause of "edit in iframe doesn't sync back" is the bridge's `direction` column being `push` instead of `bidirectional`. The mapping-level `pull_transform` is configured separately from the bridge-level `direction` field — having `pull_transform` on every mapping does NOT make the bridge bidirectional. Verify with this SQL:
+
+```sql
+SELECT id, label, source_target, target_target, direction, enabled
+FROM wp_jedb_flatten_configs
+WHERE target_target = 'posts::product';
+```
+
+If the row's `direction` column is `push`, the reverse-pull is NOT registered for that bridge — `Reverse_Flattener::register_post_save_hooks()` filters out `push`-only bridges at hook registration time. Fix: open the bridge in the Flatten admin tab, change the Direction radio to "Bidirectional", save.
+
+Second most likely cause: per-product overrides on the test product blocking the pull. Check post meta:
+
+```sql
+SELECT post_id, meta_key, meta_value
+FROM wp_postmeta
+WHERE post_id = {your_product_id}
+  AND meta_key IN ( '_jedb_bridge_locked', '_jedb_bridge_direction_override' );
+```
+
+If `_jedb_bridge_direction_override` is `push` or `none`, OR `_jedb_bridge_locked` is `1`, the reverse-pull is blocked for THAT specific product. Fix: open the product in a direct (non-iframe) admin visit, expand the JEDB meta box's Advanced Details, set the radio to "None (use bridge default)" and uncheck the lock. (Or `DELETE FROM wp_postmeta WHERE post_id = X AND meta_key IN (…)`.)
+
+Third: actual sync_log inspection. After saving the iframe modal, run:
+
+```sql
+SELECT id, created_at, direction, source_id, target_id, origin, status, message
+FROM wp_jedb_sync_log
+WHERE target_id = '{your_product_id}'
+ORDER BY id DESC
+LIMIT 10;
+```
+
+The most recent rows should include a `pull` direction entry. Status tells you exactly what happened: `success` (wrote N fields), `noop` (no diff), `skipped_locked` (per_product_lock OR cascade), `skipped_direction_override` (override blocked it), `skipped_no_target` (couldn't resolve source CCT row), `errored` (adapter / source-update failure with message). For pure file-log diagnosis post-alpha.18, the same info lands in `jedb-debug.log` with the `[Reverse_Flattener] *` prefix.
+
+### Migration
+
+Zero. The defensive guard in `handle_save()` is a skip-on-iframe-only branch; non-iframe direct admin visits to product edit pages behave exactly as before. The diagnostic logging is additive — no behavior change, just new lines in `jedb-debug.log` whenever a reverse-flatten hook fires.
+
+### Verification
+
+1. **Confirm the hook fires**: open a CCT row, click "Open variations editor →", edit a mapped product field (e.g., the product title bound to `mosaic_name`), click Done. Check `jedb-debug.log` for `[Reverse_Flattener] hook fired` followed by `[Reverse_Flattener] apply_bridge entry` for your bridge. If those entries DON'T appear, the hook isn't firing — verify the bridge's `direction` column is `bidirectional` via the SQL query above.
+2. **Confirm the outcome**: same log should contain `[Reverse_Flattener] success` (or `noop` if values already matched, or `skipped_*` indicating a guard rejected). The `message` field tells you exactly what happened.
+3. **Direct (non-iframe) edits unaffected**: open the same product in a direct admin visit (no iframe), expand Advanced Details on the JEDB meta box (set `meta_box.show_advanced=true` on the bridge first), set direction override to "Push only", save. Verify `_jedb_bridge_direction_override` post meta = `push` via the post meta query.
+4. **Iframe save no longer touches override**: open the same product via the iframe, edit a mapped field, click Done. Verify `_jedb_bridge_direction_override` is STILL `push` (unchanged by the iframe save). Then change it back to bidirectional via direct admin visit and confirm subsequent iframe saves leave it alone.
+
 ## [0.6.0-alpha.17] — 2026-05-17
 
 **Phase 4b CSS patch — kill WC admin layout's right-edge activity panel + Freemius SDK marketing notices inside the chrome-stripped modal. Affects both `stripped` and `light` modes.**

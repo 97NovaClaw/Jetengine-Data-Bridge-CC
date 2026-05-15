@@ -1078,8 +1078,28 @@ class JEDB_Woo_Product_Meta_Box {
 		// the meta box was visible or not). The post meta is the
 		// canonical source of truth that the engine guards (alpha.3)
 		// read.
+		//
+		// alpha.18 (iframe save defensive guard):
+		// When the WC product save is triggered from inside our new
+		// CCT-screen variations iframe modal, SKIP these writes. The
+		// meta box is rendered inside the iframe (even in `stripped`
+		// chrome mode — it's just hidden via CSS) and submits its
+		// hidden `jedb_meta_box_present` marker. With
+		// `meta_box.show_advanced=false`, the lock + direction radios
+		// aren't in the DOM, so the writes here are no-ops (delete
+		// meta that wasn't set). But if anyone ever enables
+		// `show_advanced=true` AND has a non-default radio choice at
+		// iframe save time, the iframe submission would silently
+		// stomp the per-product override — potentially BLOCKING the
+		// reverse-pull that's the whole point of editing in the
+		// iframe. Detect via Referer URL containing `jedb_chrome=`
+		// and skip the override writes. The user's iframe-context
+		// edits NEVER touch the override post meta — those are
+		// authored on a direct (non-iframe) product edit visit.
+		$is_iframe_save = $this->is_save_from_jedb_iframe();
+
 		$lock_was_submitted = isset( $_POST['jedb_meta_box_present'] );
-		if ( $lock_was_submitted ) {
+		if ( $lock_was_submitted && ! $is_iframe_save ) {
 			if ( isset( $_POST['jedb_bridge_locked'] ) ) {
 				update_post_meta( $post_id, self::META_LOCKED, 1 );
 			} else {
@@ -1117,6 +1137,51 @@ class JEDB_Woo_Product_Meta_Box {
 				60
 			);
 		}
+	}
+
+	/**
+	 * Detect whether the current WC product save is happening inside our
+	 * CCT-screen variations iframe modal (alpha.14+).
+	 *
+	 * The iframe URL carries `?jedb_chrome=stripped` or `?jedb_chrome=light`.
+	 * The browser sends that URL as the HTTP_REFERER on the form POST that
+	 * comes out of the iframe. Detecting on Referer is sufficient because
+	 * the modal is a same-origin iframe — Referer is reliably present.
+	 *
+	 * We don't ALSO test the form POST for a body marker because we don't
+	 * want to inject anything into WC's product form (which would risk
+	 * conflict with WC's own hidden inputs). Referer alone keeps the
+	 * detection out-of-band.
+	 *
+	 * @return bool True when the current request is a form POST whose
+	 *              referer carries our chrome-strip query param.
+	 */
+	private function is_save_from_jedb_iframe() {
+
+		if ( empty( $_SERVER['HTTP_REFERER'] ) ) {
+			return false;
+		}
+
+		$referer = (string) wp_unslash( $_SERVER['HTTP_REFERER'] );
+		if ( '' === $referer ) {
+			return false;
+		}
+
+		// Cheap substring check first — Referer headers can be long
+		// and parse_url() costs more than strpos() for the common
+		// negative case.
+		if ( false === strpos( $referer, 'jedb_chrome=' ) ) {
+			return false;
+		}
+
+		$query = wp_parse_url( $referer, PHP_URL_QUERY );
+		if ( empty( $query ) ) {
+			return false;
+		}
+
+		parse_str( $query, $args );
+		$chrome = isset( $args['jedb_chrome'] ) ? (string) $args['jedb_chrome'] : '';
+		return in_array( $chrome, array( 'stripped', 'light' ), true );
 	}
 
 	/* -----------------------------------------------------------------------
