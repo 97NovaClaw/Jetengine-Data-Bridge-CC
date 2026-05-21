@@ -155,6 +155,23 @@
 	var $modalIframe = null;
 	var escBound     = false;
 
+	// alpha.19: parent-side save-in-progress state.
+	//
+	// The iframe's sessionStorage-bridged close-on-save handler (Tier 1)
+	// proved unreliable in staging — sessionStorage gets cleared by
+	// something in WC's save flow (heartbeat? autosave? a plugin?)
+	// between the moment Tier 2 sets the flag and the moment the post-
+	// save page reloads. Result: Tier 1 reads `null`, bails, modal
+	// stays open.
+	//
+	// The fix: don't bridge state through sessionStorage at all. Track
+	// "save in progress" in the PARENT window (which doesn't navigate
+	// during the save) and use the iframe's native `load` event as the
+	// close trigger. The iframe load event fires reliably for every
+	// iframe navigation, including the post-save redirect.
+	var iframePendingSave = false;
+	var iframeLoadCount   = 0;
+
 	function ensureModal() {
 
 		if ( $modal && $modal.length ) {
@@ -179,6 +196,48 @@
 		$( 'body' ).append( $modal );
 		$modalIframe = $modal.find( '.jedb-cctv-modal-iframe' );
 
+		// alpha.19: parent-side close-on-save trigger.
+		// Fires on EVERY iframe navigation. The first load (count 1) is
+		// the initial open — ignore it. Subsequent loads with
+		// `iframePendingSave === true` are post-save redirects — close
+		// the modal + reload the parent CCT page.
+		//
+		// Validation-failure detection: same-origin so we can inspect
+		// the iframe's document. If a `.notice-error` is present on the
+		// post-save page, WC rejected the save (e.g. invalid SKU).
+		// Keep the modal open in that case and clear the pending flag
+		// so the editor can fix and retry.
+		$modalIframe.on( 'load', function () {
+
+			iframeLoadCount++;
+
+			if ( ! iframePendingSave ) {
+				return; // initial open or non-save navigation
+			}
+
+			// Try to inspect for validation errors before closing.
+			var hasError = false;
+			try {
+				var iframeDoc = $modalIframe.get( 0 ).contentDocument;
+				if ( iframeDoc ) {
+					hasError = !! iframeDoc.querySelector(
+						'.notice-error, .notice.notice-error, #message.error'
+					);
+				}
+			} catch ( e ) {
+				// Cross-origin access blocked (shouldn't happen for same-origin) — fall through.
+			}
+
+			if ( hasError ) {
+				iframePendingSave = false;
+				hideSavingOverlay();
+				return; // keep modal open so editor can fix the validation error
+			}
+
+			iframePendingSave = false;
+			closeModal( true );
+		} );
+
 		$modal.on( 'click', function ( e ) {
 			if ( e.target === $modal.get( 0 ) ) {
 				closeModal( false );
@@ -202,6 +261,9 @@
 
 	function openModal( url ) {
 		ensureModal();
+		// Reset parent-side save state for this fresh open.
+		iframePendingSave = false;
+		iframeLoadCount   = 0;
 		$modal.find( '.jedb-cctv-modal-saving' ).hide();
 		$modalIframe.attr( 'src', url );
 		$modal.show();
@@ -234,12 +296,17 @@
 
 	function bindMessageListener() {
 		// postMessage protocol from the iframe. Emitted by the WC
-		// product edit page's chrome-strip script (Phase B alpha.15)
+		// product edit page's chrome-strip script (Phase B alpha.15+)
 		// rendered server-side by JEDB_CCT_Screen_Variations_Panel::
 		// maybe_inject_wc_chrome_strip(). Message names use the `wc-`
 		// prefix to distinguish from the symmetric `jedb:cct-*` traffic
-		// flowing in the opposite direction (CCT edit page inside a
-		// modal launched from a WC product page) — see L-027/L-029.
+		// flowing in the opposite direction.
+		//
+		// alpha.19: messages now drive parent-side state. The iframe's
+		// own sessionStorage-bridged close-on-save handler (Tier 1) is
+		// kept as a defensive fallback but is no longer the primary
+		// signal — the iframe `load` event handler in ensureModal()
+		// owns the close-on-save behavior now (see L-029 follow-up).
 		window.addEventListener( 'message', function ( event ) {
 			if ( event.origin !== window.location.origin ) { return; }
 			var data = event.data || {};
@@ -247,12 +314,24 @@
 
 			switch ( data.type ) {
 				case 'jedb:wc-save-starting':
+					// Arm the parent-side pending-save flag. The next
+					// iframe `load` event (post-save redirect) will
+					// trigger the modal close. We also show the saving
+					// overlay so the editor sees feedback during the
+					// form-POST → server-save → redirect round-trip.
+					iframePendingSave = true;
 					showSavingOverlay();
 					break;
 				case 'jedb:wc-save-error':
+					iframePendingSave = false;
 					hideSavingOverlay();
 					break;
 				case 'jedb:wc-modal-close':
+					// Defensive fallback — if Tier 1's sessionStorage
+					// handler does manage to fire (some browsers might
+					// preserve it), respect the close request. Closing
+					// an already-closed modal is a safe no-op.
+					iframePendingSave = false;
 					closeModal( !! data.reload );
 					break;
 			}

@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.18
+Stable tag: 0.6.0-alpha.19
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.18) ==
+== Current Capability (v0.6.0-alpha.19) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -96,6 +96,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 = Unreleased =
 * No items currently queued. Phase 4b is complete. Next focus per roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+= 0.6.0-alpha.19 =
+* Phase 4b modal-close fix - alpha.18 reverse-pull engine works end-to-end on staging (verified live: WC product edit in the iframe modal DOES fire all the save hooks + Reverse_Flattener DOES write back to the CCT). The only failure was the visual close-on-save: browser-console inspection showed Tier 1's #jedb-wc-iframe-close-handler script IS injected on the post-save page but reads sessionStorage('jedb_close_wc_modal_on_load') === null, so it bails. Something in WC's save flow (heartbeat? autosave? plugin?) wipes sessionStorage between Tier 2 setting the flag and the post-save reload. Fixed by moving close-on-save state to the parent window (which doesn't navigate during the save) and using the iframe's native `load` event as the close trigger. assets/js/cct-screen-variations-panel.js: added iframePendingSave + iframeLoadCount module-scope state, new $modalIframe.on('load', ...) handler in ensureModal() that closes the modal + reloads the parent when pendingSave is armed, validation-error detection via iframe.contentDocument.querySelector('.notice-error, .notice.notice-error, #message.error') keeps the modal open if WC rejected the save, openModal() resets state per-open, message listener arms iframePendingSave on jedb:wc-save-starting. Tier 1's sessionStorage handler retained as defensive fallback (closing an already-closed modal is a safe no-op). JS-only change, zero migration.
 
 = 0.6.0-alpha.18 =
 * Phase 4b iframe-save defensive guard + diagnostic logging — addresses staging report that WC product fields edited inside the iframe modal aren't reverse-flattening back to the CCT on bidirectional bridges. (1) JEDB_Woo_Product_Meta_Box::handle_save() now detects iframe-context saves (via HTTP Referer carrying jedb_chrome=stripped or jedb_chrome=light) and SKIPS the per-product _jedb_bridge_locked + _jedb_bridge_direction_override writes for those saves. The iframe modal is for variation work, not for authoring per-product overrides — those should be touched only on direct admin visits. This is a defensive guard that eliminates one entire class of "silent override stomp" failure modes preventatively. (2) Reverse_Flattener::run_for_post_event() now emits info-level jedb_log on every hook firing so jedb-debug.log shows whether the hook fired at all (previously the file log only showed hook registration). (3) Reverse_Flattener::apply_bridge() entry emits info-level jedb_log with bridge_id + direction column value — invaluable for diagnosing "is this bridge actually bidirectional or did it default to push?" (the bridge ROW direction column is independent of mapping-level pull_transform). (4) Reverse_Flattener::log_status() now ALSO emits to jedb_log (in addition to the existing sync_log DB write) — info for success/noop, warn for skipped_*, error for errored. The full reverse-flatten lifecycle is now visible from jedb-debug.log alone, no DB queries required for diagnosis. CHANGELOG.md alpha.18 entry includes three SQL queries for direct diagnostic inspection (bridge direction check, per-product override check, recent sync_log entries).
@@ -186,6 +189,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.19 =
+Phase 4b modal-close fix. Reverse-pull engine confirmed working end-to-end via live staging diagnostics. Only remaining bug was the iframe not auto-closing after a successful product save - sessionStorage close-flag was getting wiped by WC's save flow. Moved close-on-save state to the parent window + use the iframe's native `load` event as the close trigger. Includes validation-error detection so the modal stays open if WC rejects the save (e.g. invalid SKU).
 
 = 0.6.0-alpha.18 =
 Phase 4b iframe-save defensive guard + diagnostic logging. Staging report: WC product fields edited inside the iframe modal weren't reverse-flattening back to the CCT on bidirectional bridges. Added: (a) iframe-aware skip in JEDB_Woo_Product_Meta_Box::handle_save() so iframe-context saves never touch _jedb_bridge_locked or _jedb_bridge_direction_override post meta (defensive, prevents silent override stomp); (b) info-level jedb_log emissions throughout Reverse_Flattener (hook fire, apply_bridge entry, every log_status outcome) so jedb-debug.log carries the full reverse-flatten lifecycle for file-only diagnosis. CHANGELOG.md alpha.18 entry includes SQL diagnostic queries for direct inspection.

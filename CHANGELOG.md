@@ -6,6 +6,55 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 No items currently queued. Phase 4b is complete. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
 
+## [0.6.0-alpha.19] — 2026-05-21
+
+**Phase 4b modal-close fix — move close-on-save state from iframe sessionStorage to the parent window. Resolves the staging report that the modal didn't auto-close after a successful product save.**
+
+Staging diagnostics on Brick Builders HQ proved the alpha.18 reverse-pull engine works end-to-end: editing a mapped product field in the iframe modal, clicking Done, and saving DOES fire `woocommerce_process_product_meta` + `woocommerce_update_product` server-side, and Reverse_Flattener DOES write the changes back to the linked CCT row (verified with 4 new sync_log entries on the live test). The only failure mode left was visual — the modal kept showing the post-save WC product edit page (with full WP chrome, since the `?jedb_chrome=light` query param was stripped by WC's redirect — same L-029 quirk we hit with JE).
+
+Browser-console inspection in the iframe context after the save revealed:
+
+```
+location.href:                                          'https://.../post.php?post=398&action=edit'
+sessionStorage.getItem('jedb_close_wc_modal_on_load'):  null            ← THE BUG
+!!document.querySelector('#jedb-wc-iframe-close-handler'): true         ← Tier 1 script IS in DOM
+document.documentElement.style.visibility:              ''              ← Tier 1 bailed
+```
+
+Tier 1's close-on-save handler IS injected on the post-save iframe page (we confirmed the `<script id="jedb-wc-iframe-close-handler">` is in the DOM). But it reads `sessionStorage.getItem(FLAG_KEY) === '1'` and gets `null`, so it bails out. Something in WC's save flow (heartbeat? autosave? a plugin?) is wiping sessionStorage between the moment Tier 2's submit listener sets the flag (immediately before form POST) and the moment the post-save page reloads. The matching CCT-edit modal (L-027/L-029) doesn't hit this because JE's save flow doesn't touch sessionStorage.
+
+### Fixed
+
+- **Move close-on-save state to the parent window.** Don't bridge state through sessionStorage at all — the parent CCT page doesn't navigate during the save, so its in-memory state survives the round-trip cleanly.
+- **Use the iframe's native `load` event as the close trigger.** Every iframe navigation fires `load` on the `<iframe>` element. The parent JS listens for it and closes the modal when `iframePendingSave === true`.
+- **Validation-error detection** in the parent: when the iframe `load` fires after a save, inspect `iframe.contentDocument` for `.notice-error` / `.notice.notice-error` / `#message.error`. If found, WC rejected the save (invalid SKU, etc.) — keep the modal open + hide the saving overlay so the editor can fix the error.
+
+### Added
+
+In `assets/js/cct-screen-variations-panel.js`:
+
+- Two new module-scope state variables — `iframePendingSave` (boolean) and `iframeLoadCount` (number for diagnostic).
+- New `$modalIframe.on('load', …)` handler in `ensureModal()`. First load (count=1) is the initial open — skipped. Subsequent loads with `iframePendingSave === true` are post-save redirects — close the modal + reload the parent CCT page (unless `.notice-error` is found inside the iframe doc).
+- `openModal()` resets `iframePendingSave = false` and `iframeLoadCount = 0` on every fresh open so old state doesn't leak between modal sessions.
+- Message listener now arms `iframePendingSave = true` on `jedb:wc-save-starting` and resets it on `jedb:wc-save-error`. The existing `jedb:wc-modal-close` path is kept as a defensive fallback (in case Tier 1 ever does work in some browser).
+
+### Retained as fallback (alpha.15+)
+
+- `JEDB_CCT_Screen_Variations_Panel::maybe_inject_wc_chrome_strip()` still emits Tier 1's `<script id="jedb-wc-iframe-close-handler">` on every product edit page. Its behavior is unchanged. When sessionStorage IS reliable, Tier 1 fires and sends `jedb:wc-modal-close` to the parent — the new listener treats this as a defensive close request. Closing an already-closed modal is a no-op, so no conflict with the new primary close path.
+- Tier 2's `setCloseFlag()` / `notifyParent()` still set sessionStorage + postMessage on submit. The sessionStorage write is now harmless extra work (the parent doesn't rely on it).
+
+### Migration
+
+Zero. JS-only change. The new `load` event handler runs alongside the existing message listener — both can fire safely.
+
+### Verification
+
+1. **Save & auto-close**: open a CCT row → click "Open variations editor →" → edit the product title to a marker → click "Done · Save & return to CCT". Within ~1 second of the post-save iframe redirect, the modal should auto-close + the CCT page should reload. The Mosaic Name field on the CCT should show the new value.
+2. **Validation-error path**: open the modal → set an invalid value (e.g., a duplicate SKU on a product where another product already has that SKU) → click Done. WC's save rejects the request, the iframe reloads to the same page WITH a `.notice-error`. The parent detects the error, hides the saving overlay, keeps the modal open so the editor can fix the error.
+3. **Cancel still works**: open the modal → make a change → click Cancel. Modal closes without saving; CCT does NOT reload.
+4. **Non-save iframe navigation doesn't close**: open the modal → click a link inside the iframe that navigates elsewhere (e.g. a "View Product" link that opens within the iframe). Modal should NOT auto-close — `iframePendingSave` stays false unless the editor armed it via Done click or a submit button.
+5. **Backward compatibility**: if Tier 1's sessionStorage handler ever DOES work (sometimes it might, depending on the WP/WC version + plugin set), it sends `jedb:wc-modal-close` which the parent handles as a defensive close — no double-close glitch.
+
 ## [0.6.0-alpha.18] — 2026-05-17
 
 **Phase 4b iframe-save defensive guard + diagnostic logging — addresses staging report that WC product fields edited inside the iframe modal aren't reverse-flattening back to the CCT on bidirectional bridges.**
