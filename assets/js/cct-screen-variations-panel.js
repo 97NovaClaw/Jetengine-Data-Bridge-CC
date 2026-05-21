@@ -202,36 +202,28 @@
 		// `iframePendingSave === true` are post-save redirects — close
 		// the modal + reload the parent CCT page.
 		//
-		// Validation-failure detection: same-origin so we can inspect
-		// the iframe's document. If a `.notice-error` is present on the
-		// post-save page, WC rejected the save (e.g. invalid SKU).
-		// Keep the modal open in that case and clear the pending flag
-		// so the editor can fix and retry.
+		// alpha.20: REMOVED DOM-based error detection. Inspecting
+		// `iframeDoc.querySelector('.notice-error')` produced false
+		// positives — the WC product edit page contains hidden
+		// template / React-scaffold elements with the `.notice-error`
+		// class even on successful saves (likely from WC Admin's
+		// block-editor bits or a plugin's notice container that's
+		// empty but has the class).
+		//
+		// The false positive prevented the modal from auto-closing on
+		// successful saves in staging. Net call: always close on
+		// post-save iframe load. WC validation failures (e.g. duplicate
+		// SKU) on a variation-management flow are rare; if one happens,
+		// the editor reopens the modal and retries. A future release
+		// can add server-side error detection via wc_get_notices('error')
+		// passed back through a transient / custom REST endpoint if
+		// this becomes a real UX issue.
 		$modalIframe.on( 'load', function () {
 
 			iframeLoadCount++;
 
 			if ( ! iframePendingSave ) {
 				return; // initial open or non-save navigation
-			}
-
-			// Try to inspect for validation errors before closing.
-			var hasError = false;
-			try {
-				var iframeDoc = $modalIframe.get( 0 ).contentDocument;
-				if ( iframeDoc ) {
-					hasError = !! iframeDoc.querySelector(
-						'.notice-error, .notice.notice-error, #message.error'
-					);
-				}
-			} catch ( e ) {
-				// Cross-origin access blocked (shouldn't happen for same-origin) — fall through.
-			}
-
-			if ( hasError ) {
-				iframePendingSave = false;
-				hideSavingOverlay();
-				return; // keep modal open so editor can fix the validation error
 			}
 
 			iframePendingSave = false;
@@ -323,8 +315,20 @@
 					showSavingOverlay();
 					break;
 				case 'jedb:wc-save-error':
-					iframePendingSave = false;
-					hideSavingOverlay();
+					// alpha.20: explicitly IGNORE this message.
+					//
+					// Tier 1's inline iframe-close handler emits
+					// `jedb:wc-save-error` when it finds any
+					// `.notice-error` on the post-save page. That
+					// detection produces FALSE POSITIVES (the WC
+					// product editor contains hidden template /
+					// scaffolding elements matching the selector even
+					// on successful saves). Acting on this message
+					// reset `iframePendingSave` to false, which then
+					// prevented the parent `load` handler from closing
+					// the modal on legitimate successful saves. Drop
+					// the message entirely — the parent `load` handler
+					// owns the close decision.
 					break;
 				case 'jedb:wc-modal-close':
 					// Defensive fallback — if Tier 1's sessionStorage

@@ -6,6 +6,62 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 No items currently queued. Phase 4b is complete. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
 
+## [0.6.0-alpha.20] — 2026-05-21
+
+**Phase 4b modal-close fix follow-up — strip out the DOM-based WC error detection that was producing false positives and blocking the alpha.19 close-on-save path.**
+
+Live staging diagnostics after alpha.19 ship revealed:
+
+```
+[JEDB parent received] jedb:wc-save-starting    (x3 — Done click + submit-button click + form submit)
+[JEDB parent received] jedb:wc-save-error       ← KILLER
+```
+
+So Tier 1's `<script id="jedb-wc-iframe-close-handler">` did fire on the post-save page (meaning sessionStorage DID work this time — but unreliably, hence alpha.19's parent-side architecture is still correct), AND Tier 1 inspected the post-save DOM for `.notice-error`, AND it FOUND a match — but the match was a false positive.
+
+The WC product edit page contains hidden template / React-scaffolding elements with the `.notice-error` class on it (probably from WC Admin's block-editor bits or a plugin's notice container that's empty but has the class). Same false positive would hit the parent's own `.notice-error` check in the load handler that alpha.19 added.
+
+The cascade:
+1. Tier 1 finds a `.notice-error` in DOM → posts `jedb:wc-save-error` to parent
+2. Parent's alpha.19 listener sets `iframePendingSave = false` + hides saving overlay
+3. iframe `load` event fires on parent
+4. Parent's load handler sees `iframePendingSave === false` → returns without closing
+5. Modal stays open. Editor is confused. Reverse-pull worked perfectly server-side but the visual feedback is broken.
+
+### Fixed
+
+- **Drop the parent's DOM-based `.notice-error` detection** in the iframe `load` handler. Always close the modal when `iframePendingSave === true` on post-save iframe load.
+- **Ignore `jedb:wc-save-error`** in the parent's message listener. Tier 1's premature DOM scan can't be trusted; let the parent's `load` handler be the sole close authority.
+
+### Tradeoff (documented)
+
+In exchange for reliable close-on-save, we lose the validation-error-keep-modal-open feature. If WC genuinely rejects a product save (e.g., duplicate SKU error), the modal will still close, the parent CCT page will reload, and the editor will see the CCT row didn't update (because the WC save was rejected). They'd re-open the iframe and retry.
+
+This is acceptable because:
+- The variation-management workflow rarely triggers validation errors (the editor is mostly toggling variation existence + setting prices + uploading downloadable files — none of which have hard-to-meet validation rules).
+- WC's redirect-after-save URL doesn't include a reliable "save failed" signal we can check JS-side.
+- Server-side error detection via `wc_get_notices('error')` would work but requires a custom AJAX endpoint or transient bridge — defer to a future release if needed.
+
+### Retained (still defensive backup)
+
+- `JEDB_CCT_Screen_Variations_Panel::maybe_inject_wc_chrome_strip()` still emits Tier 1's inline `<script id="jedb-wc-iframe-close-handler">`. Its sessionStorage-bridged behavior is unchanged. When it DOES manage to fire successfully (which proved variable on staging), it sends `jedb:wc-modal-close` to the parent — the parent's listener still respects that as a defensive close request. No conflict with the new primary close path.
+- The `jedb:wc-save-error` message is still emitted by Tier 1 (harmless — parent now ignores it).
+
+### Migration
+
+Zero. JS-only change.
+
+### Verification
+
+The save & auto-close happy path should now work reliably:
+1. Open a CCT row → click "Open variations editor →"
+2. Edit the product title to a marker
+3. Click "Done · Save & return to CCT"
+4. Within ~1 second of the post-save iframe redirect, the modal auto-closes + the parent CCT page reloads
+5. The `Mosaic Name` field on the CCT now shows the new value (reverse-pull worked)
+
+All four points 2-5 are now consistent with server-side state (which alpha.18 already confirmed working).
+
 ## [0.6.0-alpha.19] — 2026-05-21
 
 **Phase 4b modal-close fix — move close-on-save state from iframe sessionStorage to the parent window. Resolves the staging report that the modal didn't auto-close after a successful product save.**
