@@ -247,6 +247,30 @@ class JEDB_Flattener {
 			$target_data = array();
 		}
 
+		// alpha.21 (post-L-033): applicability gate on the forward
+		// direction. Only fires when the bridge's gate has
+		// `applies_to` ∈ {'push','both'}. Default 'pull' so existing
+		// bridges are unaffected — forward push is the bridge that
+		// SETS the category, so it shouldn't gate itself out under
+		// default config. Editors who want defensive forward gating
+		// (e.g. "skip push if target was manually re-categorized")
+		// opt in by setting applies_to to 'push' or 'both'. Only
+		// meaningful when the target is a post (CCT targets don't
+		// carry taxonomy terms).
+		$target_is_post = 0 === strpos( $target_target, 'posts::' );
+		if ( $target_is_post ) {
+			$applicability = JEDB_Reverse_Flattener::evaluate_applicability_gate( $config, $target_id, 'push' );
+			if ( 'skip' === $applicability['decision'] ) {
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_NOT_APPLICABLE, $origin_tag, 'bridge not applicable to target — applies_when_target_in_terms gate evaluated false', array(
+					'gate'         => $applicability['gate'],
+					'target_terms' => $applicability['actual_terms'],
+					'match_mode'   => $applicability['match_mode'],
+					'direction'    => 'push',
+				) );
+				return JEDB_Sync_Log::STATUS_SKIPPED_NOT_APPLICABLE;
+			}
+		}
+
 		$context = array(
 			'source_target' => $source_adapter,
 			'source_id'     => $source_id,
@@ -286,7 +310,8 @@ class JEDB_Flattener {
 		// Only meaningful when target is a post (CCT targets don't
 		// carry post meta). See L-026 / L-025 for the architectural
 		// post-mortem that drove this design.
-		$target_is_post = 0 === strpos( $target_target, 'posts::' );
+		// (`$target_is_post` was already computed above for the alpha.21
+		// applicability gate — reuse it.)
 		if ( $target_is_post ) {
 			if ( get_post_meta( (int) $target_id, '_jedb_bridge_locked', true ) ) {
 				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SKIPPED_LOCKED, $origin_tag, 'per-product lock set on target — push suppressed', array(

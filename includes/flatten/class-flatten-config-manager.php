@@ -67,12 +67,71 @@ class JEDB_Flatten_Config_Manager {
 				'fallback_to_single_page' => true,
 				'auto_attach_relation'    => true,
 			),
-			// Phase 3.5 reverse-direction opt-in (D-17 default OFF). When ON,
-			// the reverse pull engine will create a fresh CCT row in the
-			// source target if a post saves and no linked CCT row exists.
-			// Defaults to false because the action is destructive (creates
-			// data); editors must explicitly opt in per bridge.
+			// Forward-direction auto-create (D-17 default OFF).
+			//
+			// When ON, the forward push engine creates a fresh TARGET post
+			// in the target adapter if no linked target exists.
+			//
+			// NAMING HISTORY: this flag historically also drove reverse-
+			// direction source auto-creation in `JEDB_Reverse_Flattener::
+			// resolve_source_id()`. That overload was the L-033 footgun —
+			// see lesson. As of alpha.21 the reverse direction reads
+			// `auto_create_source_when_unlinked` (below) instead. This
+			// flag is now forward-only as the name implies.
 			'auto_create_target_when_unlinked'  => false,
+			// Reverse-direction auto-create (alpha.21, post-L-033).
+			//
+			// When ON, the reverse pull engine creates a fresh SOURCE CCT
+			// row if a target post saves and no linked CCT row exists.
+			//
+			// Defaults to false because the cascade scenario in L-033
+			// proved this is almost never what the editor wants:
+			// multiple bridges sharing a target post type would each
+			// auto-create a source row on every product save, spawning
+			// orphan CCT rows and relation attachments.
+			//
+			// Editors who genuinely want product-driven CCT creation
+			// (rare — typically only useful when the WC product is the
+			// canonical source and the CCT is a derived snapshot) can
+			// opt in per bridge.
+			'auto_create_source_when_unlinked'  => false,
+			// Bridge applicability gate (alpha.21, post-L-033).
+			//
+			// Declares the categorical scope of this bridge against the
+			// TARGET post type. When the target post doesn't satisfy
+			// the gate's match condition, the engine logs
+			// `STATUS_SKIPPED_NOT_APPLICABLE` and bails BEFORE any
+			// source resolution, auto-create, or relation attach
+			// happens.
+			//
+			// Solves the L-033 cross-bridge cascade where multiple
+			// bridges with the same `target_target` would all fire on
+			// any save of a target of that type, regardless of which
+			// CCT actually "owns" the target.
+			//
+			// Empty taxonomy OR empty terms = no gate (back-compat with
+			// every saved bridge before alpha.21). When the gate is
+			// empty AND the bridge has a non-empty `taxonomies[]` rule
+			// with `apply_terms`, `merge_with_defaults()` auto-derives
+			// the gate from the taxonomies block so existing bridges
+			// get the correct scope without editing.
+			//
+			// `match_mode`: `any` (target has ≥1 term in `terms`),
+			// `all` (target has all of `terms`), `none` (target has
+			// none of `terms` — useful as an exclusion gate).
+			//
+			// `applies_to`: which direction(s) the gate applies in.
+			// `pull` is the default because forward push is the bridge
+			// that SETS the category and shouldn't gate itself out.
+			// `push` enables defensive forward-direction gating.
+			// `both` applies to both directions.
+			'applies_when_target_in_terms'      => array(
+				'taxonomy'   => '',
+				'terms'      => array(),
+				'match_by'   => 'slug',
+				'match_mode' => 'any',
+				'applies_to' => 'pull',
+			),
 			// Phase 4 alpha.3 (D-27 / §4.5): Bridge meta box configuration
 			// on the Woo product / variation edit screen for this bridge.
 			// Day 1 stores the schema; Day 2 builds the meta box that
@@ -159,6 +218,28 @@ class JEDB_Flatten_Config_Manager {
 			'snippet'             => null,       // forward-compat with Phase 5b
 			'enabled'             => true,
 			'note'                => '',
+		);
+	}
+
+	/**
+	 * Default shape for the `applies_when_target_in_terms` block
+	 * (alpha.21, post-L-033). Used by `merge_with_defaults()` to fill in
+	 * missing keys on bridges saved before alpha.21.
+	 *
+	 * Empty `taxonomy` or empty `terms` array = no gate (bridge applies
+	 * to all targets — current behavior). Editors opt in by populating
+	 * the block; `merge_with_defaults()` also auto-derives a sensible
+	 * default from the `taxonomies[]` block when both are eligible.
+	 *
+	 * @return array
+	 */
+	public static function default_applies_when_target_in_terms() {
+		return array(
+			'taxonomy'   => '',
+			'terms'      => array(),
+			'match_by'   => 'slug',
+			'match_mode' => 'any',
+			'applies_to' => 'pull',
 		);
 	}
 
@@ -361,6 +442,63 @@ class JEDB_Flatten_Config_Manager {
 			if ( ! is_array( $rule['apply_terms_inverse'] ) ) { $rule['apply_terms_inverse'] = array(); }
 		}
 		unset( $rule );
+
+		// alpha.21 (post-L-033): bridge applicability gate. Existing
+		// pre-alpha.21 bridges saved without the block get the default
+		// (empty taxonomy / empty terms = no gate). When the block is
+		// empty AND the bridge has a non-empty `taxonomies[]` rule with
+		// a non-empty `apply_terms` list, AUTO-DERIVE the gate from the
+		// first such rule:
+		//   taxonomy   = taxonomies[0].taxonomy
+		//   terms      = taxonomies[0].apply_terms
+		//   match_by   = taxonomies[0].match_by
+		//   match_mode = 'any'
+		//   applies_to = 'pull'
+		// This gives every BBHQ-style category-scoped bridge the
+		// correct reverse-pull gate at read time without requiring the
+		// editor to edit and re-save. Editors who want different
+		// semantics (push gating, exclusion modes) can override the
+		// derived defaults by populating the block explicitly.
+		if ( ! isset( $config['applies_when_target_in_terms'] ) || ! is_array( $config['applies_when_target_in_terms'] ) ) {
+			$config['applies_when_target_in_terms'] = self::default_applies_when_target_in_terms();
+		} else {
+			$config['applies_when_target_in_terms'] = wp_parse_args(
+				$config['applies_when_target_in_terms'],
+				self::default_applies_when_target_in_terms()
+			);
+		}
+		if ( ! is_array( $config['applies_when_target_in_terms']['terms'] ) ) {
+			$config['applies_when_target_in_terms']['terms'] = array();
+		}
+		// Auto-derive from taxonomies[] when the gate is empty and a
+		// well-formed taxonomy rule exists.
+		$gate = $config['applies_when_target_in_terms'];
+		if ( '' === (string) $gate['taxonomy'] && empty( $gate['terms'] ) && ! empty( $config['taxonomies'] ) ) {
+			foreach ( $config['taxonomies'] as $tax_rule ) {
+				if ( ! is_array( $tax_rule ) ) { continue; }
+				$rule_tax   = isset( $tax_rule['taxonomy'] )    ? (string) $tax_rule['taxonomy']    : '';
+				$rule_terms = isset( $tax_rule['apply_terms'] ) && is_array( $tax_rule['apply_terms'] ) ? $tax_rule['apply_terms'] : array();
+				if ( '' !== $rule_tax && ! empty( $rule_terms ) ) {
+					$config['applies_when_target_in_terms']['taxonomy']   = $rule_tax;
+					$config['applies_when_target_in_terms']['terms']      = array_values( $rule_terms );
+					$config['applies_when_target_in_terms']['match_by']   = isset( $tax_rule['match_by'] ) && '' !== (string) $tax_rule['match_by'] ? (string) $tax_rule['match_by'] : 'slug';
+					$config['applies_when_target_in_terms']['_derived_from_taxonomies'] = true;
+					break;
+				}
+			}
+		}
+
+		// alpha.21 (post-L-033): explicit reverse auto-create flag. For
+		// bridges saved before this key existed, default to false (do
+		// NOT inherit from `auto_create_target_when_unlinked`) so the
+		// reverse-pull cascade footgun is closed by default. Editors
+		// who genuinely want product-driven CCT creation opt in
+		// explicitly per bridge.
+		if ( ! isset( $config['auto_create_source_when_unlinked'] ) ) {
+			$config['auto_create_source_when_unlinked'] = false;
+		} else {
+			$config['auto_create_source_when_unlinked'] = (bool) $config['auto_create_source_when_unlinked'];
+		}
 
 		// Phase 4b (alpha.14): cct_screen back-compat. Existing alpha.3-
 		// alpha.13 bridges saved before this block existed get filled in

@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.20
+Stable tag: 0.6.0-alpha.21
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.20) ==
+== Current Capability (v0.6.0-alpha.21) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -95,7 +95,10 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 == Changelog ==
 
 = Unreleased =
-* No items currently queued. Phase 4b is complete. Next focus per roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+* No items currently queued. Next focus per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+= 0.6.0-alpha.21 =
+* Cross-bridge applicability gate (post-L-033). Live staging report: saving a Mosaic CCT row spawned an orphan Available Sets CCT row because the reverse-flatten fan-out fired ALL bridges with target_target=posts::product, and Bridge 1's auto_create_target_when_unlinked (overloaded for the reverse direction) created the orphan. Fix: (a) new applies_when_target_in_terms config block with taxonomy + terms + match_by + match_mode (any/all/none) + applies_to (pull/push/both) — the engine skips bridges whose target doesn't satisfy the gate, BEFORE any source resolution or auto-create. New STATUS_SKIPPED_NOT_APPLICABLE sync_log status. (b) Split the overloaded auto-create flag into auto_create_target_when_unlinked (forward, existing semantics) and auto_create_source_when_unlinked (reverse, new, defaults OFF). Reverse_Flattener::resolve_source_id() now reads the new flag. (c) Auto-derivation in merge_with_defaults: bridges with non-empty taxonomies[] rules get the applicability gate auto-populated at read time so existing bridges with categorical contracts get the right scope without re-saving. (d) Flatten admin tab UI for the new fields + shared JEDB_Reverse_Flattener::evaluate_applicability_gate() static helper called by both flatteners. New BUILD-PLAN D-28 decision row + new L-033 lesson learned.
 
 = 0.6.0-alpha.20 =
 * Phase 4b modal-close fix follow-up. Live staging post-alpha.19 showed Tier 1's inline iframe-close handler DID fire on the post-save page, but it found a `.notice-error` element in the WC product editor DOM (a hidden template/scaffolding element with that class, not a real error) and posted `jedb:wc-save-error` to the parent. The parent's alpha.19 listener responded by setting iframePendingSave = false, which then prevented the load handler from closing the modal on successful saves. Fix: dropped DOM-based error detection entirely (false-positives unreliable in this WC install) — parent's iframe load handler now always closes the modal on post-save iframe load. Also dropped the parent's response to `jedb:wc-save-error` (no-op now). Tradeoff: lose the validation-error-keep-modal-open feature; if WC genuinely rejects a save, the modal closes anyway and editor re-opens to retry. Acceptable because variation-management workflow rarely triggers WC validation errors. Future release can add server-side error detection via wc_get_notices('error') if needed. JS-only change.
@@ -192,6 +195,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 * Phase 0 scaffold — bootstrap, dependency check, four custom tables, snippet uploads folder, admin shell + status tab, debug-log helper. Hotfix for JetEngine version detection across multiple JE channels.
 
 == Upgrade Notice ==
+
+= 0.6.0-alpha.21 =
+Cross-bridge applicability gate (post-L-033). Resolves the orphan-CCT-row cascade from staging where saving a Mosaic CCT row spawned an orphan Available Sets CCT row because multiple bridges shared target_target=posts::product. New applies_when_target_in_terms config block scopes bridges to specific taxonomy terms. Splits auto-create flag into forward (target) and reverse (source, default OFF) variants. Auto-derives gate from existing taxonomies[] rules at read time so existing bridges are protected with zero editor action.
 
 = 0.6.0-alpha.20 =
 Phase 4b modal-close fix follow-up. Dropped DOM-based error detection that was false-positive on WC product editor's hidden .notice-error template elements, which blocked the alpha.19 close-on-save path. Parent's iframe load handler now always closes the modal on post-save iframe load. Tradeoff: lose the keep-open-on-validation-error feature; net positive because the close-on-save now works reliably.

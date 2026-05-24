@@ -4,7 +4,81 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
-No items currently queued. Phase 4b is complete. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug, utilities, export/import) and Phase 5b (Custom Code Snippets).
+No items currently queued. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+## [0.6.0-alpha.21] — 2026-05-24
+
+**Cross-bridge applicability gate (post-L-033) — addresses the staging report where saving a Mosaic CCT row spawned an orphan Available Sets CCT row on the cascade.**
+
+Live staging diagnostics on Brick Builders HQ revealed that when bridges share a `target_target` (e.g. multiple CCTs all bridging to `posts::product`), the reverse-flatten fan-out fires ALL of them on any save of that target. Combined with the overloaded `auto_create_target_when_unlinked` flag (which the reverse direction reused as "auto-create the SOURCE if missing"), saving a Mosaic CCT row would:
+
+1. Forward-push create the WC product 662 (correct)
+2. Product save fires `woocommerce_update_product`
+3. Reverse_Flattener fans out to BOTH bridges with `target_target=posts::product`
+4. Bridge 1 (`available_sets_data ← product`) finds no linked CCT → `auto_create_target_when_unlinked=true` → **CREATES orphan available_sets row 8 + auto-attaches jet_rel_8** (wrong)
+5. The product is now in BOTH categorical webs forever
+
+L-033 documents the full retrospective. The fix splits a single overloaded flag into direction-specific flags AND adds a first-class applicability gate that scopes bridges to specific taxonomy terms on the target.
+
+### Added
+
+- **`applies_when_target_in_terms` config block** in `JEDB_Flatten_Config_Manager::default_config_json()`:
+  ```json
+  "applies_when_target_in_terms": {
+    "taxonomy":   "",
+    "terms":      [],
+    "match_by":   "slug",
+    "match_mode": "any",     // any | all | none
+    "applies_to": "pull"      // pull | push | both
+  }
+  ```
+  Empty taxonomy OR empty terms = no gate (back-compat). New factory `JEDB_Flatten_Config_Manager::default_applies_when_target_in_terms()`. `match_mode` semantics: `any` = target has at least one of `terms` (default); `all` = target has every term; `none` = target has none (exclusion gate, useful for "this bridge handles everything EXCEPT mosaics").
+- **`auto_create_source_when_unlinked` flag** in `default_config_json()` (default **false**). Replaces the reverse-direction semantics that were overloaded onto `auto_create_target_when_unlinked`. Reverse_Flattener::resolve_source_id() now reads this flag instead of the old one. Editors who genuinely want product-driven CCT creation (rare — typically only when the WC product is the canonical source and the CCT is a derived snapshot) opt in explicitly per bridge.
+- **`JEDB_Sync_Log::STATUS_SKIPPED_NOT_APPLICABLE`** constant. Emitted when the applicability gate evaluates false against the saving target. `context_json` includes the bridge's expected `terms` + the target's actual terms for diagnostic clarity. **Healthy signal, not noise** — confirms the categorical scope is being respected.
+- **`JEDB_Reverse_Flattener::evaluate_applicability_gate()`** — public static helper. Fetches the target's terms via `wp_get_post_terms()`, evaluates them against the bridge's gate per `match_mode`, returns `{decision: 'apply'|'skip', gate, actual_terms, match_mode}`. Called by both flatteners so the logic isn't duplicated.
+- **Applicability check in `JEDB_Reverse_Flattener::apply_bridge()`** — runs BEFORE `resolve_source_id()`. On `skip`, logs `STATUS_SKIPPED_NOT_APPLICABLE` and returns. **No source resolution, no auto-create, no relation attach, no cascade noise.**
+- **Applicability check in `JEDB_Flattener::apply_bridge()`** — runs AFTER `resolve_target_id()` (so a target_id exists to check terms on) but BEFORE field writes. Only fires when `applies_to ∈ {push, both}`. Default `pull`-only so existing bridges' forward-push behavior is unchanged.
+- **Flatten admin tab UI** in `templates/admin/tab-flatten.php`:
+  - Renamed the existing "Reverse-direction options" row's checkbox to "Auto-create on push" (forward) and fixed its label/description (it was previously labeled "creates the source CCT" — wrong direction).
+  - New "Auto-create on pull" row with the new `auto_create_source_when_unlinked` checkbox (visible only when direction includes pull, like the old reverse-direction row).
+  - New "Applicability" row exposing all five fields (taxonomy, terms CSV, match_by select, match_mode select, applies_to select) plus an inline warning banner when the gate was auto-derived from the `taxonomies[]` block on read.
+- **`assets/js/flatten-admin.js`** round-trips all the new fields in `buildConfig` + change listeners.
+
+### Changed
+
+- **`JEDB_Reverse_Flattener::resolve_source_id()`** now reads `$config['auto_create_source_when_unlinked']` (default false) instead of `$config['auto_create_target_when_unlinked']`. Inline doc explains the change + references L-033.
+- **`JEDB_Reverse_Flattener::apply_bridge()`** STATUS_SKIPPED_NO_TARGET message updated: `"no linked source CCT row — set auto_create_source_when_unlinked to opt in"` (was `"set link_via.auto_create_target_when_unlinked to opt in"` — pointed at the wrong flag after the split).
+- **`JEDB_Flatten_Config_Manager::merge_with_defaults()`** — new back-compat block for `applies_when_target_in_terms` and `auto_create_source_when_unlinked`:
+  - Adds defaults for `applies_when_target_in_terms` on read for bridges saved before alpha.21.
+  - **Auto-derives the gate** from `taxonomies[0]` (first rule with non-empty `apply_terms`) when the explicit gate is empty. Sets `taxonomy = taxonomies[0].taxonomy`, `terms = taxonomies[0].apply_terms`, `match_by = taxonomies[0].match_by`, `match_mode = 'any'`, `applies_to = 'pull'`. Also stamps `_derived_from_taxonomies: true` for the UI to surface a "this was auto-derived" banner.
+  - Initializes `auto_create_source_when_unlinked = false` for bridges that don't have the key — **DOES NOT inherit from `auto_create_target_when_unlinked`**. This closes the cascade footgun by default. Editors who relied on the old overloaded behavior have to explicitly re-enable.
+
+### Affected by this fix (production bridges on BBHQ)
+
+Both `cct::available_sets_data ↔ posts::product` (bridge id 1) and `cct::mosaics_data ↔ posts::product` (bridge id 3) have `taxonomies[]` rules with non-empty `apply_terms`:
+
+- Bridge 1: `taxonomy=product_cat, apply_terms=[available-sets]`
+- Bridge 3: `taxonomy=product_cat, apply_terms=[mosaics]`
+
+On first read after alpha.21 deploys, `merge_with_defaults()` auto-derives the applicability gate for each — Bridge 1 will skip reverse-pulls on non-`available-sets` products, Bridge 3 will skip on non-`mosaics`. The orphan-row cascade scenario can't recur even without editor action.
+
+### L-033 — new lesson learned
+
+**Bridges targeting the same post type are NOT independent — reverse-pull cascades them all unless explicit applicability scope is declared.** Full retrospective in `LESSONS-LEARNED.md` covering: the cascade chronology from sync_log row 307→312, JE relations being passive (no auto-related on JE's side — confirmed via direct DB inspection of `wp_jet_post_types` ids 8 and 9), the failure mechanism, the architectural fix (applicability gate + split flags), prevention rules for future bridge design, and cross-references to L-020 / L-021 / L-023 / L-026.
+
+### Migration
+
+Zero editor action required. Bridges that already had `taxonomies[]` rules with `apply_terms` automatically get the right applicability gate on read. The split auto-create flags default the new reverse flag to OFF, which is the safe default. Existing bridges that genuinely depended on reverse auto-create (rare — almost no one does) need to explicitly enable `auto_create_source_when_unlinked` in the Flatten admin tab.
+
+The orphan rows + relations from the BBHQ staging incident (available_sets row 8 + jet_rel_8 entry parent=8, child=662) are NOT auto-cleaned by this release. BBHQ is the test site so the user explicitly elected to clean up manually; production installs that hit the cascade before alpha.21 will need either manual DB cleanup or a future Phase 5 Utilities-tab "find orphan source rows" tool.
+
+### Verification
+
+1. **Existing bridges get auto-derived gates**: open Bridge 1 (or any bridge with `taxonomies[]` rules) in the Flatten admin tab. The "Applicability" row should show the orange "Auto-derived from taxonomies block" banner with `taxonomy=product_cat`, `terms=available-sets` (or whatever the bridge's apply_terms are), `match_by=slug`, `match_mode=any`, `applies_to=pull`. Save without changes — banner disappears next visit, gate persists explicitly.
+2. **Cascade is blocked**: create a fresh Mosaic CCT row. Product gets created. Check `wp_jet_cct_available_sets_data` — no new row. Check `wp_jet_rel_8` — no new attachment. Check `wp_jedb_sync_log` — there should be a `STATUS_SKIPPED_NOT_APPLICABLE` row for Bridge 1's reverse-pull attempt with `context.gate.terms=["available-sets"]` and `context.target_terms=["mosaics"]`.
+3. **Reverse-pull still works for IN-SCOPE products**: edit Product 662 (mosaics-category) via the iframe modal. Bridge 3's reverse-pull should fire successfully (applies because product is in mosaics). sync_log row direction=pull, status=success.
+4. **Exclusion mode**: set a bridge's `match_mode=none` with terms `["mosaics"]`. Now that bridge pulls for products NOT in mosaics. Useful for "everything except" workflows.
+5. **Forward gating opt-in**: set `applies_to=both` on Bridge 3. Manually re-categorize product 662 to `available-sets` only. Save the linked Mosaic — forward push should now skip with `STATUS_SKIPPED_NOT_APPLICABLE` (was previously allowed to force-recategorize via taxonomies rule).
 
 ## [0.6.0-alpha.20] — 2026-05-21
 

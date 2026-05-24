@@ -599,6 +599,22 @@
 
 		cfg.auto_create_target_when_unlinked = $form.find( 'input[name="auto_create_target_when_unlinked"]' ).is( ':checked' );
 
+		// alpha.21 (post-L-033): reverse-direction auto-create + applicability gate.
+		cfg.auto_create_source_when_unlinked = $form.find( 'input[name="auto_create_source_when_unlinked"]' ).is( ':checked' );
+
+		var applicTermsRaw = String( $form.find( 'input[name="applies_when_target_in_terms_terms"]' ).val() || '' );
+		var applicTerms    = applicTermsRaw.split( ',' )
+			.map( function ( t ) { return $.trim( t ); } )
+			.filter( function ( t ) { return t.length > 0; } );
+
+		cfg.applies_when_target_in_terms = {
+			taxonomy:   String( $form.find( 'input[name="applies_when_target_in_terms_taxonomy"]' ).val() || '' ),
+			terms:      applicTerms,
+			match_by:   String( $form.find( 'select[name="applies_when_target_in_terms_match_by"]' ).val() || 'slug' ),
+			match_mode: String( $form.find( 'select[name="applies_when_target_in_terms_match_mode"]' ).val() || 'any' ),
+			applies_to: String( $form.find( 'select[name="applies_when_target_in_terms_applies_to"]' ).val() || 'pull' )
+		};
+
 		// Phase 4 alpha.3 (D-27 / §4.6): top-level redirect shim opt-in.
 		cfg.cct_single_redirect = $form.find( 'input[name="cct_single_redirect"]' ).is( ':checked' );
 
@@ -665,7 +681,8 @@
 
 	$tbody.on( 'change', 'select, input, textarea', syncJSON );
 
-	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="meta_box_show_advanced"], input[name="direction"], input[name="cct_screen_wc_variations_enabled"], input[name="cct_screen_wc_variations_auto_force_variable_type"], input[name="cct_screen_wc_variations_show_full_page"]', syncJSON );
+	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="auto_create_source_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="meta_box_show_advanced"], input[name="direction"], input[name="cct_screen_wc_variations_enabled"], input[name="cct_screen_wc_variations_auto_force_variable_type"], input[name="cct_screen_wc_variations_show_full_page"], select[name="applies_when_target_in_terms_match_by"], select[name="applies_when_target_in_terms_match_mode"], select[name="applies_when_target_in_terms_applies_to"]', syncJSON );
+	$form.on( 'input', 'input[name="applies_when_target_in_terms_taxonomy"], input[name="applies_when_target_in_terms_terms"]', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_condition, #jedb_flatten_meta_box_title, #jedb_flatten_meta_box_groups, #jedb_flatten_wc_variations_title', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 

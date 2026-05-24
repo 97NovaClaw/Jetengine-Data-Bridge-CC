@@ -222,15 +222,96 @@ endif;
 			$initial_direction = $editing['direction'] ?? 'push';
 			$reverse_visible   = in_array( $initial_direction, array( 'pull', 'bidirectional' ), true );
 			?>
-			<tr class="jedb-reverse-direction-row"<?php echo $reverse_visible ? '' : ' style="display:none;"'; ?>>
-				<th><?php esc_html_e( 'Reverse-direction options', 'je-data-bridge-cc' ); ?></th>
+			<tr>
+				<th><?php esc_html_e( 'Auto-create on push', 'je-data-bridge-cc' ); ?></th>
 				<td>
 					<label>
 						<input type="checkbox" name="auto_create_target_when_unlinked" value="1" <?php checked( ! empty( $config['auto_create_target_when_unlinked'] ) ); ?> />
-						<?php esc_html_e( 'Auto-create the source CCT row when an unlinked post saves', 'je-data-bridge-cc' ); ?>
+						<?php esc_html_e( 'Auto-create the target post when an unlinked CCT row saves', 'je-data-bridge-cc' ); ?>
 					</label>
 					<p class="description" style="margin-left:24px;margin-top:4px;color:#646970;">
-						<?php esc_html_e( 'When ON, saving a post that has no matching JE relation row AND no CCT row pointing at it via cct_single_post_id will create a fresh CCT row from scratch. Default OFF because the action creates data — turn it on only when you want post saves to spawn source CCT rows automatically.', 'je-data-bridge-cc' ); ?>
+						<?php esc_html_e( 'Forward direction. When ON, saving a CCT row that has no matching JE relation row AND no linked target will create a fresh target post (e.g. a WC product) from scratch. Default OFF because the action creates data — turn it on only when you want CCT saves to spawn target posts automatically.', 'je-data-bridge-cc' ); ?>
+					</p>
+				</td>
+			</tr>
+			<tr class="jedb-reverse-direction-row"<?php echo $reverse_visible ? '' : ' style="display:none;"'; ?>>
+				<th><?php esc_html_e( 'Auto-create on pull', 'je-data-bridge-cc' ); ?></th>
+				<td>
+					<label>
+						<input type="checkbox" name="auto_create_source_when_unlinked" value="1" <?php checked( ! empty( $config['auto_create_source_when_unlinked'] ) ); ?> />
+						<?php esc_html_e( 'Auto-create the source CCT row when an unlinked target post saves', 'je-data-bridge-cc' ); ?>
+					</label>
+					<p class="description" style="margin-left:24px;margin-top:4px;color:#646970;">
+						<strong><?php esc_html_e( 'Reverse direction.', 'je-data-bridge-cc' ); ?></strong>
+						<?php esc_html_e( 'When ON, saving a target post that has no linked CCT row will spawn a fresh source CCT row. Default OFF (alpha.21 post-L-033 — the cascade scenario where multiple bridges sharing a target post type all auto-create source rows on every save is almost never what the editor wants). Set the applicability gate below to scope this bridge to specific target categories before enabling this.', 'je-data-bridge-cc' ); ?>
+					</p>
+				</td>
+			</tr>
+			<tr>
+				<th>
+					<?php esc_html_e( 'Applicability', 'je-data-bridge-cc' ); ?>
+					<p class="description" style="font-weight:normal;margin-top:4px;color:#646970;">
+						<?php esc_html_e( 'Scope this bridge to targets that have specific taxonomy terms.', 'je-data-bridge-cc' ); ?>
+					</p>
+				</th>
+				<td>
+					<?php
+					$gate = isset( $config['applies_when_target_in_terms'] ) && is_array( $config['applies_when_target_in_terms'] )
+						? $config['applies_when_target_in_terms']
+						: JEDB_Flatten_Config_Manager::default_applies_when_target_in_terms();
+					$derived = ! empty( $gate['_derived_from_taxonomies'] );
+					?>
+					<?php if ( $derived ) : ?>
+						<p class="description" style="margin-bottom:8px;padding:8px 10px;background:#fff3cd;border-left:3px solid #f1c40f;border-radius:2px;">
+							<strong><?php esc_html_e( 'Auto-derived from taxonomies block.', 'je-data-bridge-cc' ); ?></strong>
+							<?php esc_html_e( 'No explicit applicability was saved before, so the values below were derived from this bridge\'s taxonomies rule. Save the bridge to make them explicit, or override any field below to customize.', 'je-data-bridge-cc' ); ?>
+						</p>
+					<?php endif; ?>
+					<table style="width:auto;border-collapse:collapse;">
+						<tr>
+							<td style="padding:4px 8px 4px 0;"><label for="jedb_applic_taxonomy"><?php esc_html_e( 'Taxonomy:', 'je-data-bridge-cc' ); ?></label></td>
+							<td><input type="text" id="jedb_applic_taxonomy" name="applies_when_target_in_terms_taxonomy" value="<?php echo esc_attr( (string) ( $gate['taxonomy'] ?? '' ) ); ?>" placeholder="product_cat" class="regular-text" /></td>
+						</tr>
+						<tr>
+							<td style="padding:4px 8px 4px 0;"><label for="jedb_applic_terms"><?php esc_html_e( 'Terms:', 'je-data-bridge-cc' ); ?></label></td>
+							<td>
+								<input type="text" id="jedb_applic_terms" name="applies_when_target_in_terms_terms" value="<?php echo esc_attr( is_array( $gate['terms'] ?? null ) ? implode( ', ', $gate['terms'] ) : '' ); ?>" placeholder="mosaics, available-sets" class="regular-text" />
+								<p class="description" style="margin-top:2px;"><?php esc_html_e( 'Comma-separated list. Empty = no applicability gate (bridge applies to all targets of this type).', 'je-data-bridge-cc' ); ?></p>
+							</td>
+						</tr>
+						<tr>
+							<td style="padding:4px 8px 4px 0;"><label for="jedb_applic_match_by"><?php esc_html_e( 'Match by:', 'je-data-bridge-cc' ); ?></label></td>
+							<td>
+								<select id="jedb_applic_match_by" name="applies_when_target_in_terms_match_by">
+									<?php foreach ( array( 'slug' => 'Slug', 'name' => 'Name', 'term_id' => 'Term ID' ) as $val => $lbl ) : ?>
+										<option value="<?php echo esc_attr( $val ); ?>" <?php selected( ( $gate['match_by'] ?? 'slug' ), $val ); ?>><?php echo esc_html( $lbl ); ?></option>
+									<?php endforeach; ?>
+								</select>
+							</td>
+						</tr>
+						<tr>
+							<td style="padding:4px 8px 4px 0;"><label for="jedb_applic_match_mode"><?php esc_html_e( 'Match mode:', 'je-data-bridge-cc' ); ?></label></td>
+							<td>
+								<select id="jedb_applic_match_mode" name="applies_when_target_in_terms_match_mode">
+									<option value="any" <?php selected( ( $gate['match_mode'] ?? 'any' ), 'any' ); ?>><?php esc_html_e( 'any (target has at least one of the terms)', 'je-data-bridge-cc' ); ?></option>
+									<option value="all" <?php selected( ( $gate['match_mode'] ?? 'any' ), 'all' ); ?>><?php esc_html_e( 'all (target has every term in the list)', 'je-data-bridge-cc' ); ?></option>
+									<option value="none" <?php selected( ( $gate['match_mode'] ?? 'any' ), 'none' ); ?>><?php esc_html_e( 'none (target has none of the terms — exclusion gate)', 'je-data-bridge-cc' ); ?></option>
+								</select>
+							</td>
+						</tr>
+						<tr>
+							<td style="padding:4px 8px 4px 0;"><label for="jedb_applic_applies_to"><?php esc_html_e( 'Applies to:', 'je-data-bridge-cc' ); ?></label></td>
+							<td>
+								<select id="jedb_applic_applies_to" name="applies_when_target_in_terms_applies_to">
+									<option value="pull" <?php selected( ( $gate['applies_to'] ?? 'pull' ), 'pull' ); ?>><?php esc_html_e( 'pull only (reverse direction, recommended)', 'je-data-bridge-cc' ); ?></option>
+									<option value="push" <?php selected( ( $gate['applies_to'] ?? 'pull' ), 'push' ); ?>><?php esc_html_e( 'push only (forward direction)', 'je-data-bridge-cc' ); ?></option>
+									<option value="both" <?php selected( ( $gate['applies_to'] ?? 'pull' ), 'both' ); ?>><?php esc_html_e( 'both directions', 'je-data-bridge-cc' ); ?></option>
+								</select>
+							</td>
+						</tr>
+					</table>
+					<p class="description" style="margin-top:8px;max-width:820px;color:#646970;">
+						<?php esc_html_e( 'When a target post saves, the engine checks whether the post has the declared terms (per match mode). On miss, the bridge is skipped with sync_log status `skipped_not_applicable` — no source resolution, no auto-create, no relation attach. This is the alpha.21 fix for the L-033 cross-bridge cascade where multiple bridges sharing a target post type would all fire on any save. Pull-only is the recommended default because forward push is the bridge that SETS the category and shouldn\'t gate itself out.', 'je-data-bridge-cc' ); ?>
 					</p>
 				</td>
 			</tr>

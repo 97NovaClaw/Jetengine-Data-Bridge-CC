@@ -2595,3 +2595,102 @@ Decisions locked before implementation (D1–D6 / 2026-05-17 discussion):
 - **L-031** ("WP meta box label is set at `add_meta_box()` registration — register one box per bridge, not one umbrella box") — different specific lesson but same underlying principle: use the host platform's primitives at the right granularity, don't paper over them with abstractions.
 
 ---
+
+## L-033: Bridges targeting the same post type are NOT independent — reverse-pull cascades them all unless explicit applicability scope is declared
+
+**Discovered:** 2026-05-24 (alpha.21 staging diagnostic / Brick Builders HQ orphan-row report)
+**Severity:** High
+**Category:** Architecture / Engine semantics / Cross-bridge coupling
+
+### Context
+Brick Builders HQ has two bidirectional bridges that target the same WC post type:
+
+- **Bridge 1**: `cct::available_sets_data` ↔ `posts::product`, `direction=bidirectional`, applies category `available-sets` on push (`taxonomies` rule: `apply_terms=[available-sets]`, `apply_terms_inverse=[mosaics]`).
+- **Bridge 3**: `cct::mosaics_data` ↔ `posts::product`, `direction=bidirectional`, applies category `mosaics` on push (`taxonomies` rule: `apply_terms=[mosaics]`, `apply_terms_inverse=[available-sets]`).
+
+Editor's mental model: "Mosaic CCT rows correspond to mosaic-category products. Available-set CCT rows correspond to available-set products. One product is *either* a mosaic *or* an available set, never both."
+
+The schema doesn't enforce this. JE relations don't enforce this either — both `jet_rel_8` and `jet_rel_9` can simultaneously have a row pointing at the same product. JE's `one_to_one` constraint only restricts duplication within a single relation table, not cross-table membership.
+
+### Wrong
+The Phase 4b design treated each bridge as an independent reverse-pull subscriber:
+
+1. **Forward Flattener** iterates only bridges whose `source_target` matches the saving CCT slug — narrow, single-bridge dispatch.
+2. **Reverse Flattener** iterates ALL bridges whose `target_target` matches the saving post type — broad, fan-out dispatch.
+
+The asymmetry was deliberate (one post can legitimately be the target of multiple bridges with different responsibilities — e.g. mosaic-data syncs price/title, and a separate seo-data CCT syncs meta description). But the design assumed each fan-out bridge would *self-gate* via the `condition` DSL field if applicability was conditional. The taxonomies-block apply_terms list — which already encodes "this bridge owns products in category X" — was never read as an applicability signal.
+
+Combined with the `auto_create_target_when_unlinked` flag (named for forward semantics but reused unchanged in `JEDB_Reverse_Flattener::resolve_source_id()` for reverse-direction source auto-creation), this produced the failure mode below.
+
+### Evidence
+Live staging at 2026-05-24 14:00:20, exact chronology pulled from `wp_jedb_sync_log` rows 307–312 plus `wp_jet_rel_8` / `wp_jet_rel_9` `created` timestamps plus `JEDB_Reverse_Flattener` jedb-debug.log info lines:
+
+| Step | Source | Action | Outcome |
+|---|---|---|---|
+| 1 | User UI | Create Mosaic CCT row 13 | new row in `wp_jet_cct_mosaics_data` |
+| 2 | JE | Fires `jet-engine/custom-content-types/{slug}/created-item` for `mosaics_data` | triggers `JEDB_Flattener::on_cct_save()` |
+| 3 | Flattener Bridge 3 | `resolve_target_id()` finds no linked product; `auto_create_target_when_unlinked=true` | **creates product 662** via `JEDB_Target_Woo_Product::create_for_bridge()` |
+| 4 | Flattener Bridge 3 | Writes fields + applies taxonomy rule (`category=mosaics`) | product 662 in mosaics category, jet_rel_9 row created |
+| 5 | WC | `wc_get_product()->save()` fires `woocommerce_update_product` for product 662 | triggers `JEDB_Reverse_Flattener::run_for_post_event()` |
+| 6 | Reverse Bridge 3 (mosaics←product) | `resolve_source_id()` finds mosaic 13 via jet_rel_9; cascade guard sees Bridge 3 push in flight | sync_log row 308 `STATUS_SKIPPED_LOCKED` ✓ correct |
+| 7 | Reverse Bridge 1 (available_sets←product) | `resolve_source_id()` finds no available_sets row linked to product 662; `auto_create_target_when_unlinked=true` (shared flag, name lies) | **CREATES available_sets row 8** with empty seed; **auto-attaches jet_rel_8** parent=8, child=662 |
+| 8 | Reverse Bridge 1 | Pulls product 662 fields through reverse mappings, writes 2 fields to available_sets row 8 | sync_log row 307 `STATUS_SUCCESS "wrote 2 field(s)"` ❌ orphan side effect |
+
+Final state: one Mosaic CCT row, one product, AND **one orphan Available Sets CCT row + orphan jet_rel_8 row + product is now in BOTH category-mosaics AND the available-sets cross-bridge web**. The editor never asked for the available-sets row.
+
+Subsequent product saves perpetuate the noise: every save fires `woocommerce_update_product` → both Bridge 1 AND Bridge 3 fire pulls → Bridge 1 writes 1 field, Bridge 3 writes 3 fields → mosaic CCT save fires → Bridge 3 push fires back → cascade-guard suppresses Bridge 1 push (correct), but writes more to product → another `woocommerce_update_product` → repeat. Sync log rows 313–334 across the test window show 22 entries from ONE additional product save.
+
+### Reality
+Bridges with the same `target_target` are NOT independent on the reverse-pull side. They share the same `woocommerce_update_product` (or `save_post_*`) event stream. The engine fans out to ALL of them. Each runs through its own `resolve_source_id` → if any of them has `auto_create_target_when_unlinked=true` and no linked source, a CCT row gets created. Multiplied across N bridges sharing a target post type, every product save can spawn up to N CCT rows.
+
+JE's relation system doesn't catch this. JE relations are passive — pure storage with no auto-attach / auto-create policy. The `one_to_one` constraint on each relation only prevents duplication WITHIN a single relation table, not cross-table proliferation. The cross-CCT exclusivity ("a product is mosaic XOR available-set, not both") is a bridge-layer semantic that has to be enforced at the bridge layer.
+
+### Affected code (alpha.21 fix)
+**Add an applicability gate** that the engine checks before resolving sources / targets:
+
+- New `applies_when_target_in_terms` config block in `default_config_json()`:
+
+```json
+"applies_when_target_in_terms": {
+  "taxonomy":    "",
+  "terms":       [],
+  "match_by":    "slug",
+  "match_mode":  "any",
+  "applies_to":  "pull"
+}
+```
+
+- `taxonomy` empty → bridge applies to all targets (current behavior, back-compat).
+- `terms` empty → bridge applies to all targets (same).
+- `match_mode`: `any` (target has ≥1 of terms), `all` (target has all terms), `none` (target has none of terms — useful for "this bridge skips products in category X").
+- `applies_to`: `pull` only (default), `push` only, or `both`. Most bridges want `pull` only because forward-push is the bridge that SETS the category and shouldn't gate itself out.
+- **Auto-derivation fallback in `merge_with_defaults()`**: when `applies_when_target_in_terms` is empty AND the bridge's `taxonomies` array has a rule with non-empty `apply_terms`, populate the applicability with `taxonomy = taxonomies[0].taxonomy`, `terms = taxonomies[0].apply_terms`, `match_by = taxonomies[0].match_by`, `match_mode = 'any'`, `applies_to = 'pull'`. This gives existing bridges the correct gate with zero config change.
+
+Engine integration:
+
+- New `JEDB_Sync_Log::STATUS_SKIPPED_NOT_APPLICABLE` constant.
+- `JEDB_Reverse_Flattener::apply_bridge()` checks applicability BEFORE `resolve_source_id()`. On miss, logs `STATUS_SKIPPED_NOT_APPLICABLE` with the bridge's expected vs actual terms, and returns. **No source-side write, no auto-create, no relation attach.**
+- `JEDB_Flattener::apply_bridge()` checks same gate IF `applies_to` includes `push`. Default `pull`-only so forward-push behavior is unchanged for the common case.
+
+**Split the auto-create flag** so the forward semantic and the reverse semantic are no longer overloaded:
+
+- `auto_create_target_when_unlinked` — keeps current semantics (default `true`). FORWARD direction only. "On push, if no target post is linked, create one."
+- `auto_create_source_when_unlinked` — NEW (default `false`). REVERSE direction only. "On pull, if no source CCT row is linked, create one." Defaults off because the cascade scenario above is almost never what the editor wants. Editors who genuinely want product-driven CCT creation can opt in per bridge.
+
+`JEDB_Reverse_Flattener::resolve_source_id()` reads the NEW flag (`auto_create_source_when_unlinked`) instead of the old one. For bridges saved before alpha.21, `merge_with_defaults()` initializes the new flag to **`false`** (do NOT inherit from `auto_create_target_when_unlinked`) — explicit opt-in for the auto-create-source behavior, preventing existing bridges from continuing to spawn orphans.
+
+### Prevention
+1. **Bridges that share a target post type need explicit applicability scope.** The applicability gate is the canonical way. If a bridge doesn't declare one, the engine treats it as "applies to all targets of this type" — which is fine for the single-bridge case but a footgun for multi-bridge-per-target setups. The taxonomies-derived auto-default makes this safe-by-default for any bridge that already encodes a category contract.
+2. **Forward and reverse semantics are NOT symmetric for auto-create.** Flag names should reflect that. `auto_create_target_when_unlinked` was named for forward semantics; reusing it for reverse changed the verb's subject from "target" to "source" without changing the name. Going forward, any flag that controls auto-side-effects gets a direction-prefixed name (`auto_create_source_*` / `auto_create_target_*`) — never a shared bidirectional name.
+3. **JE Relations don't enforce cross-relation exclusivity.** `one_to_one` is per-table, not global. If your data model requires "a target post belongs to exactly one of N CCTs", that has to be modeled in the bridge layer (applicability gate now; possibly a future hard-exclusivity flag if applicability isn't enough). Don't assume JE will catch it.
+4. **Audit reverse-flatten fan-out before adding multi-bridge-per-target setups.** Whenever a new bridge is created with a `target_target` that already has bridges, ask: "Could a save on this target legitimately fire ALL these bridges?" If no, declare applicability scope. If unsure, defer to applicability scope as the safe default.
+5. **The engine's broad reverse-pull fan-out is a feature, not a bug — but it must be narrowable.** Multiple bridges legitimately CAN share a target post type when each owns a different concern (e.g. one bridge for primary data, another for SEO data, another for analytics meta). The fan-out lets each pull what it cares about on every product save. The applicability gate is what makes the fan-out safe — without it, every bridge gets every event and decides for itself whether to bail (and many bridges, like ours, didn't realize they had to bail).
+6. **Sync_log entries with `STATUS_SKIPPED_NOT_APPLICABLE` are a healthy signal, not noise.** They confirm the applicability gate is working. Don't suppress them; they're how editors confirm their categorical model is being respected.
+
+### Cross-references
+- **L-020** ("Bidirectional sync requires explicit reverse-direction handling — JE Relations doesn't help on the post side") — established that the reverse direction is engine territory, not JE territory. L-033 extends this: JE relations also don't enforce CROSS-relation policy (categorical applicability), so that has to be engine territory too.
+- **L-021** ("JetEngine 'auto-create on CCT save' creates the linked POST (via Has-Single-Page), NOT the relation row") — same architectural class of insight: JE's automation is shallower than naive expectations. JE creates POST-side single pages but not the CCT-side rows or relation rows. L-033 sits in the same category: JEDB has to do work JE won't do, and that work has to be precisely scoped via applicability rules.
+- **L-023** ("Taxonomies are a separate concern from field mappings — model them as a parallel `taxonomies` array") — L-033 builds on this by adding a SECOND semantic for the `taxonomies` array: not just "what terms to write on push" but "what terms make this bridge applicable on pull" (when auto-derivation kicks in via `merge_with_defaults`).
+- **L-026** ("Premature template-layer abstraction") — same family of insight: schema design has to match the editor's actual mental model. Editors think of bridges as "the bridge for mosaic-category products"; the engine has to honor that scope, not just take it as a suggestion.
+
+---

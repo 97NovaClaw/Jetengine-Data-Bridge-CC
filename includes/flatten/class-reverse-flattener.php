@@ -266,14 +266,31 @@ class JEDB_Reverse_Flattener {
 			return JEDB_Sync_Log::STATUS_ERRORED;
 		}
 
+		// alpha.21 (post-L-033): applicability gate. Skip BEFORE source
+		// resolution so non-applicable bridges don't trigger any side
+		// effects (no auto-create, no relation attach, no resolve work).
+		// Gate is evaluated when:
+		//   - bridge declares non-empty `applies_when_target_in_terms.terms`, AND
+		//   - `applies_to` ∈ {'pull','both'} (default 'pull')
+		$applicability = $this->evaluate_applicability_gate( $config, $post_id, 'pull' );
+		if ( 'skip' === $applicability['decision'] ) {
+			$this->log_status( $bridge, '', $post_id, JEDB_Sync_Log::STATUS_SKIPPED_NOT_APPLICABLE, $origin_tag, 'bridge not applicable to target — applies_when_target_in_terms gate evaluated false', array(
+				'gate'           => $applicability['gate'],
+				'target_terms'   => $applicability['actual_terms'],
+				'match_mode'     => $applicability['match_mode'],
+				'direction'      => 'pull',
+			) );
+			return JEDB_Sync_Log::STATUS_SKIPPED_NOT_APPLICABLE;
+		}
+
 		list( $source_id, $resolution_method, $auto_created, $auto_attached ) =
 			$this->resolve_source_id( $config, $source_target, $target_target, $post_id, $target_data );
 
 		if ( ! $source_id ) {
-			$this->log_status( $bridge, '', $post_id, JEDB_Sync_Log::STATUS_SKIPPED_NO_TARGET, $origin_tag, 'no linked source CCT row — set link_via.auto_create_target_when_unlinked to opt in', array(
-				'link_via'      => isset( $config['link_via'] ) ? $config['link_via'] : null,
-				'resolution'    => $resolution_method,
-				'auto_create'   => ! empty( $config['auto_create_target_when_unlinked'] ),
+			$this->log_status( $bridge, '', $post_id, JEDB_Sync_Log::STATUS_SKIPPED_NO_TARGET, $origin_tag, 'no linked source CCT row — set auto_create_source_when_unlinked to opt in', array(
+				'link_via'                          => isset( $config['link_via'] ) ? $config['link_via'] : null,
+				'resolution'                        => $resolution_method,
+				'auto_create_source_when_unlinked'  => ! empty( $config['auto_create_source_when_unlinked'] ),
 			) );
 			return JEDB_Sync_Log::STATUS_SKIPPED_NO_TARGET;
 		}
@@ -503,9 +520,17 @@ class JEDB_Reverse_Flattener {
 
 		$cct_table = $wpdb->prefix . 'jet_cct_' . $cct_slug;
 
-		$link        = isset( $config['link_via'] ) && is_array( $config['link_via'] ) ? $config['link_via'] : array();
-		$type        = isset( $link['type'] ) ? (string) $link['type'] : 'je_relation';
-		$auto_create = ! empty( $config['auto_create_target_when_unlinked'] );
+		$link = isset( $config['link_via'] ) && is_array( $config['link_via'] ) ? $config['link_via'] : array();
+		$type = isset( $link['type'] ) ? (string) $link['type'] : 'je_relation';
+
+		// alpha.21 (post-L-033): the REVERSE direction now reads its OWN
+		// auto-create flag, not the forward-direction `auto_create_target_
+		// when_unlinked` it used to share. The shared overload was the
+		// root cause of the orphan-row cascade. New flag defaults to
+		// false in `merge_with_defaults()`, so bridges saved before
+		// alpha.21 no longer auto-create source CCT rows on reverse-
+		// pull unless the editor explicitly opts in.
+		$auto_create = ! empty( $config['auto_create_source_when_unlinked'] );
 
 		// --- Path A: cct_single_post_id is the declared link mechanism ---
 
@@ -703,6 +728,123 @@ class JEDB_Reverse_Flattener {
 	 * extracted to a trait so each engine reads top-to-bottom with no
 	 * cross-class context required for debugging).
 	 * -------------------------------------------------------------------- */
+
+	/**
+	 * Evaluate the bridge's `applies_when_target_in_terms` gate against
+	 * the target post identified by `$post_id`.
+	 *
+	 * Returns an array describing the decision and supporting info for
+	 * the sync_log entry. The two outcomes:
+	 *
+	 *   - `apply`: the bridge should run for this target. Either the
+	 *     gate isn't configured (empty taxonomy / empty terms),
+	 *     `applies_to` doesn't include the current direction, or the
+	 *     target terms satisfy the gate's `match_mode`.
+	 *   - `skip`: the gate evaluated false. Caller should log
+	 *     `STATUS_SKIPPED_NOT_APPLICABLE` and return.
+	 *
+	 * Made `public static` so the forward `JEDB_Flattener::apply_bridge()`
+	 * can call the SAME implementation without duplication when its
+	 * `applies_to` opts into push-direction gating.
+	 *
+	 * @param array  $config    Bridge config (the `config_json` decoded array).
+	 * @param int    $post_id   Target post id.
+	 * @param string $direction 'pull' or 'push' — the direction we're testing.
+	 * @return array{decision:string, gate:array, actual_terms:array, match_mode:string}
+	 */
+	public static function evaluate_applicability_gate( array $config, $post_id, $direction ) {
+
+		$default_gate = array(
+			'taxonomy'   => '',
+			'terms'      => array(),
+			'match_by'   => 'slug',
+			'match_mode' => 'any',
+			'applies_to' => 'pull',
+		);
+		$gate = isset( $config['applies_when_target_in_terms'] ) && is_array( $config['applies_when_target_in_terms'] )
+			? wp_parse_args( $config['applies_when_target_in_terms'], $default_gate )
+			: $default_gate;
+
+		$taxonomy   = (string) $gate['taxonomy'];
+		$terms      = is_array( $gate['terms'] ) ? array_values( array_filter( array_map( 'strval', $gate['terms'] ), 'strlen' ) ) : array();
+		$match_by   = in_array( $gate['match_by'], array( 'slug', 'name', 'term_id' ), true ) ? $gate['match_by'] : 'slug';
+		$match_mode = in_array( $gate['match_mode'], array( 'any', 'all', 'none' ), true ) ? $gate['match_mode'] : 'any';
+		$applies_to = in_array( $gate['applies_to'], array( 'pull', 'push', 'both' ), true ) ? $gate['applies_to'] : 'pull';
+
+		// Direction filter: if the gate doesn't apply to this direction, treat as no-op.
+		$direction_active = ( 'both' === $applies_to ) || ( $direction === $applies_to );
+
+		// Empty config → bridge applies to all targets (no gate).
+		if ( '' === $taxonomy || empty( $terms ) || ! $direction_active ) {
+			return array(
+				'decision'     => 'apply',
+				'gate'         => $gate,
+				'actual_terms' => array(),
+				'match_mode'   => $match_mode,
+			);
+		}
+
+		// Fetch the target's terms for the declared taxonomy + match_by.
+		$post_id = absint( $post_id );
+		$post    = $post_id > 0 ? get_post( $post_id ) : null;
+		if ( ! $post ) {
+			// Defensive: if we can't load the post, fail safe to NOT
+			// applicable. This avoids cascading on phantom IDs.
+			return array(
+				'decision'     => 'skip',
+				'gate'         => $gate,
+				'actual_terms' => array(),
+				'match_mode'   => $match_mode,
+			);
+		}
+
+		$fetched = wp_get_post_terms( $post_id, $taxonomy, array(
+			'fields' => 'all',
+		) );
+		if ( is_wp_error( $fetched ) ) {
+			$fetched = array();
+		}
+		$actual_terms = array();
+		foreach ( $fetched as $term ) {
+			if ( ! is_object( $term ) ) { continue; }
+			switch ( $match_by ) {
+				case 'name':
+					$actual_terms[] = (string) $term->name;
+					break;
+				case 'term_id':
+					$actual_terms[] = (string) $term->term_id;
+					break;
+				case 'slug':
+				default:
+					$actual_terms[] = (string) $term->slug;
+					break;
+			}
+		}
+
+		$intersection = array_values( array_intersect( $actual_terms, $terms ) );
+		$has_any      = ! empty( $intersection );
+		$has_all      = count( array_unique( $intersection ) ) === count( array_unique( $terms ) );
+
+		switch ( $match_mode ) {
+			case 'all':
+				$decision = $has_all ? 'apply' : 'skip';
+				break;
+			case 'none':
+				$decision = $has_any ? 'skip' : 'apply';
+				break;
+			case 'any':
+			default:
+				$decision = $has_any ? 'apply' : 'skip';
+				break;
+		}
+
+		return array(
+			'decision'     => $decision,
+			'gate'         => $gate,
+			'actual_terms' => $actual_terms,
+			'match_mode'   => $match_mode,
+		);
+	}
 
 	private function loose_equals( $a, $b ) {
 

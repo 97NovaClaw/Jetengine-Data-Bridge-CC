@@ -32,6 +32,13 @@ class JEDB_Sync_Log {
 	// per-product `_jedb_bridge_locked` editor lock — the latter
 	// disambiguated by `reason: per_product_lock` in context_json).
 	const STATUS_SKIPPED_DIRECTION_OVERRIDE = 'skipped_direction_override';
+	// alpha.21 (post-L-033): emitted when a bridge's
+	// `applies_when_target_in_terms` gate evaluates false against the
+	// saving target post. Skip happens BEFORE source resolution, so no
+	// orphan rows are spawned, no relations are attached, no cascade
+	// noise. context_json includes the bridge's expected `terms` and
+	// the target's actual terms for diagnostic clarity.
+	const STATUS_SKIPPED_NOT_APPLICABLE     = 'skipped_not_applicable';
 	const STATUS_NOOP                       = 'noop';
 
 	/** @var JEDB_Sync_Log|null */
