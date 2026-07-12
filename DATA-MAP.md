@@ -127,13 +127,14 @@ Each row = one physical variation. Identity: hidden `_jedb_row_id` UUID ↔ vari
 
 | Repeater subfield | → | WC variation field | Direction |
 |---|---|---|---|
-| `variant_label` | → | `pa_variant` term | push |
-| `enabled` | → | variation status (off → private) | push |
+| `variant_label` (66% width) | → | `pa_variant` term | push |
+| `enabled` (switch, default ON) | → | variation status (off → private) | push |
 | `regular_price` (fallback: parent `price`) | → | `regular_price` | push |
-| `sale_price` | → | `sale_price` | push |
-| `sale_start` / `sale_end` | → | `date_on_sale_from` / `date_on_sale_to` | push (date transform) |
+| `on_sale` (UI gate — reveals the sale row; not mapped directly, reconciler clears sale fields when "no") | → | — | push (gate only) |
+| `sale_price` (visible when on_sale=yes) | → | `sale_price` | push |
+| `sale_start` / `sale_end` (visible when on_sale=yes) | → | `date_on_sale_from` / `date_on_sale_to` | push (date transform) |
 | `stock_quantity` | ↔ | `stock_quantity` (+ manage_stock=yes) | **two-way** (pull = Phase 4c-B) |
-| `length` / `width` / `height` / `weight` | → | same | push |
+| `length` / `width` / `height` (inches) + `weight` (lbs) — matches WC store units (in / lbs) | → | same | push |
 | `sku` | → | `sku` | push |
 
 ### `pdf_variations` repeater (mosaics_data) → WC variations
@@ -142,11 +143,12 @@ Attribute combo: `pa_physical-or-pdf=instructions-pdf` (+ Any variant). Defaults
 
 | Repeater subfield | → | WC variation field | Direction |
 |---|---|---|---|
-| `variant_label` | → | (label only) | push |
-| `enabled` | → | variation status | push |
+| `variant_label` (default "Instructions PDF") | → | (label only) | push |
+| `enabled` (switch, default ON) | → | variation status | push |
 | `file` (media/PDF) | → | `downloads[]` | push |
 | `price` | → | `regular_price` | push |
-| `sale_price` + schedule | → | sale fields | push |
+| `on_sale` (UI gate) | → | — | push (gate only) |
+| `sale_price` + schedule (visible when on_sale=yes) | → | sale fields | push |
 
 ---
 
