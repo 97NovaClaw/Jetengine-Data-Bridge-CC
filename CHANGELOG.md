@@ -4,7 +4,13 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
-No items currently queued. Next focus per BUILD-PLAN roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
+**Phase 4c spec'd (docs-only, 2026-07-12) — repeater-driven variation data sync.** BUILD-PLAN gained §4.13 (applicability gate reference section, filling D-28's dangling pointer), §4.14 (full Phase 4c spec), decision rows D-29 → D-32, and a Phase 4c roadmap entry. Design: CCT repeater fields (`physical_variations`, `pdf_variations`) carry per-row variation content — inventory, dimensions (L/W/H + weight), sale price with schedule, downloadable PDF — mapped to WC variations via a new `variation_mappings[]` bridge config block. Data-driven (CCT rows carry content), NOT config-driven like the retired alpha.13 reconciler (L-032 framing in §4.14.1). Row identity via hidden `_jedb_row_id` UUID ↔ the retained `META_VARIATION_SLUG` meta. Key locked decisions: always-variable product type once repeater rows exist (D-30), two-attribute strategy `pa_physical-or-pdf` + new `pa_variant` to satisfy WC's unique-combination rule for multiple physical variants (D-31), reconciler owns managed variations / iframe owns the rest (D-32). Phasing: 4c-A push, 4c-B stock-quantity pull (the purchase-decrement two-way piece), 4c-C polish.
+
+**New `DATA-MAP.md`** — visual per-bridge field-mapping reference (card per bridge: mappings, transforms, taxonomy rules, applicability, flags) snapshotted from live staging config, plus the planned Phase 4c repeater mappings and a maintenance checklist. Update it whenever a bridge changes.
+
+**Staging maintenance (2026-07-12, data-only, no release):** WC attribute cleanup — all 8 variable products migrated to the single global `pa_physical-or-pdf` attribute. Fixed dead-taxonomy references (`pa_physical-or-pdf-instructions`) on products 657/662, replaced per-product custom text attributes on 395/397/401/403, appended the missing term on 736, remapped all 17 variation attribute metas (validated against `_downloadable` flags), regenerated variation titles, ran `WC_Product_Variable::sync`, cleared product transients + post caches, regenerated the attributes lookup table, recounted terms, flushed the attribute-taxonomies cache. Incidental validation: the alpha.21 applicability gate behaved correctly under the resave load (mosaics bridge pulled, available_sets bridge skipped `not_applicable`, zero orphan rows).
+
+Next implementation work: Phase 4c-A. Then Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
 
 ## [0.6.0-alpha.21] — 2026-05-24
 

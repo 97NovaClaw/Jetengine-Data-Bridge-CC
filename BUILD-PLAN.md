@@ -1217,6 +1217,151 @@ This is the "I discovered the magic Woo fields list while building one site, pac
 
 (Days 2 and 3 are the meta box and the redirect shim, which don't depend on field presets.)
 
+### 4.13 Bridge applicability gate (`applies_when_target_in_terms`) — post-L-033
+
+*(Shipped in v0.6.0-alpha.21. This section fills in the reference from D-28; the full retrospective lives in L-033.)*
+
+When two or more bridges share a `target_target`, the reverse-flatten fan-out fires ALL of them on any save of that post type. The applicability gate is the per-bridge declaration of categorical scope:
+
+```json
+"applies_when_target_in_terms": {
+  "taxonomy":   "product_cat",
+  "terms":      ["mosaics"],
+  "match_by":   "slug",          // slug | name | term_id
+  "match_mode": "any",           // any | all | none
+  "applies_to": "pull"           // pull | push | both
+}
+```
+
+- Empty `taxonomy` or `terms` = no gate (bridge applies to all targets of its type).
+- The gate is checked BEFORE source/target resolution — a skipped bridge produces zero side effects (no auto-create, no relation attach). Skip logs `STATUS_SKIPPED_NOT_APPLICABLE` with expected-vs-actual terms in `context_json`.
+- `merge_with_defaults()` auto-derives the gate from the first `taxonomies[]` rule with non-empty `apply_terms` when no explicit gate is saved — existing category-scoped bridges get the right scope at read time with zero editor action (`_derived_from_taxonomies: true` marks the derivation for the UI banner).
+- Shared implementation: `JEDB_Reverse_Flattener::evaluate_applicability_gate()` (public static), called by both engines.
+- Companion change: the overloaded auto-create flag was split — `auto_create_target_when_unlinked` (forward) and `auto_create_source_when_unlinked` (reverse, default OFF).
+
+### 4.14 Repeater-driven variation data sync (Phase 4c) — planned
+
+**Status: SPEC — locked 2026-07-12, implementation not started.** Design driver: BBHQ mosaics need per-product variation *data* (inventory, dimensions, sale pricing, downloadable file) authored on the CCT side and kept in two-way sync with WC variations. Currently nothing bridged to WC carries inventory at all.
+
+#### 4.14.1 Relationship to L-032 (why declarative variation sync is coming back, changed)
+
+L-032 retired the alpha.13 reconciler because its **config-driven** model was wrong: the *bridge config* declared variation rules (`show_when` DSL, 7 fields/rule) and every CCT row got the same structure. Phase 4c is **data-driven**: each CCT row carries its own variation content in JE repeater fields; the bridge config declares only the structural mapping (which repeater, which subfields map to which WC fields) once. The editor experience is "fill in my mosaic's actual variations," not "author sync rules."
+
+The alpha.14 decision to retain `Target_Woo_Variation::find_managed_variation()` / `create_for_bridge()` / `META_VARIATION_SLUG` / `META_VARIATION_BRIDGE` as "defensive surface for future automation" pays off here — Phase 4c is that future automation. The iframe-flip (§4.7) remains in place for everything the repeaters don't model (variation images, shipping class, menu order, manual/unmanaged variations).
+
+#### 4.14.2 CCT repeater schemas (JE config, not plugin code)
+
+Two repeaters on `mosaics_data` (mirrorable to other CCTs later):
+
+**`physical_variations`** — one row per physical variant:
+
+| Subfield | JE type | Maps to (variation) | Notes |
+|---|---|---|---|
+| `variant_label` | text (required) | term in distinguishing attribute | e.g. "16 × 16", "Framed" — see 4.14.4 |
+| `enabled` | switch (default on) | variation status | off → variation set `private` (soft-hide) |
+| `regular_price` | number | `regular_price` | falls back to parent CCT `price` when empty |
+| `sale_price` | number | `sale_price` | |
+| `sale_start` / `sale_end` | date | `date_on_sale_from` / `date_on_sale_to` | date-format transformer required |
+| `stock_quantity` | number | `stock_quantity` (+ `manage_stock=yes`) | quantity, not just status — purchase decrements flow back (Phase B) |
+| `length` / `width` / `height` | number ×3 | `length` / `width` / `height` | |
+| `weight` | number | `weight` | added per design review — shipping needs it |
+| `sku` | text (optional) | `sku` | |
+| `_jedb_row_id` | hidden | identity | UUID injected by the reconciler on first sync — editors never see it |
+
+**`pdf_variations`** — usually one row:
+
+| Subfield | JE type | Maps to (variation) | Notes |
+|---|---|---|---|
+| `variant_label` | text (default "Instructions PDF") | term | |
+| `enabled` | switch | status | |
+| `file` | media (PDF) | `downloads[]` | + `downloadable=yes`, `virtual=yes` per variation defaults |
+| `price` | number | `regular_price` | |
+| `sale_price` + `sale_start` / `sale_end` | number + dates | sale fields | |
+| `_jedb_row_id` | hidden | identity | |
+
+#### 4.14.3 Bridge config block — `variation_mappings[]`
+
+```json
+"variation_mappings": [
+  {
+    "source_repeater":  "physical_variations",
+    "attribute_terms":  { "pa_physical-or-pdf": "physical-art" },
+    "variant_attribute": {
+      "taxonomy":          "pa_variant",
+      "from_subfield":     "variant_label",
+      "create_if_missing": true
+    },
+    "subfield_map": [
+      { "subfield": "regular_price",  "target": "regular_price",     "pull": false },
+      { "subfield": "sale_price",     "target": "sale_price",        "pull": false },
+      { "subfield": "sale_start",     "target": "date_on_sale_from", "pull": false, "transform": "date" },
+      { "subfield": "sale_end",       "target": "date_on_sale_to",   "pull": false, "transform": "date" },
+      { "subfield": "stock_quantity", "target": "stock_quantity",    "pull": true  },
+      { "subfield": "length",         "target": "length" },
+      { "subfield": "width",          "target": "width" },
+      { "subfield": "height",         "target": "height" },
+      { "subfield": "weight",         "target": "weight" },
+      { "subfield": "sku",            "target": "sku" }
+    ],
+    "variation_defaults": { "manage_stock": "yes", "virtual": "no",  "downloadable": "no" },
+    "enabled_subfield":   "enabled",
+    "delete_policy":      "trash",
+    "enabled":            true
+  },
+  {
+    "source_repeater":   "pdf_variations",
+    "attribute_terms":   { "pa_physical-or-pdf": "instructions-pdf" },
+    "variant_attribute": null,
+    "subfield_map":      [ /* price, sale fields */ ],
+    "downloads_subfield": "file",
+    "variation_defaults": { "manage_stock": "no", "virtual": "yes", "downloadable": "yes" },
+    "enabled_subfield":   "enabled",
+    "delete_policy":      "trash",
+    "enabled":            true
+  }
+]
+```
+
+Per-subfield `pull` flag controls which fields participate in reverse sync (Phase B ships `stock_quantity` only).
+
+#### 4.14.4 Attribute strategy (resolves the uniqueness collision)
+
+WC requires each variation on a product to carry a **unique attribute combination**. One attribute × two terms supports at most one Physical + one PDF variation. Since multiple physical variants are a requirement:
+
+- `pa_physical-or-pdf` stays the type discriminator (`physical-art` / `instructions-pdf`), already standardized on staging (2026-07-12 cleanup).
+- New global attribute **`pa_variant`** distinguishes physical rows. Each row's `variant_label` becomes a term (slugified, `create_if_missing: true`). Combination per physical variation: `physical-art` + its `pa_variant` term. PDF variations use `instructions-pdf` + *Any* variant.
+- The reconciler maintains the parent product's attribute assignments (terms present + "used for variations") automatically — the exact failure mode found in the 2026-07-12 attribute audit can't recur for managed products.
+
+#### 4.14.5 Row identity + managed-variation contract
+
+- On first reconcile of a row without `_jedb_row_id`, generate a UUID, write it into the repeater row JSON (CCT table) AND into the created variation's `META_VARIATION_SLUG` post meta; `META_VARIATION_BRIDGE` = bridge id. (Reusing the retained alpha.13 constants.)
+- Matching across saves is by row id — reordering and label edits are safe.
+- **Unmanaged variations (no `META_VARIATION_SLUG`) are never touched** — same rule alpha.13 had. Manual/iframe-created variations coexist.
+- Row deleted → per `delete_policy` (`trash` default; `private` as soft option).
+
+#### 4.14.6 Sync timing ("trojan" post-save pass) + engine order
+
+No new hooks: the reconciler runs as **phase 3 of the existing forward push** (mappings → taxonomies → variation reconcile), inside the same `created-item`/`updated-item` handling. On FIRST save of a new CCT row the same pass auto-creates the product (existing behavior), then reconciles variations against it — the "save first, sync in the back end" flow. Sync guard + applicability gate (§4.13) wrap everything as usual.
+
+#### 4.14.7 Product type policy — always-variable (D-30)
+
+A product whose bridge has enabled `variation_mappings` and ≥1 enabled repeater row is maintained as a **variable product** — even with a single row. No simple↔variable auto-flipping: the state machine (migrating price/stock between parent and variation on every row-count change) costs more than a single-option dropdown. The pre-Phase-4c "main product" scalar mappings (parent price etc.) remain valid for bridges that don't opt into variation_mappings. Revisit only if storefront testing rejects single-option selects.
+
+#### 4.14.8 Reverse direction (two-way sync)
+
+- **Phase B scope:** WC → CCT for `stock_quantity` only (the purchase-decrement case — the original motivation). Hook: `woocommerce_update_product_variation` + stock-specific actions; resolve variation → `META_VARIATION_SLUG` → row id → surgical write of that row's subfield inside the repeater JSON via direct SQL (L-030 pattern). Sync-guard wrapped; logs as `pull` with origin `wc_variation_stock`.
+- **Phase C scope (evaluate before building):** other `pull: true` subfields (sale price, dimensions edited WC-side). If editors do all authoring CCT-side, this may never be needed.
+
+#### 4.14.9 Coexistence with the §4.7 iframe panel (D-32)
+
+Both surfaces stay. Policy: the reconciler owns **managed** variations; the iframe modal remains the surface for variation images, shipping class, menu order, and unmanaged variations. When a bridge has `variation_mappings` enabled, the iframe panel shows a notice: *"Some variations are managed by this item's variation fields — manual edits to those will be overwritten on the next save."* No hard lock in v1.
+
+#### 4.14.10 Phase plan
+
+- **Phase 4c-A (push):** JE repeater schemas + `pa_variant` attribute + `variation_mappings` schema/UI + reconciler v2 (create/update/soft-hide/delete managed variations, parent attribute maintenance, always-variable enforcement) + `date` transformer + downloads mapping. Exit: editing repeater rows on a mosaic CCT and saving produces correct WC variations; Koala-style manual setups untouched.
+- **Phase 4c-B (stock pull):** reverse stock sync into repeater rows. Exit: a WC test order decrements a physical variation's stock and the CCT repeater row reflects it.
+- **Phase 4c-C (polish):** iframe coexistence notice, remaining pull fields if justified, delete-policy edge cases, DATA-MAP.md refresh.
+
 ---
 
 ## 5. Sync Loop Prevention (`JEDB_Sync_Guard`)
@@ -1303,7 +1448,7 @@ JFB-WC is **not** migrated wholesale — it stays as its own quotes plugin. We e
 
 Each phase ends with the plugin being **installable, activatable, and useful** — no big-bang merges. The user (you) reviews and tests at each phase boundary before the next phase starts.
 
-> **Live status as of 2026-05-24:** Phases 0, 1, 2, 2.5, 3, 3.5, 3.6, **all of Phase 4** + **all of Phase 4b** + **alpha.21 cross-bridge applicability fix (post-L-033)** are complete and **verified end-to-end on Brick Builder HQ staging**. Phase 4b modal-close + reverse-pull engine confirmed working through alpha.19/alpha.20 staging diagnostics. **alpha.21 ships D-28 the applicability gate** (`applies_when_target_in_terms` config block) plus the split auto-create flags (`auto_create_target_when_unlinked` for forward push, `auto_create_source_when_unlinked` for reverse pull, defaulting OFF) — addresses the L-033 cascade bug where multiple bridges sharing a `target_target` would all spawn orphan source rows on any save of that target. Existing bridges with `taxonomies[]` rules get the correct applicability gate auto-derived at read time via `merge_with_defaults()`. New `STATUS_SKIPPED_NOT_APPLICABLE` sync_log status. Next focus per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets). alpha.13's declarative `variations[]` reconciler shipped end-to-end but was architecturally wrong: the configuration surface scaled poorly with variation complexity AND covered only a small subset of WC's per-variation feature set. The replacement (alpha.14 / alpha.15) launches WC's native product edit page in a chrome-stripped modal iframe from a per-bridge CCT-edit-screen panel — delegates 100% of variation UI to WC, zero schema bloat on our side. See §4.7 for the new architecture spec and L-032 for the full retrospective. **Phase 4 Day 4 shipped earlier in alpha.12** — Field Presets admin tab + Mandatory coverage integration per §4.12. New `JEDB_Tab_Field_Presets` with full CRUD + JSON export/import. `JEDB_Field_Presets_Manager` extended with `upsert` / `delete` / `replace_all` / `merge_import` / `prepare_for_storage` / `compute_effective_required_fields`. Flatten admin tab's Mandatory coverage panel rebuilt with green/red badges, "X of Y covered" summary, Apply preset dropdown (snapshot model — writes into `required_overrides.add`), Scaffold missing mappings (stubs passthrough rows), provenance labels. Bridge meta box's Advanced Details gained the same coverage breakdown for editors who opt into the verbose surface (`meta_box.show_advanced=true`). All client-side mutations — no extra AJAX. **Phase 4 Day 3 shipped in alpha.11** — CCT-single → linked-post redirect shim per §4.6. New `JEDB_CCT_Single_Redirect` class hooked at `template_redirect` priority 5. Per-bridge opt-in via the `cct_single_redirect` flag (existing schema since alpha.3). Direction guard skips pull-only bridges. Loop guard silently no-ops when the bridge target IS the queried post (BBHQ Pattern X). Admin escape hatch via `?jedb_no_redirect=1` requires the JEDB capability (anonymous bypass blocked). Reverse-lookup detection via `cct_single_post_id` works across JE versions without depending on internal JE single-page APIs. **Phase 4 Day 2 final form shipped in alpha.9 (L-031):** ONE meta box per enabled bridge (was: one umbrella box looping all bridges internally) — each registered with the bridge's `meta_box.title` (fallback `label`) as its WP header, honoring `meta_box.position`. The linked-state panel now uses minimal native-WP look — `<table class="form-table">` for surfaced field previews, no custom panel pills / chrome / `<h2>`, modal-launcher button as the only call-to-action. New `meta_box.show_advanced` opt-in flag (default `false`) hides per-product overrides + recent sync log + Sync now / Unlink behind a collapsed `<details>` "Advanced Details" section at the bottom of the panel. Image media previews remain rich (thumbnail); non-image attachments collapse to a plain "Has attachment" label. CCT data fetched fresh via `Target_CCT::get_fresh()` so previews always reflect post-modal-save state (alpha.8 / L-030). The modal flow (L-027 / L-029) and nested-form fix (L-028) remain in place. **Phase 4 Day 1 alpha.3** sits underneath: bridge type template layer retired (D-25 / L-026), flatten config schema extended (`meta_box` block + per-mapping `surface_*` + `group` + `cct_single_redirect`), per-product engine guards (`_jedb_bridge_locked` / `_jedb_bridge_direction_override`), Field Presets manager skeleton. **Engine paths are byte-identical to v0.5.3** outside the alpha.3 skip-only guards. Existing 0.5.x flatten configs work unchanged. Phase 4 Day 3 (CCT-single → linked-post redirect shim per §4.6), Day 4 (Field Presets admin tab + Mandatory coverage integration per §4.12), and **Phase 4b (variation reconciliation per §4.7)** are next. All architectural decisions locked (D-1 → D-27, with D-5 superseded by D-25); all known platform caveats documented (L-001 → L-031). Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
+> **Live status as of 2026-07-12:** Phases 0, 1, 2, 2.5, 3, 3.5, 3.6, **all of Phase 4** + **all of Phase 4b** + **alpha.21 cross-bridge applicability fix (post-L-033)** are complete and **verified end-to-end on Brick Builder HQ staging**. **Phase 4c (repeater-driven variation data sync, §4.14, D-29 → D-32) is SPEC'D and next up** — data-driven variation content (inventory, dimensions, sale scheduling, downloadable PDF) authored in CCT repeaters, two-way synced with WC variations; see the new `DATA-MAP.md` for the current field-mapping snapshot. 2026-07-12 staging maintenance: WC attribute cleanup migrated all 8 variable products to the single global `pa_physical-or-pdf` attribute (dead-taxonomy refs on Brain/657 fixed, custom local attributes on 395/397/401/403 replaced, terms + lookup tables + caches regenerated). Phase 4b modal-close + reverse-pull engine confirmed working through alpha.19/alpha.20 staging diagnostics. **alpha.21 ships D-28 the applicability gate** (`applies_when_target_in_terms` config block) plus the split auto-create flags (`auto_create_target_when_unlinked` for forward push, `auto_create_source_when_unlinked` for reverse pull, defaulting OFF) — addresses the L-033 cascade bug where multiple bridges sharing a `target_target` would all spawn orphan source rows on any save of that target. Existing bridges with `taxonomies[]` rules get the correct applicability gate auto-derived at read time via `merge_with_defaults()`. New `STATUS_SKIPPED_NOT_APPLICABLE` sync_log status. Next focus per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets). alpha.13's declarative `variations[]` reconciler shipped end-to-end but was architecturally wrong: the configuration surface scaled poorly with variation complexity AND covered only a small subset of WC's per-variation feature set. The replacement (alpha.14 / alpha.15) launches WC's native product edit page in a chrome-stripped modal iframe from a per-bridge CCT-edit-screen panel — delegates 100% of variation UI to WC, zero schema bloat on our side. See §4.7 for the new architecture spec and L-032 for the full retrospective. **Phase 4 Day 4 shipped earlier in alpha.12** — Field Presets admin tab + Mandatory coverage integration per §4.12. New `JEDB_Tab_Field_Presets` with full CRUD + JSON export/import. `JEDB_Field_Presets_Manager` extended with `upsert` / `delete` / `replace_all` / `merge_import` / `prepare_for_storage` / `compute_effective_required_fields`. Flatten admin tab's Mandatory coverage panel rebuilt with green/red badges, "X of Y covered" summary, Apply preset dropdown (snapshot model — writes into `required_overrides.add`), Scaffold missing mappings (stubs passthrough rows), provenance labels. Bridge meta box's Advanced Details gained the same coverage breakdown for editors who opt into the verbose surface (`meta_box.show_advanced=true`). All client-side mutations — no extra AJAX. **Phase 4 Day 3 shipped in alpha.11** — CCT-single → linked-post redirect shim per §4.6. New `JEDB_CCT_Single_Redirect` class hooked at `template_redirect` priority 5. Per-bridge opt-in via the `cct_single_redirect` flag (existing schema since alpha.3). Direction guard skips pull-only bridges. Loop guard silently no-ops when the bridge target IS the queried post (BBHQ Pattern X). Admin escape hatch via `?jedb_no_redirect=1` requires the JEDB capability (anonymous bypass blocked). Reverse-lookup detection via `cct_single_post_id` works across JE versions without depending on internal JE single-page APIs. **Phase 4 Day 2 final form shipped in alpha.9 (L-031):** ONE meta box per enabled bridge (was: one umbrella box looping all bridges internally) — each registered with the bridge's `meta_box.title` (fallback `label`) as its WP header, honoring `meta_box.position`. The linked-state panel now uses minimal native-WP look — `<table class="form-table">` for surfaced field previews, no custom panel pills / chrome / `<h2>`, modal-launcher button as the only call-to-action. New `meta_box.show_advanced` opt-in flag (default `false`) hides per-product overrides + recent sync log + Sync now / Unlink behind a collapsed `<details>` "Advanced Details" section at the bottom of the panel. Image media previews remain rich (thumbnail); non-image attachments collapse to a plain "Has attachment" label. CCT data fetched fresh via `Target_CCT::get_fresh()` so previews always reflect post-modal-save state (alpha.8 / L-030). The modal flow (L-027 / L-029) and nested-form fix (L-028) remain in place. **Phase 4 Day 1 alpha.3** sits underneath: bridge type template layer retired (D-25 / L-026), flatten config schema extended (`meta_box` block + per-mapping `surface_*` + `group` + `cct_single_redirect`), per-product engine guards (`_jedb_bridge_locked` / `_jedb_bridge_direction_override`), Field Presets manager skeleton. **Engine paths are byte-identical to v0.5.3** outside the alpha.3 skip-only guards. Existing 0.5.x flatten configs work unchanged. Phase 4 Day 3 (CCT-single → linked-post redirect shim per §4.6), Day 4 (Field Presets admin tab + Mandatory coverage integration per §4.12), and **Phase 4b (variation reconciliation per §4.7)** are next. All architectural decisions locked (D-1 → D-27, with D-5 superseded by D-25); all known platform caveats documented (L-001 → L-031). Roadmap below is the planned-from-day-zero plan; "actual" status of each phase is tracked in `README.md`'s roadmap table and per-version detail in `CHANGELOG.md`.
 
 ### Phase 0 — Skeleton (½ day) ✅
 - Create `je-data-bridge-cc.php` bootstrap with constants and dependency check (JE ≥ 3.3.1, WC active warning).
@@ -1506,10 +1651,20 @@ These are general-purpose utilities (find a bridge-managed variation by parent+s
 
 #### What remains scoped out
 
-- **PULL direction.** Variation edits don't back-propagate to CCT fields. Under the iframe-flip model, variations are WC-canonical for everything except the editorial-intent toggle on the CCT.
+- **PULL direction.** Variation edits don't back-propagate to CCT fields. Under the iframe-flip model, variations are WC-canonical for everything except the editorial-intent toggle on the CCT. *(Superseded in part by Phase 4c below — repeater-managed variation DATA becomes bidirectional; the iframe stays canonical for everything the repeaters don't model.)*
 - **`jedb-relations-block` removal.** Per D1 / R3 it's hidden contextually (when a link exists) but the code stays. Removing it entirely is a separate cleanup if/when the editorial workflow no longer uses it.
 - **Auto-jump to the Variations sub-tab.** D4 — explicitly declined; editors set up attributes first.
-- **`Target_Woo_Variation::find_managed_variation()` removal.** Kept as deprecated defensive surface.
+- **`Target_Woo_Variation::find_managed_variation()` removal.** Kept as deprecated defensive surface. *(Becomes live again in Phase 4c — see §4.14.5.)*
+
+### Phase 4c — Repeater-driven variation data sync (planned 2026-07-12, spec in §4.14)
+
+Data-driven variation sync: CCT repeater fields (`physical_variations`, `pdf_variations`) carry per-row variation content (inventory, dimensions L/W/H + weight, sale price with schedule, downloadable PDF); a new `variation_mappings[]` bridge config block declares the structural mapping once. NOT a reversal of L-032 — the retired alpha.13 model was config-driven (bridge config authored variation *rules*); this is data-driven (CCT rows carry variation *content*). See §4.14.1 for the full framing. Motivating gap: nothing bridged to WC carries inventory today.
+
+- **Phase 4c-A — push (CCT → WC):** JE repeater schemas, `pa_variant` global attribute (resolves the variation-uniqueness collision per §4.14.4), `variation_mappings` schema + Flatten tab UI, data-driven reconciler v2 with `_jedb_row_id` ↔ `META_VARIATION_SLUG` identity (reusing retained alpha.13 helpers), always-variable enforcement (D-30), `date` transformer, downloads mapping. Managed variations only; manual/iframe variations untouched.
+- **Phase 4c-B — stock pull (WC → CCT):** purchase decrements flow back into the owning repeater row's `stock_quantity` subfield via surgical JSON write (L-030 direct-SQL pattern). This is the two-way piece that motivated the feature.
+- **Phase 4c-C — polish:** iframe coexistence notice (D-32), additional pull fields if justified, delete-policy edge cases, DATA-MAP.md refresh.
+
+Exit criteria per phase in §4.14.10. Decisions D-29 → D-32 locked in the Decisions Log.
 
 ### Phase 5 — Settings, debug log, utilities (1 day)
 - Settings API setup using JFB-WC pattern (incl. the "Enable Custom PHP Snippets" toggle).
@@ -1655,6 +1810,10 @@ The following decisions are locked in for v1. Future enhancements go in §10 / c
 | D-25 | **No "bridge type" template layer** *(retires D-5)* | The flatten config IS the bridge identity. There's exactly ONE authoring surface for bridges — the Flatten admin tab — and exactly ONE storage row per bridge: `wp_jedb_flatten_configs`. The Phase 4 meta box is a *view* of an existing flatten config (D-27), not an authoring tool that creates one. A separate `jedb_bridge_types` option as a template-to-clone layer was added in v0.6.0-alpha.1, hotfixed in alpha.2 (L-025), and retired in alpha.3 after a hard architectural review surfaced that templates created surprise (editors expected propagation), doubled the editing surface, and added a schema-mismatch failure mode without delivering value for the only use cases on the table. | v0.6.0-alpha.3 deletes `JEDB_Bridge_Types_Manager`, `JEDB_Tab_Bridges`, the Bridges admin tab template + JS + CSS, and the `JEDB_OPTION_BRIDGE_TYPES` constant + activation default. Per-product overrides (`_jedb_bridge_locked`, `_jedb_bridge_direction_override`) are added as engine guards instead. The bridge meta box (Phase 4 Day 2) reads from `wp_jedb_flatten_configs` directly. Phase 4b variations live as a `variations[]` array directly on the flatten config. See L-026 for the full post-mortem. |
 | D-26 | **Field presets are first-class portable artifacts** | Field presets are a separate, target-scoped (single adapter) library of curated "what does a complete bridge to target X look like?" knowledge. Each preset declares fields with `mandatory: bool` + freeform `group: string` + `hint: string`. They overlay onto flatten configs at edit time in three modes (display-only, apply-as-`required_overrides.add`, scaffold-as-passthrough-mappings), they're exportable / importable as JSON across sites, and they do NOT replace adapter-declared `get_required_fields()` — they compose with it. PAC VDM hardcoded this knowledge in PHP per role; we pull it OUT of code and INTO a curated artifact so it can move between sites. | New `jedb_field_presets` site option, new `JEDB_OPTION_FIELD_PRESETS` constant, new `JEDB_Field_Presets_Manager` class, new "Field Presets" admin tab (priority 35). Flatten admin tab "Mandatory coverage" panel gains "Apply preset" / "Display preset" / "Scaffold missing mappings" controls. See §4.12 for the full architecture, Phase 4 Day 4 for the deliverable. |
 | D-28 | **Bridges that share a target post type need explicit applicability scope** *(alpha.21 post-L-033)* | When two or more bridges have the same `target_target` (e.g. multiple CCTs all bridging to `posts::product`), the reverse-flatten fan-out fires ALL of them on any save of that post type. Without a per-bridge applicability gate, each bridge with `auto_create_source_when_unlinked` (formerly the overloaded `auto_create_target_when_unlinked`) would spawn an orphan source row on every product save. The fix is a first-class `applies_when_target_in_terms` config block declaring "this bridge applies to targets that have these taxonomy terms (per match_mode)." Reverse-pull and optionally forward-push (per `applies_to`) skip with `STATUS_SKIPPED_NOT_APPLICABLE` BEFORE source/target resolution when the gate evaluates false. `merge_with_defaults()` auto-derives a sensible default gate from the existing `taxonomies[]` block when one isn't explicitly set, so existing bridges with category contracts get the correct scope at read-time without re-saving. Also splits the `auto_create_target_when_unlinked` flag into forward (`auto_create_target_*`) and reverse (`auto_create_source_*`, default OFF) per L-033's recommendation that flag names reflect direction. | v0.6.0-alpha.21 ships: new `applies_when_target_in_terms` block + `auto_create_source_when_unlinked` flag in `JEDB_Flatten_Config_Manager::default_config_json()`, factory `default_applies_when_target_in_terms()`, `merge_with_defaults()` back-compat + auto-derivation from taxonomies, new `JEDB_Sync_Log::STATUS_SKIPPED_NOT_APPLICABLE` constant, shared `JEDB_Reverse_Flattener::evaluate_applicability_gate()` static helper called by both flatteners, gate injection in `JEDB_Reverse_Flattener::apply_bridge()` (always) and `JEDB_Flattener::apply_bridge()` (when applies_to ∈ {push,both}), Flatten admin tab UI for the new fields. See §4.13 (new section). |
+| D-29 | **Variation DATA sync is data-driven, not config-driven** *(Phase 4c, locked 2026-07-12)* | L-032 retired config-driven variation authoring (bridge config declared variation rules via `show_when` DSL). Phase 4c reinstates variation sync as DATA-driven: JE repeater fields on the CCT row carry each product's actual variation content; the bridge's `variation_mappings[]` block declares the structural mapping (repeater → variations, subfield → WC field) exactly once. Editors author content, not sync rules. The §4.7 iframe-flip remains the surface for everything repeaters don't model (variation images, shipping class, menu order, unmanaged variations). | New `variation_mappings[]` config block (§4.14.3), reconciler v2 as phase 3 of forward push (mappings → taxonomies → variations), retained alpha.13 helpers (`find_managed_variation`, `create_for_bridge`, `META_VARIATION_*`) go live again per §4.14.5. |
+| D-30 | **Always-variable once repeater rows exist** *(Phase 4c)* | A product whose bridge has `variation_mappings` enabled and ≥1 enabled repeater row is maintained as a VARIABLE product even with a single row. No simple↔variable auto-flip: the migration state machine (moving price/stock between parent and variation on every row-count change) costs more than a single-option dropdown. Bridges without `variation_mappings` keep the existing parent-product scalar mappings ("main product" model). Revisit only if storefront testing rejects single-option selects. | Reconciler enforces `product_type=variable` on managed products. §4.14.7. |
+| D-31 | **Two-attribute strategy for variation uniqueness** *(Phase 4c)* | WC requires unique attribute combinations per variation; one attribute × two terms caps at one Physical + one PDF. Fix: `pa_physical-or-pdf` stays the type discriminator; a new global `pa_variant` attribute distinguishes multiple physical rows, with each row's `variant_label` subfield becoming a term (`create_if_missing`). Reconciler maintains parent attribute assignments automatically so the 2026-07-12 attribute-audit failure mode (dead taxonomy refs, missing term assignments) can't recur for managed products. | §4.14.4. New `pa_variant` global attribute (JE/WC config). `variant_attribute` sub-block in `variation_mappings[]`. |
+| D-32 | **Repeater + iframe coexistence: reconciler owns managed, iframe owns the rest** *(Phase 4c)* | Two write surfaces exist for variations (repeater sync + §4.7 iframe modal). Policy: the reconciler only ever touches variations carrying `META_VARIATION_SLUG` (managed); the iframe remains for unmanaged variations and for managed-variation fields outside the subfield map. When `variation_mappings` is enabled, the iframe panel shows a "managed variations will be overwritten on next save" notice. No hard lock in v1. | §4.14.9. Notice rendered by `JEDB_CCT_Screen_Variations_Panel` when the bridge has enabled variation_mappings. |
 | D-27 | **Meta box reads flatten config directly** | The Phase 4 Bridge meta box on Woo product / variation edit screens is a *view* of the existing flatten config(s) governing the current product. No "bridge type select." No clone-from-template behavior. Resolution path: walk `wp_jedb_flatten_configs` for rows whose `target_target` matches the post type, run the existing link-resolution logic per row to determine which one(s) govern THIS specific product, render one panel per resolved bridge. Reuses the engine's existing resolver in read-only mode. | New `JEDB_Woo_Product_Meta_Box` class (Phase 4 Day 2). Per-product overrides via post meta: `_jedb_bridge_locked`, `_jedb_bridge_direction_override`, `_jedb_bridge_last_manual_sync_id`. The meta box's *killer feature* is field surfacing — for each mapping where `surface_on_target=true` AND adapter's `is_natively_rendered($field) = false` (D-16), render an editable input on the product edit screen that syncs back to the CCT via the reverse-pull engine. See §4.5 for full controls list. |
 
 ---
