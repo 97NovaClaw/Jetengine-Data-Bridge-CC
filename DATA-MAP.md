@@ -152,6 +152,54 @@ Attribute combo: `pa_physical-or-pdf=instructions-pdf` (+ Any variant). Defaults
 
 ---
 
+## Repeater storage format (verified against live data, item 16, 2026-07-12)
+
+> **This is the ground truth for the Phase 4c reconciler.** Verified by reading the raw DB column for a real editor-saved row (mosaic 16 "Variation test 2", 2 physical rows + 1 PDF row).
+
+### Where + how it's stored
+
+- Each repeater = **one TEXT column** on `wp_jet_cct_mosaics_data`, named after the repeater field (`physical_variations`, `pdf_variations`).
+- The value is a **PHP-serialized associative array — NOT JSON.** Read with `maybe_unserialize()`, write back with `serialize()`.
+- Row keys are `item-0`, `item-1`, … — **positional, rebuilt from the form on every JE admin save.** They are NOT stable identity (reorder/delete renumbers them). Identity = the `_jedb_row_id` subfield, never the `item-N` key.
+
+### Value types — everything is a string
+
+| Subfield type | Stored as | Example from live data |
+|---|---|---|
+| text | string | `"18\" x 18\" Frame"` (embedded quotes are fine — PHP serialization is length-prefixed) |
+| number | **string** | `"1500"`, `"1"` — cast before writing to WC |
+| switcher | **string** `"true"` / `"false"` | `"true"` — NOT a boolean |
+| select (glossary) | glossary value string | `"yes"` / `"no"` |
+| date | `"YYYY-MM-DD"` string | `"2026-07-13"` |
+| media | **attachment ID as string** | `"407"` |
+| empty | `""` | empty string, never null |
+
+### Decoded shape (item 16, abridged)
+
+```php
+array(
+  'item-0' => array(
+    'variant_label'  => '18" x 18" Frame',
+    'enabled'        => 'true',
+    'regular_price'  => '1500',
+    'stock_quantity' => '1',
+    'on_sale'        => 'no',
+    'sale_price'     => '', 'sale_start' => '', 'sale_end' => '',
+    'length'         => '18', 'width' => '18', 'height' => '', 'weight' => '',
+    'sku'            => '',
+    // '_jedb_row_id' => filled by the reconciler on first sync
+  ),
+  'item-1' => array( /* ... on_sale => 'yes', sale_start => '2026-07-13' ... */ ),
+)
+```
+
+### Critical implementation notes for the Phase 4c reconciler
+
+1. **`JEDB_Target_CCT::get()`/`get_fresh()` return the repeater column RAW** (the serialized string, not an array) — verified live. The reconciler must `maybe_unserialize()` the value itself.
+2. **Row identity must be a real, defined subfield.** JE's `save_item()` (`item-handler.php`) rebuilds each repeater value from `$_POST` and sanitizes against the DEFINED `repeater-fields` list — any key that isn't a defined field with a form input is **stripped on every admin save**. That kills the original "invisibly inject a key into the JSON" plan (BUILD-PLAN §4.14.5, now amended). `_jedb_row_id` therefore exists as a real text subfield on both repeaters (added 2026-07-12); Phase 4c-A hides it via CSS on the CCT edit screen (JEDB already injects assets there) and fills empty ones server-side on first reconcile.
+3. **Reverse writes (Phase 4c-B)** re-serialize the whole array with `serialize()` after surgically updating the target row's subfield, preserving the existing `item-N` keys, via direct SQL (L-030 pattern).
+4. **Cast discipline:** numbers → `(float)`/`(int)` before WC setters; `enabled === 'true'` string compare; `on_sale === 'yes'` glossary compare; media ID → `(int)`.
+
 ## Maintenance checklist
 
 When you change a bridge in the Flatten admin tab, update the matching card here:

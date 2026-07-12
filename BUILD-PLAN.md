@@ -1334,7 +1334,8 @@ WC requires each variation on a product to carry a **unique attribute combinatio
 
 #### 4.14.5 Row identity + managed-variation contract
 
-- On first reconcile of a row without `_jedb_row_id`, generate a UUID, write it into the repeater row JSON (CCT table) AND into the created variation's `META_VARIATION_SLUG` post meta; `META_VARIATION_BRIDGE` = bridge id. (Reusing the retained alpha.13 constants.)
+- **Amended 2026-07-12 after storage-format verification (see DATA-MAP.md "Repeater storage format"):** `_jedb_row_id` must be a REAL defined repeater subfield, not an invisibly-injected key. JE's `save_item()` rebuilds each repeater value from `$_POST` sanitized against the defined `repeater-fields` list — undefined keys are stripped on every admin save, so injected-only identity would be lost whenever an editor saves from the JE UI. The subfield was added to both repeaters (text, "Row ID (system)"); Phase 4c-A hides it via CSS on the CCT edit screen (JEDB already injects assets there) and fills empty ones server-side on first reconcile. Note: repeater columns store PHP-SERIALIZED arrays (not JSON), rows keyed `item-0`, `item-1` (positional, NOT stable), all values strings — full type table in DATA-MAP.md.
+- On first reconcile of a row with an empty `_jedb_row_id`, generate a UUID, write it into the row (re-serialize the column via direct SQL, L-030 pattern) AND into the created variation's `META_VARIATION_SLUG` post meta; `META_VARIATION_BRIDGE` = bridge id. (Reusing the retained alpha.13 constants.)
 - Matching across saves is by row id — reordering and label edits are safe.
 - **Unmanaged variations (no `META_VARIATION_SLUG`) are never touched** — same rule alpha.13 had. Manual/iframe-created variations coexist.
 - Row deleted → per `delete_policy` (`trash` default; `private` as soft option).
