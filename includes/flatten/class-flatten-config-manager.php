@@ -178,6 +178,14 @@ class JEDB_Flatten_Config_Manager {
 					'auto_force_variable_type' => false,   // D3: admin opt-in to auto-flip product type to variable on iframe load
 				),
 			),
+			// Phase 4c-A (post-L-033 spec, §4.14): DATA-driven variation
+			// sync. Each entry maps ONE source repeater field to WC
+			// variations on the linked product. Distinct from the retired
+			// alpha.13 `variations[]` (config-driven rules, L-032): here
+			// the CCT row's repeater DATA is the variation content; this
+			// block only declares the structural mapping once. Empty by
+			// default. See default_variation_mapping() for entry shape.
+			'variation_mappings'                => array(),
 			'origin_tag'                        => 'flatten',
 		);
 	}
@@ -218,6 +226,66 @@ class JEDB_Flatten_Config_Manager {
 			'snippet'             => null,       // forward-compat with Phase 5b
 			'enabled'             => true,
 			'note'                => '',
+		);
+	}
+
+	/**
+	 * Default shape for one entry in `variation_mappings[]` (Phase 4c-A,
+	 * §4.14.3). Each entry maps one source-CCT repeater field to managed
+	 * WC variations on the linked product.
+	 *
+	 *   - `source_repeater`: name of the repeater field on the source CCT
+	 *     (e.g. `physical_variations`). The column stores a PHP-serialized
+	 *     array of rows keyed `item-N` — see DATA-MAP.md "Repeater
+	 *     storage format".
+	 *   - `attribute_terms`: fixed attribute assignments for every
+	 *     variation from this mapping, `{ taxonomy: term_slug }` (e.g.
+	 *     `{"pa_physical-or-pdf": "physical-art"}`). The type
+	 *     discriminator per D-31.
+	 *   - `variant_attribute`: per-row distinguishing attribute (null to
+	 *     skip — PDF mappings use null since they're one row).
+	 *     `taxonomy` + `from_subfield` (whose value becomes the term) +
+	 *     `create_if_missing`.
+	 *   - `subfield_map[]`: `{ subfield, target, pull?, transform? }` —
+	 *     repeater subfield → variation typed-setter field. `transform:
+	 *     "date"` marks sale-schedule fields; `pull: true` marks Phase
+	 *     4c-B reverse-sync participants (stock only, initially).
+	 *   - `price_fallback_field`: source CCT scalar whose value is used
+	 *     for `regular_price` when the row's mapped price subfield is
+	 *     empty (BBHQ: `price`).
+	 *   - `downloads_subfield`: repeater subfield holding an attachment
+	 *     ID that becomes the variation's downloadable file (PDF flow).
+	 *     Empty = no downloads handling.
+	 *   - `variation_defaults`: fixed variation fields applied on every
+	 *     reconcile (e.g. `manage_stock`, `virtual`, `downloadable`).
+	 *   - `enabled_subfield`: repeater subfield acting as the row's
+	 *     on/off switch (`'true'`/`'false'` strings per JE switcher).
+	 *   - `on_sale_subfield`: gate subfield (glossary yes/no). When not
+	 *     `yes`, the reconciler CLEARS the variation's sale fields so
+	 *     switching a sale off actually ends it storefront-side.
+	 *   - `delete_policy`: `trash` (default) or `private` for rows
+	 *     removed from the repeater.
+	 *
+	 * @return array
+	 */
+	public static function default_variation_mapping() {
+		return array(
+			'source_repeater'      => '',
+			'attribute_terms'      => array(),
+			'variant_attribute'    => null,
+			'subfield_map'         => array(),
+			'price_fallback_field' => '',
+			'downloads_subfield'   => '',
+			'variation_defaults'   => array(),
+			'enabled_subfield'     => 'enabled',
+			'on_sale_subfield'     => 'on_sale',
+			'delete_policy'        => 'trash',
+			// §4.14.11: when non-empty, the reconciler derives a display
+			// string from this mapping's first enabled row's L/W/H and
+			// writes it into the named source-CCT column (e.g.
+			// `approximate_size`). Empty = derivation off.
+			'derived_size_field'   => '',
+			'enabled'              => true,
 		);
 	}
 
@@ -487,6 +555,25 @@ class JEDB_Flatten_Config_Manager {
 				}
 			}
 		}
+
+		// Phase 4c-A: variation_mappings back-compat. Bridges saved
+		// before the block existed read an empty array; each saved
+		// entry deep-merges against the factory so entries saved
+		// before newer keys existed get defaults filled in.
+		if ( ! isset( $config['variation_mappings'] ) || ! is_array( $config['variation_mappings'] ) ) {
+			$config['variation_mappings'] = array();
+		}
+		foreach ( $config['variation_mappings'] as &$vm_entry ) {
+			if ( ! is_array( $vm_entry ) ) {
+				$vm_entry = self::default_variation_mapping();
+				continue;
+			}
+			$vm_entry = wp_parse_args( $vm_entry, self::default_variation_mapping() );
+			if ( ! is_array( $vm_entry['attribute_terms'] ) )    { $vm_entry['attribute_terms']    = array(); }
+			if ( ! is_array( $vm_entry['subfield_map'] ) )       { $vm_entry['subfield_map']       = array(); }
+			if ( ! is_array( $vm_entry['variation_defaults'] ) ) { $vm_entry['variation_defaults'] = array(); }
+		}
+		unset( $vm_entry );
 
 		// alpha.21 (post-L-033): explicit reverse auto-create flag. For
 		// bridges saved before this key existed, default to false (do

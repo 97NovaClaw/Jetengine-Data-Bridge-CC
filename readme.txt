@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.21
+Stable tag: 0.6.0-alpha.22
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.21) ==
+== Current Capability (v0.6.0-alpha.22) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -95,7 +95,10 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 == Changelog ==
 
 = Unreleased =
-* No items currently queued. Next focus per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
+* Phase 4c-B (stock pull) and 4c-C (polish + legacy field retirement) next; then Phase 5.
+
+= 0.6.0-alpha.22 =
+* Phase 4c-A — data-driven variation sync (push). New JEDB_Variation_Sync engine reconciles source-CCT repeater rows to managed WC variations as push phase 3 (mappings -> taxonomies -> variations). Row identity: hidden _jedb_row_id UUID subfield <-> _jedb_variation_slug variation meta (UUIDs auto-filled on first reconcile via direct SQL). D-30 always-variable enforcement; D-31 parent attribute maintenance (terms created/assigned, _product_attributes maintained with is_variation=1, unrelated attributes preserved); D-32 managed-only contract (manual/iframe variations never touched). Field pipeline: cast discipline for all-string repeater values, price fallback to a source scalar, on_sale gate that CLEARS sale fields when off, downloads mapping (attachment -> WC download), per-row photo -> variation image_id, per-row attribute combos, publish/private from the enabled switch. Orphaned rows (deleted from the repeater) get delete_policy treatment (trash default). Parent rollups refreshed via WC_Product_Variable::sync + transient clear. Derived approximate_size display string written back to the source column when derived_size_field is set (\u00a74.14.11). New variation_mappings[] schema + factory + merge back-compat. Flatten tab gains a Variation Mappings section (posts::product-gated): validated JSON editor + one-click Physical/PDF presets. _jedb_row_id hidden on JE CCT edit screens via MutationObserver. Target_Woo_Variation helpers un-deprecated (production callers again per the alpha.14 retention decision).
 
 = 0.6.0-alpha.21 =
 * Cross-bridge applicability gate (post-L-033). Live staging report: saving a Mosaic CCT row spawned an orphan Available Sets CCT row because the reverse-flatten fan-out fired ALL bridges with target_target=posts::product, and Bridge 1's auto_create_target_when_unlinked (overloaded for the reverse direction) created the orphan. Fix: (a) new applies_when_target_in_terms config block with taxonomy + terms + match_by + match_mode (any/all/none) + applies_to (pull/push/both) — the engine skips bridges whose target doesn't satisfy the gate, BEFORE any source resolution or auto-create. New STATUS_SKIPPED_NOT_APPLICABLE sync_log status. (b) Split the overloaded auto-create flag into auto_create_target_when_unlinked (forward, existing semantics) and auto_create_source_when_unlinked (reverse, new, defaults OFF). Reverse_Flattener::resolve_source_id() now reads the new flag. (c) Auto-derivation in merge_with_defaults: bridges with non-empty taxonomies[] rules get the applicability gate auto-populated at read time so existing bridges with categorical contracts get the right scope without re-saving. (d) Flatten admin tab UI for the new fields + shared JEDB_Reverse_Flattener::evaluate_applicability_gate() static helper called by both flatteners. New BUILD-PLAN D-28 decision row + new L-033 lesson learned.

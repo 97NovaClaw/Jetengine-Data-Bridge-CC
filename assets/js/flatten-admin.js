@@ -300,6 +300,11 @@
 	// (Woo-product-target-only per D6). Toggled by refreshVariationsSectionVisibility().
 	var $wcVariationsSection = $( '#jedb_flatten_wc_variations_section' );
 
+	// Phase 4c-A: variation mappings JSON editor (same D6 gating).
+	var $vmSection  = $( '#jedb_flatten_variation_mappings_section' );
+	var $vmTextarea = $( '#jedb_flatten_variation_mappings' );
+	var $vmStatus   = $( '#jedb_vm_status' );
+
 	function findTaxonomyInCatalog( slug ) {
 		for ( var i = 0; i < taxonomyCatalog.length; i++ ) {
 			if ( taxonomyCatalog[ i ].slug === slug ) { return taxonomyCatalog[ i ]; }
@@ -542,7 +547,120 @@
 				$wcVariationsSection.hide().attr( 'data-visible', '0' );
 			}
 		}
+
+		// Phase 4c-A: variation mappings section follows the same rule.
+		if ( $vmSection && $vmSection.length ) {
+			if ( 'posts::product' === targetVal ) {
+				$vmSection.show().attr( 'data-visible', '1' );
+			} else {
+				$vmSection.hide().attr( 'data-visible', '0' );
+			}
+		}
 	}
+
+	/* =================================================================
+	 * Phase 4c-A — variation mappings JSON editor + presets
+	 *
+	 * The textarea holds the `variation_mappings[]` array as pretty
+	 * JSON. buildConfig parses it on every sync; invalid JSON keeps
+	 * the last valid value (never poisons the saved config) and shows
+	 * an inline error until fixed.
+	 * ============================================================== */
+
+	var vmLastValid = null; // null = fall back to whatever cfg already has
+
+	function readVariationMappings( currentValue ) {
+		if ( ! $vmTextarea.length ) {
+			return currentValue;
+		}
+		var raw = $.trim( $vmTextarea.val() || '' );
+		if ( '' === raw ) {
+			$vmStatus.text( '' ).css( 'color', '' );
+			return [];
+		}
+		try {
+			var parsed = JSON.parse( raw );
+			if ( ! $.isArray( parsed ) ) {
+				throw new Error( 'must be a JSON array' );
+			}
+			vmLastValid = parsed;
+			$vmStatus.text( '' ).css( 'color', '' );
+			return parsed;
+		} catch ( e ) {
+			$vmStatus.text( 'Invalid JSON — not saved (' + e.message + ')' ).css( 'color', '#b32d2e' );
+			return null !== vmLastValid ? vmLastValid : currentValue;
+		}
+	}
+
+	// BBHQ canonical presets (BUILD-PLAN §4.14.3).
+	var VM_PRESET_PHYSICAL = {
+		source_repeater: 'physical_variations',
+		attribute_terms: { 'pa_physical-or-pdf': 'physical-art' },
+		variant_attribute: { taxonomy: 'pa_variant', from_subfield: 'variant_label', create_if_missing: true },
+		subfield_map: [
+			{ subfield: 'regular_price',  target: 'regular_price' },
+			{ subfield: 'sale_price',     target: 'sale_price' },
+			{ subfield: 'sale_start',     target: 'date_on_sale_from', transform: 'date' },
+			{ subfield: 'sale_end',       target: 'date_on_sale_to',   transform: 'date' },
+			{ subfield: 'stock_quantity', target: 'stock_quantity',    pull: true },
+			{ subfield: 'length',         target: 'length' },
+			{ subfield: 'width',          target: 'width' },
+			{ subfield: 'height',         target: 'height' },
+			{ subfield: 'weight',         target: 'weight' },
+			{ subfield: 'photo',          target: 'image_id' },
+			{ subfield: 'sku',            target: 'sku' }
+		],
+		price_fallback_field: 'price',
+		downloads_subfield: '',
+		variation_defaults: { manage_stock: 'yes', virtual: 'no', downloadable: 'no' },
+		enabled_subfield: 'enabled',
+		on_sale_subfield: 'on_sale',
+		delete_policy: 'trash',
+		derived_size_field: 'approximate_size',
+		enabled: true
+	};
+
+	var VM_PRESET_PDF = {
+		source_repeater: 'pdf_variations',
+		attribute_terms: { 'pa_physical-or-pdf': 'instructions-pdf' },
+		variant_attribute: null,
+		subfield_map: [
+			{ subfield: 'price',      target: 'regular_price' },
+			{ subfield: 'sale_price', target: 'sale_price' },
+			{ subfield: 'sale_start', target: 'date_on_sale_from', transform: 'date' },
+			{ subfield: 'sale_end',   target: 'date_on_sale_to',   transform: 'date' }
+		],
+		price_fallback_field: '',
+		downloads_subfield: 'file',
+		variation_defaults: { manage_stock: 'no', virtual: 'yes', downloadable: 'yes' },
+		enabled_subfield: 'enabled',
+		on_sale_subfield: 'on_sale',
+		delete_policy: 'trash',
+		derived_size_field: '',
+		enabled: true
+	};
+
+	function vmAppendPreset( preset ) {
+		var current = [];
+		var raw = $.trim( $vmTextarea.val() || '' );
+		if ( '' !== raw ) {
+			try { current = JSON.parse( raw ); } catch ( e ) { current = []; }
+			if ( ! $.isArray( current ) ) { current = []; }
+		}
+		// Don't add a duplicate mapping for the same repeater.
+		var exists = current.some( function ( m ) { return m && m.source_repeater === preset.source_repeater; } );
+		if ( exists ) {
+			$vmStatus.text( 'A mapping for "' + preset.source_repeater + '" already exists.' ).css( 'color', '#996800' );
+			return;
+		}
+		current.push( preset );
+		$vmTextarea.val( JSON.stringify( current, null, 2 ) );
+		$vmStatus.text( 'Preset added — remember to Save.' ).css( 'color', '#1a7a2e' );
+		syncJSON();
+	}
+
+	$( '#jedb_vm_preset_physical' ).on( 'click', function () { vmAppendPreset( VM_PRESET_PHYSICAL ); } );
+	$( '#jedb_vm_preset_pdf' ).on( 'click', function () { vmAppendPreset( VM_PRESET_PDF ); } );
 
 	$( '#jedb_flatten_add_taxonomy_rule' ).on( 'click', function () {
 		// Push a fresh row both into in-memory state and DOM so the next
@@ -584,6 +702,10 @@
 				show_full_page:           $form.find( 'input[name="cct_screen_wc_variations_show_full_page"]' ).is( ':checked' )
 			}
 		} );
+
+		// Phase 4c-A: variation mappings from the JSON editor (invalid
+		// JSON preserves the previous value — never poisons the config).
+		cfg.variation_mappings = readVariationMappings( cfg.variation_mappings || [] );
 
 		cfg.condition = $condInput.val() || '';
 		cfg.priority  = parseInt( $form.find( '#jedb_flatten_priority' ).val(), 10 );
@@ -684,6 +806,7 @@
 	$form.on( 'change', 'input[name="link_via_type"], #jedb_flatten_relation_id, #jedb_flatten_priority, input[name="link_via_fallback_to_single_page"], input[name="link_via_auto_attach_relation"], input[name="auto_create_target_when_unlinked"], input[name="auto_create_source_when_unlinked"], input[name="cct_single_redirect"], input[name="meta_box_enabled"], input[name="meta_box_position"], input[name="meta_box_show_advanced"], input[name="direction"], input[name="cct_screen_wc_variations_enabled"], input[name="cct_screen_wc_variations_auto_force_variable_type"], input[name="cct_screen_wc_variations_show_full_page"], select[name="applies_when_target_in_terms_match_by"], select[name="applies_when_target_in_terms_match_mode"], select[name="applies_when_target_in_terms_applies_to"]', syncJSON );
 	$form.on( 'input', 'input[name="applies_when_target_in_terms_taxonomy"], input[name="applies_when_target_in_terms_terms"]', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_condition, #jedb_flatten_meta_box_title, #jedb_flatten_meta_box_groups, #jedb_flatten_wc_variations_title', syncJSON );
+	$form.on( 'input',  '#jedb_flatten_variation_mappings', syncJSON );
 	$form.on( 'input',  '#jedb_flatten_config_raw', function () { $hiddenJson.val( $rawJson.val() ); } );
 
 	// alpha.10: hide the "Reverse-direction options" row whenever

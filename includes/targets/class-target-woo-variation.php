@@ -258,29 +258,24 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 	}
 
 	/* -----------------------------------------------------------------------
-	 * Bridge-managed variation utilities — DEPRECATED defensive surface.
+	 * Bridge-managed variation utilities — LIVE AGAIN as of Phase 4c-A.
 	 *
-	 * These methods + meta key constants were added in alpha.13 to support
-	 * the declarative `JEDB_Variation_Reconciler` engine. That engine is
-	 * RETIRED in alpha.14 per L-032 (see LESSONS-LEARNED.md). Variation
-	 * management has been delegated to WC's native UI via the iframe-flip
-	 * pattern described in BUILD-PLAN §4.7.
+	 * History: added in alpha.13 for the declarative
+	 * `JEDB_Variation_Reconciler` (config-driven rules engine), retired in
+	 * alpha.14 per L-032, retained as deprecated defensive surface — and
+	 * re-activated by `JEDB_Variation_Sync` (Phase 4c-A, §4.14), the
+	 * DATA-driven reconciler that maps CCT repeater rows to managed
+	 * variations. The alpha.14 retention decision ("defensive surface for
+	 * future automation") paid off exactly as intended.
 	 *
-	 * These methods are KEPT in the codebase as defensive surface for any
-	 * future automation hook that wants to find or create bridge-managed
-	 * variations (e.g. an admin "fix orphaned variations" tool after a
-	 * bridge deletion). They have ZERO production callers in alpha.14+.
+	 * Tracking contract: `META_VARIATION_SLUG` holds the repeater row's
+	 * `_jedb_row_id` UUID; `META_VARIATION_BRIDGE` holds the flatten
+	 * config row id. Variations WITHOUT these keys are unmanaged and are
+	 * never touched by any engine (D-32).
 	 *
-	 * If you are reading this trying to understand the current variation
-	 * architecture: see BUILD-PLAN §4.7 + L-032. The PRIMARY way bridges
-	 * interact with variations now is via the `cct_screen.wc_variations`
-	 * panel on the CCT edit screen, which iframe-launches WC's native
-	 * product edit page. There is no longer any reconciliation engine.
-	 *
-	 * @deprecated since alpha.14 (production callers removed; methods
-	 *             retained per L-032 prevention rule #5). Do not wire new
-	 *             code through these without re-evaluating the iframe-flip
-	 *             architecture decision documented in L-032.
+	 * The §4.7 iframe-flip panel coexists: it remains the surface for
+	 * variation fields outside the repeater's subfield map and for
+	 * unmanaged variations.
 	 * -------------------------------------------------------------------- */
 
 	const META_VARIATION_SLUG   = '_jedb_variation_slug';
@@ -295,10 +290,9 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 	 * instantiating WC_Product_Variation just to read meta. Returns the
 	 * FIRST matching variation if (somehow) multiple exist.
 	 *
-	 * @deprecated since alpha.14 — production callers removed per L-032.
-	 *             Method retained as defensive surface for future
-	 *             automation hooks. See BUILD-PLAN §4.7 for the current
-	 *             iframe-flip variation architecture.
+	 * Production caller since Phase 4c-A: `JEDB_Variation_Sync::reconcile()`
+	 * (row identity lookup — `$variation_slug` carries the repeater row's
+	 * `_jedb_row_id` UUID). See §4.14.5.
 	 *
 	 * @param int    $parent_post_id  The variable product post ID.
 	 * @param int    $bridge_id       The flatten config row id.
@@ -355,13 +349,9 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 	 * regardless of what's in `$fields` so the management tracking can't
 	 * be accidentally overwritten.
 	 *
-	 * @deprecated since alpha.14 — production callers removed per L-032.
-	 *             The alpha.13 reconciler used this to create managed
-	 *             variations from CCT state. Variation management is now
-	 *             delegated to WC's native UI via the iframe-flip pattern
-	 *             (BUILD-PLAN §4.7). Method retained as defensive surface
-	 *             for future automation hooks. New code should NOT wire
-	 *             through here without revisiting L-032.
+	 * Production caller since Phase 4c-A: `JEDB_Variation_Sync::reconcile()`
+	 * (creates a managed variation for a repeater row that has none —
+	 * `$variation_slug` carries the row's `_jedb_row_id` UUID). See §4.14.5.
 	 *
 	 * @param int    $parent_post_id
 	 * @param int    $bridge_id

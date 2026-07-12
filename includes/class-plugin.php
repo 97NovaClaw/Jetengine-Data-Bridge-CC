@@ -95,6 +95,7 @@ class JEDB_Plugin {
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-condition-evaluator.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flatten-config-manager.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-taxonomy-applier.php';
+		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-variation-sync.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-flattener.php';
 		require_once JEDB_PLUGIN_DIR . 'includes/flatten/class-reverse-flattener.php';
 
@@ -112,6 +113,10 @@ class JEDB_Plugin {
 		JEDB_Sync_Guard::instance();
 		JEDB_Sync_Log::instance();
 		JEDB_Taxonomy_Applier::instance();
+		// Phase 4c-A (§4.14): data-driven variation reconciler. Invoked
+		// by the Flattener as push phase 3; instantiating here registers
+		// its admin hook (hide `_jedb_row_id` on CCT edit screens).
+		JEDB_Variation_Sync::instance();
 		JEDB_Flattener::instance();
 		JEDB_Reverse_Flattener::instance();
 		JEDB_CCT_Single_Redirect::instance();

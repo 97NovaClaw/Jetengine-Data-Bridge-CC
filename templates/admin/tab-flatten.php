@@ -710,6 +710,47 @@ endif;
 			</p>
 		</details>
 
+		<?php
+		/* Phase 4c-A (§4.14): data-driven variation mappings. Maps a
+		 * source-CCT repeater field to managed WC variations. Gated to
+		 * posts::product targets (same D6 rule as the WC Variations
+		 * panel). v1 admin surface is a validated JSON editor + preset
+		 * loaders — a structured mapping builder can come in 4c-C if
+		 * the JSON proves too raw for editors. */
+		?>
+		<details
+			class="jedb-flatten-variation-mappings-section"
+			id="jedb_flatten_variation_mappings_section"
+			data-visible="<?php echo $wc_variations_section_visible ? '1' : '0'; ?>"
+			<?php echo $wc_variations_section_visible ? 'open' : ''; ?>
+			<?php echo $wc_variations_section_visible ? '' : 'style="display:none;"'; ?>
+		>
+			<summary>
+				<h3 style="display:inline-block;margin:0;"><?php esc_html_e( 'Variation Mappings (repeater → WC variations)', 'je-data-bridge-cc' ); ?></h3>
+				<span class="description" style="margin-left:8px;"><?php esc_html_e( '— sync CCT repeater rows to managed product variations', 'je-data-bridge-cc' ); ?></span>
+			</summary>
+
+			<p class="description" style="max-width:820px;">
+				<?php esc_html_e( 'Each entry maps ONE repeater field on the source CCT to WooCommerce variations on the linked product. On every push, rows are reconciled to managed variations (created / updated / soft-hidden / trashed) identified by the hidden Row ID subfield. Variations created manually or via the variations-editor modal are never touched. See BUILD-PLAN §4.14 and DATA-MAP.md for the full spec.', 'je-data-bridge-cc' ); ?>
+			</p>
+
+			<p>
+				<button type="button" class="button" id="jedb_vm_preset_physical"><?php esc_html_e( '+ Physical repeater preset', 'je-data-bridge-cc' ); ?></button>
+				<button type="button" class="button" id="jedb_vm_preset_pdf"><?php esc_html_e( '+ PDF repeater preset', 'je-data-bridge-cc' ); ?></button>
+				<span id="jedb_vm_status" class="description" style="margin-left:10px;"></span>
+			</p>
+
+			<textarea
+				id="jedb_flatten_variation_mappings"
+				rows="14"
+				style="width:100%;font-family:Consolas,Menlo,Monaco,monospace;font-size:12px;"
+				placeholder='[]'
+			><?php echo esc_textarea( wp_json_encode( isset( $config['variation_mappings'] ) && is_array( $config['variation_mappings'] ) ? array_values( $config['variation_mappings'] ) : array(), JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES ) ); ?></textarea>
+			<p class="description">
+				<?php esc_html_e( 'JSON array. Invalid JSON is NOT saved (the last valid state is kept and an error shows above). Empty array = variation sync off for this bridge.', 'je-data-bridge-cc' ); ?>
+			</p>
+		</details>
+
 		<h3><?php esc_html_e( 'Field mappings', 'je-data-bridge-cc' ); ?></h3>
 
 		<p class="description">

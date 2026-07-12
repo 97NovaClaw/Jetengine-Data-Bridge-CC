@@ -447,6 +447,27 @@ class JEDB_Flattener {
 				);
 			}
 
+			// Phase 4c-A (§4.14): data-driven variation reconcile runs
+			// THIRD — after mappings + taxonomies — so the parent
+			// product's category state is final before variations are
+			// attached. No-op unless the bridge declares
+			// variation_mappings[]. Runs inside this push lock, so
+			// cascade events from variation/parent saves are suppressed
+			// by the reverse engine's cross-direction check.
+			$variations_summary = array( 'ran' => false );
+			if ( class_exists( 'JEDB_Variation_Sync' ) && ! empty( $config['variation_mappings'] ) ) {
+				$variations_summary = JEDB_Variation_Sync::instance()->reconcile(
+					$bridge,
+					$source_id,
+					$source_data,
+					(int) $target_id
+				);
+			}
+			$variations_changed = (
+				( $variations_summary['created'] ?? 0 ) + ( $variations_summary['updated'] ?? 0 )
+				+ ( $variations_summary['hidden'] ?? 0 )  + ( $variations_summary['trashed'] ?? 0 )
+			) > 0;
+
 			$taxonomies_changed = (
 				$taxonomy_summary['terms_added']   > 0
 				|| $taxonomy_summary['terms_removed'] > 0
@@ -464,17 +485,24 @@ class JEDB_Flattener {
 					'resolution'    => $resolution_method,
 					'auto_attached' => $auto_attached,
 					'taxonomies'    => $taxonomy_summary,
+					'variations'    => $variations_summary,
 				) );
 				return JEDB_Sync_Log::STATUS_ERRORED;
 			}
 
-			// Path 2: mappings wrote successfully (regardless of taxonomies).
+			// Path 2: mappings wrote successfully (regardless of taxonomies / variations).
 			if ( $any_change && $mapping_write_ok ) {
 				$message = sprintf( 'wrote %d field(s)', count( $payload ) );
 				if ( $taxonomies_changed ) {
 					$message .= sprintf(
 						' + %d taxonomy term change(s)',
 						$taxonomy_summary['terms_added'] + $taxonomy_summary['terms_removed']
+					);
+				}
+				if ( $variations_changed ) {
+					$message .= sprintf(
+						' + %d variation change(s)',
+						( $variations_summary['created'] ?? 0 ) + ( $variations_summary['updated'] ?? 0 ) + ( $variations_summary['hidden'] ?? 0 ) + ( $variations_summary['trashed'] ?? 0 )
 					);
 				}
 				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SUCCESS, $origin_tag, $message, array(
@@ -484,20 +512,29 @@ class JEDB_Flattener {
 					'resolution'    => $resolution_method,
 					'auto_attached' => $auto_attached,
 					'taxonomies'    => $taxonomy_summary,
+					'variations'    => $variations_summary,
 				) );
 				return JEDB_Sync_Log::STATUS_SUCCESS;
 			}
 
-			// Path 3: mappings noop'd, taxonomies changed something — log
-			// success with the `taxonomies_only` marker.
-			if ( $taxonomies_changed ) {
-				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SUCCESS, $origin_tag, sprintf( 'fields all noop, but %d taxonomy term(s) changed', $taxonomy_summary['terms_added'] + $taxonomy_summary['terms_removed'] ), array(
+			// Path 3: mappings noop'd but taxonomies OR variations changed —
+			// log success with markers.
+			if ( $taxonomies_changed || $variations_changed ) {
+				$parts = array();
+				if ( $taxonomies_changed ) {
+					$parts[] = sprintf( '%d taxonomy term(s)', $taxonomy_summary['terms_added'] + $taxonomy_summary['terms_removed'] );
+				}
+				if ( $variations_changed ) {
+					$parts[] = sprintf( '%d variation(s)', ( $variations_summary['created'] ?? 0 ) + ( $variations_summary['updated'] ?? 0 ) + ( $variations_summary['hidden'] ?? 0 ) + ( $variations_summary['trashed'] ?? 0 ) );
+				}
+				$this->log_status( $bridge, $source_id, $target_id, JEDB_Sync_Log::STATUS_SUCCESS, $origin_tag, sprintf( 'fields all noop, but %s changed', implode( ' + ', $parts ) ), array(
 					'fields_examined' => count( $per_field ),
 					'per_field'       => $per_field,
 					'resolution'      => $resolution_method,
 					'auto_attached'   => $auto_attached,
 					'taxonomies'      => $taxonomy_summary,
-					'taxonomies_only' => true,
+					'variations'      => $variations_summary,
+					'taxonomies_only' => $taxonomies_changed && ! $variations_changed,
 				) );
 				return JEDB_Sync_Log::STATUS_SUCCESS;
 			}
@@ -509,6 +546,7 @@ class JEDB_Flattener {
 				'resolution'      => $resolution_method,
 				'auto_attached'   => $auto_attached,
 				'taxonomies'      => $taxonomy_summary,
+				'variations'      => $variations_summary,
 			) );
 			return JEDB_Sync_Log::STATUS_NOOP;
 
