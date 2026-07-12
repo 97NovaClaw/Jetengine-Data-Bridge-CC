@@ -135,6 +135,8 @@ Each row = one physical variation. Identity: hidden `_jedb_row_id` UUID ↔ vari
 | `sale_start` / `sale_end` (visible when on_sale=yes) | → | `date_on_sale_from` / `date_on_sale_to` | push (date transform) |
 | `stock_quantity` | ↔ | `stock_quantity` (+ manage_stock=yes) | **two-way** (pull = Phase 4c-B) |
 | `length` / `width` / `height` (inches) + `weight` (lbs) — matches WC store units (in / lbs) | → | same | push |
+| `length`/`width`/`height` of FIRST enabled row | → | CCT `approximate_size` (derived display string, §4.14.11) | push (same pass) |
+| `photo` (media — **pending**, added with migration) | → | `image_id` (variation image swap on storefront) | push |
 | `sku` | → | `sku` | push |
 
 ### `pdf_variations` repeater (mosaics_data) → WC variations
@@ -151,6 +153,54 @@ Attribute combo: `pa_physical-or-pdf=instructions-pdf` (+ Any variant). Defaults
 | `sale_price` + schedule (visible when on_sale=yes) | → | sale fields | push |
 
 ---
+
+## Frontend consumption map (audited 2026-07-12)
+
+> Where mosaic CCT data is actually rendered on the storefront. **Check this section before renaming/dropping any CCT field** — these are the consumers that break.
+
+### Render chain
+
+```mermaid
+flowchart TD
+    CCT["wp_jet_cct_mosaics_data"]
+    Q23["JE Query 23 · Latest Featured (raw SQL)"]
+    Q28["JE Query 28 · Home Top 2 Featured (raw SQL)"]
+    Q22["JE Query 22 · Archive Filterable (CCT query)"]
+    Q24["JE Query 24 · Related (CCT query)"]
+    L600["Listing 600 · Home latest featured"]
+    L492["Listing 492 · Mosaic Archive card"]
+    L497["Listing 497 · Archive hero strip"]
+    S6["Snippet 6 · [bbhq_linked_product_price]"]
+    T515["Template 515 · Mosaic Single Product<br/>(Elementor Pro WC widgets)"]
+    CCT --> Q23 --> L600
+    CCT --> Q28 --> L600
+    CCT --> Q22 --> L492
+    CCT --> Q24
+    CCT --> S6
+    S6 --> L492
+    WC["WC Product + Variations"] --> T515
+    WC --> S6
+```
+
+### Field → consumer table
+
+| CCT field | Consumers | Notes |
+|---|---|---|
+| `mosaic_name` | Queries 23/28 (SELECT), listings 492/497/600 | + bridge-synced to product title |
+| `approximate_size` | Queries 23/28 (**SELECT by column name**), listing 600 (home card) | becomes DERIVED from primary variation L/W/H — BUILD-PLAN §4.14.11. Format: `18″ × 18″ × 2″`, empty dims collapse |
+| `price` | Queries 23/28 (SELECT), **39 Elementor bindings** (archive listing 492, archive page, single product) | KEEP — also the repeater fallback price |
+| `display_price_publicly` | **Code Snippet 6** `[bbhq_linked_product_price]` — bound on listing 492's price heading via shortcode dynamic tag. `"no"` → renders "Quote on request" instead of price | KEEP — overarching storefront price toggle. NOT in any Elementor binding (that's why an `_elementor_data` search misses it) |
+| `stud_count` | Queries 23/28 (SELECT) | KEEP — design characteristic |
+| `main_photo` | Listings 492/497/527/600, bridge → product `image_id` | parent/primary product photo |
+| `gallery` | Query 23/28 (SELECT), bridge → product `gallery_image_ids` | product gallery |
+| `has_instructions_pdf`, `instructions_pdf`, `is_there_only_1_product_size` | **zero frontend consumers** | DROP list (Phase 4c-C, after migration) |
+
+### Single product page (variation UX)
+
+- Template: **Elementor library post 515 "Mosaic Single Product"**, applied to `product_cat=mosaics` (term 17) via Elementor Pro theme-builder conditions. (Sets: post 532 / term 16.)
+- Widgets: Elementor Pro's standard WC set — `woocommerce-product-images`, `woocommerce-product-add-to-cart` (renders the variation selector on variable products), price/stock/meta/tabs + a `jet-listing-grid` (related).
+- **Per-variation photo swap: works natively.** WC variations carry their own `image_id`; core WC JS swaps the main image when a variation with an image is selected, restores the parent `main_photo`-fed featured image when cleared. The `woocommerce-product-images` widget wraps that native behavior. JetProductGallery is installed but not used on this template.
+- Planned flow: parent image = `main_photo` (mapped today) · gallery = `gallery` (mapped today) · variation image = NEW `photo` subfield on `physical_variations` → variation `image_id` (adapter already supports the setter). PDF variations get no photo — parent image shows.
 
 ## Repeater storage format (verified against live data, item 16, 2026-07-12)
 

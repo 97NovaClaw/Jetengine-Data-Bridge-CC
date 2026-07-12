@@ -1263,10 +1263,11 @@ Two repeaters on `mosaics_data` (mirrorable to other CCTs later):
 | `sale_price` | number | `sale_price` | |
 | `sale_start` / `sale_end` | date | `date_on_sale_from` / `date_on_sale_to` | date-format transformer required |
 | `stock_quantity` | number | `stock_quantity` (+ `manage_stock=yes`) | quantity, not just status — purchase decrements flow back (Phase B) |
-| `length` / `width` / `height` | number ×3 | `length` / `width` / `height` | |
-| `weight` | number | `weight` | added per design review — shipping needs it |
+| `length` / `width` / `height` | number ×3 | `length` / `width` / `height` | inches — matches WC store units; also drives the derived `approximate_size` (§4.14.11) |
+| `weight` | number | `weight` | lbs — added per design review; shipping needs it |
+| `photo` | media | `image_id` | per-variation image — swaps the main product image when the variant is selected on the storefront (§4.14.13). *Subfield pending — added with the migration run.* |
 | `sku` | text (optional) | `sku` | |
-| `_jedb_row_id` | hidden | identity | UUID injected by the reconciler on first sync — editors never see it |
+| `_jedb_row_id` | text ("Row ID (system)") | identity | real subfield per the 2026-07-12 amendment; hidden via CSS in 4c-A |
 
 **`pdf_variations`** — usually one row:
 
@@ -1359,9 +1360,61 @@ Both surfaces stay. Policy: the reconciler owns **managed** variations; the ifra
 
 #### 4.14.10 Phase plan
 
-- **Phase 4c-A (push):** JE repeater schemas + `pa_variant` attribute + `variation_mappings` schema/UI + reconciler v2 (create/update/soft-hide/delete managed variations, parent attribute maintenance, always-variable enforcement) + `date` transformer + downloads mapping. Exit: editing repeater rows on a mosaic CCT and saving produces correct WC variations; Koala-style manual setups untouched.
+- **Phase 4c-A (push):** JE repeater schemas + `pa_variant` attribute + `variation_mappings` schema/UI + reconciler v2 (create/update/soft-hide/delete managed variations, parent attribute maintenance, always-variable enforcement) + `date` transformer + downloads mapping + derived `approximate_size` writer (§4.14.11) + per-variation photo mapping (§4.14.13). Exit: editing repeater rows on a mosaic CCT and saving produces correct WC variations; Koala-style manual setups untouched; the archive/home cards keep rendering size + price with zero template edits.
 - **Phase 4c-B (stock pull):** reverse stock sync into repeater rows. Exit: a WC test order decrements a physical variation's stock and the CCT repeater row reflects it.
-- **Phase 4c-C (polish):** iframe coexistence notice, remaining pull fields if justified, delete-policy edge cases, DATA-MAP.md refresh.
+- **Phase 4c-C (polish):** iframe coexistence notice, remaining pull fields if justified, delete-policy edge cases, legacy field retirement (§4.14.14), DATA-MAP.md refresh.
+
+#### 4.14.11 Derived `approximate_size` — locked 2026-07-12
+
+`approximate_size` is NOT dropped. It becomes a **machine-derived display string** computed from the primary physical variation's L/W/H at reconcile time and written back to the existing CCT column. Rationale: the field is load-bearing on the frontend — JE SQL queries 23 + 28 SELECT the column by name and the home-page listing (post 600) renders it — so deriving in place keeps every query, listing, and template working with **zero frontend changes**.
+
+**Derivation rules:**
+
+- **Source row:** the FIRST enabled `physical_variations` row (row order = display priority; editors reorder to change which variant leads). No physical rows → empty string.
+- **Format:** join the NON-EMPTY dimensions in L → W → H order with `" × "`, each rendered as `{value}″` (double-prime, trailing zeros trimmed: `18` not `18.0`).
+  - L=18, W=18, H=2 → `18″ × 18″ × 2″`
+  - L=18, W=18 → `18″ × 18″`
+  - L=18 only → `18″`
+  - all empty → `""` (card renders nothing — same as an unset field today)
+- The dropped-dimension collapse keeps the visual output format-stable regardless of how many dimensions are filled (user requirement).
+- **Write path:** same reconcile pass, direct-SQL column update (L-030 pattern), inside the sync guard so it can't retrigger loops. The JE admin field stays visible but is documented as auto-computed (description updated at migration time; editors' manual edits get overwritten on next save — acceptable, it's derived data).
+
+#### 4.14.12 `display_price_publicly` — stays, and here's the actual wiring (audited 2026-07-12)
+
+Retained as the **overarching storefront price-visibility toggle**, per user decision. The 2026-07-12 audit found where it actually lives — NOT in Elementor data (zero bindings), but in a Code Snippet:
+
+- **Snippet 6 "BBHQ — Linked Woo product price shortcode"** (`[bbhq_linked_product_price]`, active): renders the linked product's price on the Mosaic Archive Listing card (post 492 binds it via an Elementor shortcode dynamic tag). It reads the CCT row's `display_price_publicly` — when `"no"`, it renders the fallback text ("Quote on request") instead of the price. Resolution is two-path: the JE listing loop object first, reverse-lookup by `cct_single_post_id` second.
+- This means the toggle ALREADY works on the archive card, entirely outside the plugin. No Phase 4c work needed beyond: (a) never drop the field, (b) DATA-MAP records the snippet as a consumer, (c) migration must not touch its values.
+
+#### 4.14.13 Per-variation photos — capability vetting (2026-07-12)
+
+**Requirement:** a primary photo for the product, plus a per-variation photo that takes over when a specific variation is selected, coexisting with the product gallery.
+
+**WooCommerce capability — native, confirmed:**
+- Every `WC_Product_Variation` has its own `image_id` (`set_image_id()` / `_thumbnail_id` meta). Core WC storefront behavior (`wc-add-to-cart-variation.js`): selecting a variation with an image **swaps the main product image**; clearing the selection restores the parent's featured image. The parent gallery is unaffected by the swap.
+- `JEDB_Target_Woo_Variation` already declares `image_id → set_image_id` in its setter map (verified in the adapter source) — the reconciler maps the repeater `photo` subfield straight through, no adapter work needed.
+
+**Current site UI — confirmed compatible:**
+- The Mosaic Single Product template (Elementor library post 515, applied to `product_cat` mosaics via Elementor Pro theme-builder conditions) uses **Elementor Pro's standard WC widgets**: `woocommerce-product-images` (the media element that performs the native swap), `woocommerce-product-add-to-cart` (renders the variation selector for variable products), plus price/stock/meta/tabs widgets. All wrap WC's native templates, so variation image swap works out of the box — no template changes required.
+- JetProductGallery is installed but **inactive on this template** (no custom gallery widget in use) — no compatibility work needed unless it's adopted later.
+- **Photo flow:** parent featured image = CCT `main_photo` (already bridge-mapped to `image_id` on the product); gallery = CCT `gallery` (already mapped to `gallery_image_ids`); per-variation = NEW `photo` media subfield on `physical_variations` → variation `image_id`. PDF variations intentionally get NO photo subfield — they inherit the parent image (a PDF has no distinct physical appearance).
+- The `photo` subfield is **pending** — it gets added to the repeater schema together with the migration run (batching schema changes so editors see one change, not dribbles).
+
+#### 4.14.14 Legacy field retirement + migration plan (Phase 4c-C)
+
+Frontend audit (2026-07-12) — full consumer table lives in DATA-MAP.md. Verdicts:
+
+| Field | Verdict | Why |
+|---|---|---|
+| `has_instructions_pdf` | **DROP** after migration | zero frontend refs; superseded by `pdf_variations` row presence |
+| `instructions_pdf` | **DROP** after migration | zero frontend refs; 1 row carries a file → migrate into `pdf_variations.file` |
+| `is_there_only_1_product_size` | **DROP** after migration | admin-only conditional gate; multi-size is what the repeater models |
+| `approximate_size` | **KEEP — becomes derived** (§4.14.11) | load-bearing in queries 23/28 + listing 600 |
+| `price` | **KEEP** | 39 Elementor bindings + queries + repeater fallback price |
+| `display_price_publicly` | **KEEP** | storefront toggle consumed by Snippet 6 (§4.14.12) |
+| `stud_count` | **KEEP** | design characteristic, not a variant property; used in queries 23/28 |
+
+**Migration (user-triggered after doc review, before any drops):** for each of the 10 mosaic rows — seed a `physical_variations` row from `price` + `approximate_size` (parse `L x W` out of the legacy text where possible, else leave dims empty and keep the legacy string until the editor fills dims) + `stock_quantity=1`; where `has_instructions_pdf=yes`, seed a `pdf_variations` row (the 1 row with a real file gets it as `photo`→no, as `file`); recompute derived `approximate_size` from the new rows. Drops happen only in 4c-C after staging verification, and REQUIRE updating queries 23/28 in the same pass if any SELECTed column is dropped (none currently on the drop list are SELECTed — verified).
 
 ---
 
