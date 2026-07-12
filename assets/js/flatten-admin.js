@@ -623,7 +623,11 @@
 	var VM_PRESET_PDF = {
 		source_repeater: 'pdf_variations',
 		attribute_terms: { 'pa_physical-or-pdf': 'instructions-pdf' },
-		variant_attribute: null,
+		// Single-selector model: the PDF row's label becomes a pa_variant
+		// term too, so every variation (physical + PDF) is selected via
+		// ONE storefront dropdown. attribute_terms stays parent-level
+		// classification (is_variation=0).
+		variant_attribute: { taxonomy: 'pa_variant', from_subfield: 'variant_label', create_if_missing: true },
 		subfield_map: [
 			{ subfield: 'price',      target: 'regular_price' },
 			{ subfield: 'sale_price', target: 'sale_price' },

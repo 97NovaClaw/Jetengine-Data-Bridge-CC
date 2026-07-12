@@ -69,8 +69,14 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 		if ( ! function_exists( 'wc_get_product' ) ) {
 			return false;
 		}
+		// NOTE: WC_Product::get_type() returns the PRODUCT type
+		// ('variation'), NOT the post type ('product_variation').
+		// Comparing against self::POST_TYPE here was the alpha.22 bug
+		// that made every update() return false (created variations
+		// could never be updated / hidden / re-priced). is_type() is
+		// the canonical check.
 		$variation = wc_get_product( absint( $id ) );
-		return $variation && self::POST_TYPE === $variation->get_type();
+		return $variation && $variation->is_type( 'variation' );
 	}
 
 	public function get( $id ) {
@@ -80,7 +86,7 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 		}
 
 		$variation = wc_get_product( absint( $id ) );
-		if ( ! $variation || self::POST_TYPE !== $variation->get_type() ) {
+		if ( ! $variation || ! $variation->is_type( 'variation' ) ) {
 			return null;
 		}
 
@@ -103,7 +109,7 @@ class JEDB_Target_Woo_Variation extends JEDB_Target_Abstract {
 		}
 
 		$variation = wc_get_product( absint( $id ) );
-		if ( ! $variation || self::POST_TYPE !== $variation->get_type() ) {
+		if ( ! $variation || ! $variation->is_type( 'variation' ) ) {
 			$this->log( 'Update target variation not found', 'error', array( 'id' => $id ) );
 			return false;
 		}

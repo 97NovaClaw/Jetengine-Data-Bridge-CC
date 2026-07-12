@@ -424,11 +424,16 @@ class JEDB_Variation_Sync {
 			}
 		}
 
-		// Attributes: fixed terms + per-row variant term.
+		// Attributes — SINGLE-SELECTOR model (amended post-alpha.22
+		// staging review): only the per-row `variant_attribute` term goes
+		// on the variation. The `attribute_terms` type discriminator is
+		// parent-level classification (assigned to the product for
+		// filtering, is_variation=0) — putting it on variations produced
+		// a redundant second storefront dropdown that "did nothing"
+		// because the variant term alone already uniquely identifies
+		// every variation (physical labels + "Instructions PDF" are all
+		// terms of the same variant taxonomy).
 		$attributes = array();
-		foreach ( (array) $mapping['attribute_terms'] as $tax => $term_slug ) {
-			$attributes[ sanitize_title( (string) $tax ) ] = sanitize_title( (string) $term_slug );
-		}
 		$va = $mapping['variant_attribute'];
 		if ( is_array( $va ) && ! empty( $va['taxonomy'] ) && ! empty( $va['from_subfield'] ) ) {
 			$label = trim( (string) ( $row[ $va['from_subfield'] ] ?? '' ) );
@@ -478,33 +483,44 @@ class JEDB_Variation_Sync {
 
 	/**
 	 * Ensure the parent product carries every attribute taxonomy + term the
-	 * managed variations need: terms exist, are assigned to the parent, and
-	 * the `_product_attributes` meta lists each taxonomy with
-	 * `is_variation=1` — while PRESERVING any unrelated attributes the
-	 * editor configured manually.
+	 * managed variations need — while PRESERVING any unrelated attributes
+	 * the editor configured manually.
+	 *
+	 * SINGLE-SELECTOR model (amended post-alpha.22 staging review):
+	 *   - `variant_attribute` taxonomy → the storefront variation selector.
+	 *     Terms created per row label (create_if_missing), assigned to the
+	 *     parent, `_product_attributes` entry forced `is_variation=1`.
+	 *   - `attribute_terms` taxonomies → parent-level CLASSIFICATION only
+	 *     (useful for filtering). Terms assigned to the parent; the
+	 *     `_product_attributes` entry is created with `is_variation=0` and
+	 *     an EXISTING entry's `is_variation` is never modified (products
+	 *     with manual variations keyed on that attribute — e.g. Koala —
+	 *     must keep working; D-32 spirit).
 	 */
 	private function maintain_parent_attributes( $product_id, array $mappings, array $parsed, array &$summary ) {
 
-		// Collect taxonomy => [term slugs] needed across all mappings/rows.
+		// taxonomy => array( 'slugs' => [...], 'is_variation' => 0|1 )
 		$needed = array();
 
 		foreach ( $mappings as $mi => $mapping ) {
 
 			foreach ( (array) $mapping['attribute_terms'] as $tax => $term_slug ) {
 				$tax = sanitize_title( (string) $tax );
-				$needed[ $tax ][] = sanitize_title( (string) $term_slug );
+				$needed[ $tax ]['slugs'][]     = sanitize_title( (string) $term_slug );
+				$needed[ $tax ]['is_variation'] = isset( $needed[ $tax ]['is_variation'] ) ? $needed[ $tax ]['is_variation'] : 0;
 			}
 
 			$va = $mapping['variant_attribute'];
 			if ( is_array( $va ) && ! empty( $va['taxonomy'] ) && ! empty( $va['from_subfield'] ) ) {
 				$tax = sanitize_title( (string) $va['taxonomy'] );
+				$needed[ $tax ]['is_variation'] = 1;
 				foreach ( $parsed[ $mi ] as $row ) {
 					$label = trim( (string) ( $row[ $va['from_subfield'] ] ?? '' ) );
 					if ( '' === $label ) {
 						continue;
 					}
 					$slug = sanitize_title( $label );
-					$needed[ $tax ][] = $slug;
+					$needed[ $tax ]['slugs'][] = $slug;
 
 					// Create the term when allowed and missing (term NAME
 					// keeps the human label; slug is sanitized).
@@ -527,26 +543,36 @@ class JEDB_Variation_Sync {
 		$meta_dirty = false;
 
 		$position = count( $attr_meta );
-		foreach ( $needed as $tax => $slugs ) {
+		foreach ( $needed as $tax => $info ) {
 
 			if ( ! taxonomy_exists( $tax ) ) {
 				$summary['errors'][] = "attribute taxonomy {$tax} not registered — create the global attribute in WC first";
 				continue;
 			}
 
-			// Assign terms to the parent (append — never clobber).
-			wp_set_post_terms( $product_id, array_values( array_unique( $slugs ) ), $tax, true );
+			$slugs = array_values( array_unique( (array) ( $info['slugs'] ?? array() ) ) );
+			if ( ! empty( $slugs ) ) {
+				// Assign terms to the parent (append — never clobber).
+				wp_set_post_terms( $product_id, $slugs, $tax, true );
+			}
 
-			// Ensure the _product_attributes entry exists + is variation-enabled.
-			if ( ! isset( $attr_meta[ $tax ] ) || empty( $attr_meta[ $tax ]['is_variation'] ) ) {
+			$want_variation = (int) ( $info['is_variation'] ?? 0 );
+
+			if ( ! isset( $attr_meta[ $tax ] ) ) {
+				// New entry: is_variation per role.
 				$attr_meta[ $tax ] = array(
 					'name'         => $tax,
 					'value'        => '',
-					'position'     => isset( $attr_meta[ $tax ]['position'] ) ? $attr_meta[ $tax ]['position'] : $position++,
-					'is_visible'   => isset( $attr_meta[ $tax ]['is_visible'] ) ? (int) $attr_meta[ $tax ]['is_visible'] : 1,
-					'is_variation' => 1,
+					'position'     => $position++,
+					'is_visible'   => 1,
+					'is_variation' => $want_variation,
 					'is_taxonomy'  => 1,
 				);
+				$meta_dirty = true;
+			} elseif ( $want_variation && empty( $attr_meta[ $tax ]['is_variation'] ) ) {
+				// Variant selector must be variation-enabled — upgrade.
+				// (Never DOWNGRADE an existing entry — see docblock.)
+				$attr_meta[ $tax ]['is_variation'] = 1;
 				$meta_dirty = true;
 			}
 		}

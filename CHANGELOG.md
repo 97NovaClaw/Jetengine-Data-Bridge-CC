@@ -6,6 +6,36 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 Phase 4c-B (stock pull) and 4c-C (polish + legacy field retirement per §4.14.14) are next. Then Phase 5.
 
+## [0.6.0-alpha.23] — 2026-07-12
+
+**Phase 4c-A staging fixes — variation updates were silently failing (adapter type-check bug) + single-selector attribute model (removes the redundant "Physical or PDF" storefront dropdown).**
+
+First staging round on alpha.22 (Variation test 2): initial save created all 3 variations correctly, but subsequent saves did nothing — sale-date changes didn't propagate and disabling a row didn't hide its variation. sync_log's `variations.errors` had the smoking gun: `update of variation #745 failed` for every row.
+
+### Fixed — the adapter type-check bug (root cause of "nothing happened")
+
+`JEDB_Target_Woo_Variation::exists()/get()/update()` compared `$variation->get_type()` against `self::POST_TYPE` (`'product_variation'`). But `WC_Product::get_type()` returns the PRODUCT type — `'variation'` — not the post type. Every `update()` call bailed at "variation not found" and returned false. Creates worked (no type check on the create path), which is why the initial save looked perfect and every re-save silently failed. All three methods now use the canonical `$variation->is_type( 'variation' )`.
+
+(This bug predates 4c-A — the adapter shipped in alpha.13 whose reconciler was retired before update paths got real staging traffic. First real exercise found it.)
+
+### Changed — single-selector attribute model (staging UX feedback)
+
+alpha.22 put BOTH attributes on each variation (`pa_physical-or-pdf` + `pa_variant`), producing two storefront dropdowns — and the "Physical or PDF" one felt redundant/dead since the variant term alone already uniquely identifies every variation. Amended model:
+
+- **`variant_attribute` (pa_variant) is THE storefront selector** — the only attribute on managed variations, `is_variation=1`. PDF mappings now declare it too (the PDF row's `variant_label` becomes a term, e.g. "Instructions PDF"), so physicals + PDF are all picked from ONE dropdown.
+- **`attribute_terms` (pa_physical-or-pdf) becomes parent-level classification** — terms assigned to the product for filtering, `_product_attributes` entry created with `is_variation=0`, never placed on variations.
+- **Existing entries' `is_variation` is never DOWNGRADED** by the engine (products with manual variations keyed on `pa_physical-or-pdf` — e.g. Koala — keep working; D-32 spirit). Upgrade to 1 still happens for the variant selector taxonomy. Staging test products created by alpha.22 get their parent meta corrected by a one-time data fix instead.
+- `set_attributes()` replaces the whole attribute set on update, so stale `attribute_pa_physical-or-pdf` values on alpha.22-created variations self-heal on the next save (now that updates work).
+- JS PDF preset + factory docs updated to match; bridge 3's seeded config updated on staging (PDF mapping gains `variant_attribute`).
+
+### Verification (redo of the alpha.22 recipe, steps that failed)
+
+1. Change a sale date on the 10″ FRAME row + save → variation #746's sale schedule updates in WC.
+2. Disable the 18″ row + save → variation #745 goes `private` (hidden storefront-side).
+3. Re-enable + save → back to `publish`.
+4. Storefront single-product page shows ONE dropdown ("Variant": 18″ frame / 10″ frame / PDF Instruction set) — no "Physical or PDF" selector.
+5. Parent product still carries `pa_physical-or-pdf` terms (visible in Additional Information / usable by filters) but not as a variation selector.
+
 ## [0.6.0-alpha.22] — 2026-07-12
 
 **Phase 4c-A shipped — data-driven variation sync: CCT repeater rows ↔ managed WC variations (push direction).**

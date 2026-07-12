@@ -238,14 +238,17 @@ class JEDB_Flatten_Config_Manager {
 	 *     (e.g. `physical_variations`). The column stores a PHP-serialized
 	 *     array of rows keyed `item-N` — see DATA-MAP.md "Repeater
 	 *     storage format".
-	 *   - `attribute_terms`: fixed attribute assignments for every
-	 *     variation from this mapping, `{ taxonomy: term_slug }` (e.g.
-	 *     `{"pa_physical-or-pdf": "physical-art"}`). The type
-	 *     discriminator per D-31.
-	 *   - `variant_attribute`: per-row distinguishing attribute (null to
-	 *     skip — PDF mappings use null since they're one row).
+	 *   - `attribute_terms`: PARENT-LEVEL classification terms,
+	 *     `{ taxonomy: term_slug }` (e.g. `{"pa_physical-or-pdf":
+	 *     "physical-art"}`). Assigned to the parent product for
+	 *     filtering; created with `is_variation=0` — NOT placed on the
+	 *     variations themselves (single-selector amendment after
+	 *     alpha.22 staging showed a redundant second dropdown).
+	 *   - `variant_attribute`: THE storefront variation selector.
 	 *     `taxonomy` + `from_subfield` (whose value becomes the term) +
-	 *     `create_if_missing`.
+	 *     `create_if_missing`. Every mapping should declare one so all
+	 *     variations are picked via a single dropdown (PDF rows use
+	 *     their `variant_label` too, defaulting "Instructions PDF").
 	 *   - `subfield_map[]`: `{ subfield, target, pull?, transform? }` —
 	 *     repeater subfield → variation typed-setter field. `transform:
 	 *     "date"` marks sale-schedule fields; `pull: true` marks Phase

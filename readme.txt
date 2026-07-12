@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.22
+Stable tag: 0.6.0-alpha.23
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -96,6 +96,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 = Unreleased =
 * Phase 4c-B (stock pull) and 4c-C (polish + legacy field retirement) next; then Phase 5.
+
+= 0.6.0-alpha.23 =
+* Phase 4c-A staging fixes. (1) ROOT-CAUSE FIX for "re-saves do nothing": JEDB_Target_Woo_Variation::exists()/get()/update() compared WC_Product::get_type() (returns 'variation') against the post type ('product_variation') - every update() bailed as "not found" and returned false, so sale-date changes and row-disable never reached WC while creates worked fine. Now uses is_type('variation'). Bug shipped in alpha.13; first real update traffic found it. (2) Single-selector attribute model: pa_variant is THE storefront variation dropdown (PDF rows' variant_label becomes a term too); pa_physical-or-pdf demoted to parent-level classification (is_variation=0 on new entries, existing entries never downgraded so manual setups like Koala keep working). Stale two-attribute combos on alpha.22-created variations self-heal on next save via set_attributes replacement.
 
 = 0.6.0-alpha.22 =
 * Phase 4c-A — data-driven variation sync (push). New JEDB_Variation_Sync engine reconciles source-CCT repeater rows to managed WC variations as push phase 3 (mappings -> taxonomies -> variations). Row identity: hidden _jedb_row_id UUID subfield <-> _jedb_variation_slug variation meta (UUIDs auto-filled on first reconcile via direct SQL). D-30 always-variable enforcement; D-31 parent attribute maintenance (terms created/assigned, _product_attributes maintained with is_variation=1, unrelated attributes preserved); D-32 managed-only contract (manual/iframe variations never touched). Field pipeline: cast discipline for all-string repeater values, price fallback to a source scalar, on_sale gate that CLEARS sale fields when off, downloads mapping (attachment -> WC download), per-row photo -> variation image_id, per-row attribute combos, publish/private from the enabled switch. Orphaned rows (deleted from the repeater) get delete_policy treatment (trash default). Parent rollups refreshed via WC_Product_Variable::sync + transient clear. Derived approximate_size display string written back to the source column when derived_size_field is set (\u00a74.14.11). New variation_mappings[] schema + factory + merge back-compat. Flatten tab gains a Variation Mappings section (posts::product-gated): validated JSON editor + one-click Physical/PDF presets. _jedb_row_id hidden on JE CCT edit screens via MutationObserver. Target_Woo_Variation helpers un-deprecated (production callers again per the alpha.14 retention decision).
