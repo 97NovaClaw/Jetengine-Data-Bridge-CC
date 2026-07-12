@@ -198,6 +198,20 @@ $ajax_url      = admin_url( 'admin-post.php' );
 			· <a href="<?php echo esc_url( $flatten_edit_url ); ?>"><?php esc_html_e( 'Edit in Flatten tab →', 'je-data-bridge-cc' ); ?></a>
 		</p>
 
+		<?php if ( ! empty( $has_variation_mappings ) ) : ?>
+			<p class="description" style="padding:8px 10px;background:#f0f6fc;border-left:3px solid #2271b1;border-radius:2px;">
+				<strong><?php esc_html_e( 'Managed variations:', 'je-data-bridge-cc' ); ?></strong>
+				<?php
+				printf(
+					/* translators: %d = number of bridge-managed variations */
+					esc_html( _n( '%d variation on this product is synced from the linked CCT\'s variation fields.', '%d variations on this product are synced from the linked CCT\'s variation fields.', (int) ( $managed_variation_count ?? 0 ), 'je-data-bridge-cc' ) ),
+					(int) ( $managed_variation_count ?? 0 )
+				);
+				?>
+				<?php esc_html_e( 'Manual edits to those variations (except stock) are overwritten on the next CCT save. Variations created manually are never touched.', 'je-data-bridge-cc' ); ?>
+			</p>
+		<?php endif; ?>
+
 		<fieldset class="jedb-bridge-overrides">
 			<legend><?php esc_html_e( 'Per-product overrides', 'je-data-bridge-cc' ); ?></legend>
 

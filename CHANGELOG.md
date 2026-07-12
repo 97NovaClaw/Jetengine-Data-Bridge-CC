@@ -4,7 +4,28 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
-Phase 4c-C (polish + legacy field retirement per §4.14.14) next. Then Phase 5.
+Phase 4c-C remainder (legacy field retirement per §4.14.14, delete-policy edge cases) next. Then Phase 5.
+
+## [0.6.0-alpha.25] — 2026-07-12
+
+**Phase 4c UI alignment — every admin surface now reflects the repeater-variation model (D-32 coexistence notice + managed-variation awareness + stale copy fixes).**
+
+UI audit after 4c-A/B shipped, closing the gaps between what the engine does and what editors see:
+
+### Added
+
+- **D-32 coexistence notice on the CCT-screen variations panel** (the iframe launcher): when the bridge also has `variation_mappings`, the panel shows an amber notice — *"variations created from this item's variation fields are overwritten on every save here (stock changes sync back automatically). Use the editor below for variation images, shipping class, or extra manual variations."* Wired via a per-panel `has_managed_mappings` flag from `build_panels_for()` + new i18n string + `.jedb-cctv-managed-notice` styling. This was the scoped 4c-C notice, delivered early.
+- **Managed-variations line in the product meta box** (Advanced Details, `show_advanced=true` bridges): *"N variations on this product are synced from the linked CCT's variation fields. Manual edits to those variations (except stock) are overwritten on the next CCT save. Variations created manually are never touched."* Count computed from `META_VARIATION_BRIDGE` meta scoped to this bridge + parent. Answers the inevitable "why did my variation change by itself?" admin question at the exact place they'd look.
+
+### Changed
+
+- **Flatten tab "Enable WooCommerce Variations" description de-staled** — it still claimed variation management needs "no declarative configuration in this plugin" (true in alpha.15, wrong since 4c-A). Now describes the split: repeater-synced variations vs. iframe-editor surface, plus the coexistence policy.
+
+### Verification
+
+1. Open mosaic 16's CCT edit page → the "Variations Management" panel shows the amber coexistence notice under the helper text.
+2. Set `meta_box.show_advanced=true` on bridge 3, open product 736 → Advanced Details shows "3 variations on this product are synced…".
+3. Flatten tab → Enable WooCommerce Variations section → new coexistence paragraph present.
 
 ## [0.6.0-alpha.24] — 2026-07-12
 

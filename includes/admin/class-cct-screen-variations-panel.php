@@ -112,6 +112,9 @@ class JEDB_CCT_Screen_Variations_Panel {
 					'modal_close'        => __( 'Close', 'je-data-bridge-cc' ),
 					'modal_saving'       => __( 'Saving variations…', 'je-data-bridge-cc' ),
 					'missing_link'       => __( 'No linked product found. Re-check the bridge\'s relation configuration.', 'je-data-bridge-cc' ),
+					// D-32 coexistence notice (Phase 4c): shown when the
+					// bridge also syncs repeater rows to variations.
+					'managed_notice'     => __( 'Heads up: variations created from this item\'s variation fields are overwritten on every save here (stock changes sync back automatically). Use the editor below for variation images, shipping class, or extra manual variations.', 'je-data-bridge-cc' ),
 				),
 			)
 		);
@@ -289,6 +292,11 @@ class JEDB_CCT_Screen_Variations_Panel {
 			$out[] = array(
 				'bridge_id'                => (int) ( $bridge['id'] ?? 0 ),
 				'title'                    => $title,
+				// D-32 (Phase 4c): when the bridge also runs repeater →
+				// variation sync, the panel shows a coexistence notice —
+				// managed variations edited in the iframe get overwritten
+				// on the next CCT save.
+				'has_managed_mappings'     => ! empty( $config['variation_mappings'] ),
 				'auto_force_variable_type' => ! empty( $wc_var['auto_force_variable_type'] ),
 				'target_post_id'           => $target_post_id,
 				'edit_url'                 => $edit_url,

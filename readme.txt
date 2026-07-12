@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.24
+Stable tag: 0.6.0-alpha.25
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.24) ==
+== Current Capability (v0.6.0-alpha.25) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -95,7 +95,10 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 == Changelog ==
 
 = Unreleased =
-* Phase 4c-C (polish + legacy field retirement) next; then Phase 5.
+* Phase 4c-C remainder (legacy field retirement, delete-policy edge cases) next; then Phase 5.
+
+= 0.6.0-alpha.25 =
+* Phase 4c UI alignment. (1) D-32 coexistence notice on the CCT-screen variations panel when the bridge also runs variation_mappings — editors are told repeater-managed variations get overwritten on save (stock excepted) and the iframe is for images/shipping/manual extras. (2) Product meta box Advanced Details gains a managed-variations count line ("N variations on this product are synced from the linked CCT's variation fields...") scoped to the bridge. (3) Flatten tab's Enable WooCommerce Variations description de-staled (it predated variation_mappings) with the coexistence policy spelled out.
 
 = 0.6.0-alpha.24 =
 * Phase 4c-B — reverse stock sync (WC variation -> CCT repeater row). New woocommerce_variation_set_stock handler in JEDB_Variation_Sync: fires on admin stock edits AND customer purchase decrements; unmanaged variations skipped (D-32); bridge direction contract respected; owning CCT row located by row-UUID probe; surgical serialized-array subfield update via direct SQL (no JE hooks fire = no echo); push-lock cascade suppression when the forward reconcile itself sets stock; sync_log rows with origin wc_variation_stock. Stock quantity is now fully two-way per the pull:true flag on the subfield_map entry.

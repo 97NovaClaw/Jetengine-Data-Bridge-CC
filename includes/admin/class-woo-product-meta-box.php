@@ -709,6 +709,28 @@ class JEDB_Woo_Product_Meta_Box {
 			}
 		}
 
+		// Phase 4c (alpha.25): managed-variations awareness. When this
+		// bridge declares variation_mappings and the product carries
+		// managed variations, surface the count in Advanced Details so
+		// admins understand why variations change "on their own" (they
+		// are reconciled from the linked CCT's repeater rows on every
+		// CCT save — D-29/D-32).
+		$has_variation_mappings  = ! empty( $config['variation_mappings'] );
+		$managed_variation_count = 0;
+		if ( $show_advanced && $has_variation_mappings ) {
+			global $wpdb;
+			// phpcs:disable WordPress.DB.DirectDatabaseQuery
+			$managed_variation_count = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT COUNT(*) FROM {$wpdb->posts} p
+				 INNER JOIN {$wpdb->postmeta} pm ON pm.post_id = p.ID AND pm.meta_key = %s AND pm.meta_value = %s
+				 WHERE p.post_parent = %d AND p.post_type = 'product_variation' AND p.post_status != 'trash'",
+				JEDB_Target_Woo_Variation::META_VARIATION_BRIDGE,
+				(string) (int) $bridge['id'],
+				(int) $post->ID
+			) );
+			// phpcs:enable
+		}
+
 		// Flatten admin tab deep link for "Edit this bridge".
 		$flatten_edit_url = add_query_arg(
 			array(

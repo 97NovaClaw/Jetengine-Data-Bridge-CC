@@ -125,6 +125,15 @@
 			$( '<p class="jedb-cctv-helper"/>' ).text( config.i18n.helper_text )
 		);
 
+		// D-32 coexistence notice: this bridge also reconciles repeater
+		// rows into managed variations, so iframe edits to THOSE
+		// variations get overwritten on the next CCT save.
+		if ( panel.has_managed_mappings ) {
+			$panel.append(
+				$( '<p class="jedb-cctv-managed-notice"/>' ).text( config.i18n.managed_notice )
+			);
+		}
+
 		var $btn = $( '<button type="button" class="button button-primary jedb-cctv-open-btn"/>' )
 			.text( config.i18n.open_button )
 			.attr( 'data-edit-url', panel.edit_url )

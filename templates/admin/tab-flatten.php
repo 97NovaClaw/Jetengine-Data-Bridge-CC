@@ -670,7 +670,11 @@ endif;
 			</summary>
 
 			<p class="description" style="max-width:820px;">
-				<?php esc_html_e( 'When enabled, the JE CCT edit screen for source rows of this bridge gains a panel beneath the save button with an "Open variations editor →" button. Clicking it opens the linked WC product\'s edit page in a focused modal iframe — editors manage variations using WC\'s native admin (attributes, prices, downloads, stock, images, everything), no declarative configuration needed in this plugin. The panel only appears after the CCT row has been linked to a WC product via the relations picker.', 'je-data-bridge-cc' ); ?>
+				<?php esc_html_e( 'When enabled, the JE CCT edit screen for source rows of this bridge gains a panel beneath the save button with an "Open variations editor →" button. Clicking it opens the linked WC product\'s edit page in a focused modal iframe. The panel only appears after the CCT row has been linked to a WC product.', 'je-data-bridge-cc' ); ?>
+			</p>
+			<p class="description" style="max-width:820px;color:#996800;">
+				<strong><?php esc_html_e( 'Coexistence with Variation Mappings:', 'je-data-bridge-cc' ); ?></strong>
+				<?php esc_html_e( 'when this bridge also has Variation Mappings (section below), variations synced from the CCT\'s repeater fields are overwritten on every CCT save — the iframe editor is then the surface for variation images, shipping class, and extra manual variations (which the sync never touches). The panel shows editors a notice to that effect.', 'je-data-bridge-cc' ); ?>
 			</p>
 
 			<table class="form-table">

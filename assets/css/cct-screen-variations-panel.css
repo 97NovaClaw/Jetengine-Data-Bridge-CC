@@ -48,6 +48,16 @@
 	color: #a04848;
 }
 
+.jedb-cct-screen-variations-panel .jedb-cctv-managed-notice {
+	margin: 0 0 10px 0;
+	padding: 7px 10px;
+	background: #fcf9e8;
+	border-left: 3px solid #dba617;
+	border-radius: 2px;
+	color: #646970;
+	font-size: 12px;
+}
+
 .jedb-cct-screen-variations-panel .button {
 	margin-top: 2px;
 }
