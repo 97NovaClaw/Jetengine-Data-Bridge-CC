@@ -119,7 +119,7 @@ All legacy attribute identities (`physical-vs-instructions-pdf`, `physical-or-in
 
 ## PLANNED — Phase 4c repeater → variation mappings (spec: BUILD-PLAN §4.14)
 
-> **Sync not yet implemented.** The CCT repeater fields themselves WERE created on staging 2026-07-12 via MCP (JE schema on `mosaics_data`: `physical_variations` with 12 subfields, `pdf_variations` with 7 subfields — both verified readable by JE's factory and JEDB's CCT adapter). The `pa_variant` WC attribute and everything below the tables (reconciler, `variation_mappings[]` block) ship with Phase 4c-A.
+> **Sync not yet implemented.** The CCT repeater fields WERE created on staging 2026-07-12 via MCP (final schema on `mosaics_data`: `physical_variations` with 15 subfields incl. `photo` + `_jedb_row_id`, `pdf_variations` with 9 subfields). **Legacy data migration EXECUTED 2026-07-12:** all 10 mosaic rows now carry seeded/normalized repeater data (physical row from legacy `price`/`approximate_size` with stock=1; PDF row where `has_instructions_pdf=yes`, incl. the one real file → attachment 407), and `approximate_size` now holds the derived `L″ × W″` display string per §4.14.11 (frontend queries verified working post-migration). Legacy fields still present — retirement is Phase 4c-C. The `pa_variant` WC attribute and everything below (reconciler, `variation_mappings[]` block) ship with Phase 4c-A.
 
 ### `physical_variations` repeater (mosaics_data) → WC variations
 
@@ -136,7 +136,7 @@ Each row = one physical variation. Identity: hidden `_jedb_row_id` UUID ↔ vari
 | `stock_quantity` | ↔ | `stock_quantity` (+ manage_stock=yes) | **two-way** (pull = Phase 4c-B) |
 | `length` / `width` / `height` (inches) + `weight` (lbs) — matches WC store units (in / lbs) | → | same | push |
 | `length`/`width`/`height` of FIRST enabled row | → | CCT `approximate_size` (derived display string, §4.14.11) | push (same pass) |
-| `photo` (media — **pending**, added with migration) | → | `image_id` (variation image swap on storefront) | push |
+| `photo` (media — subfield added 2026-07-12) | → | `image_id` (variation image swap on storefront) | push |
 | `sku` | → | `sku` | push |
 
 ### `pdf_variations` repeater (mosaics_data) → WC variations
