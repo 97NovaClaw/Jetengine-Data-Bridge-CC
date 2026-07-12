@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.23
+Stable tag: 0.6.0-alpha.24
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.22) ==
+== Current Capability (v0.6.0-alpha.24) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -95,7 +95,10 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 == Changelog ==
 
 = Unreleased =
-* Phase 4c-B (stock pull) and 4c-C (polish + legacy field retirement) next; then Phase 5.
+* Phase 4c-C (polish + legacy field retirement) next; then Phase 5.
+
+= 0.6.0-alpha.24 =
+* Phase 4c-B — reverse stock sync (WC variation -> CCT repeater row). New woocommerce_variation_set_stock handler in JEDB_Variation_Sync: fires on admin stock edits AND customer purchase decrements; unmanaged variations skipped (D-32); bridge direction contract respected; owning CCT row located by row-UUID probe; surgical serialized-array subfield update via direct SQL (no JE hooks fire = no echo); push-lock cascade suppression when the forward reconcile itself sets stock; sync_log rows with origin wc_variation_stock. Stock quantity is now fully two-way per the pull:true flag on the subfield_map entry.
 
 = 0.6.0-alpha.23 =
 * Phase 4c-A staging fixes. (1) ROOT-CAUSE FIX for "re-saves do nothing": JEDB_Target_Woo_Variation::exists()/get()/update() compared WC_Product::get_type() (returns 'variation') against the post type ('product_variation') - every update() bailed as "not found" and returned false, so sale-date changes and row-disable never reached WC while creates worked fine. Now uses is_type('variation'). Bug shipped in alpha.13; first real update traffic found it. (2) Single-selector attribute model: pa_variant is THE storefront variation dropdown (PDF rows' variant_label becomes a term too); pa_physical-or-pdf demoted to parent-level classification (is_variation=0 on new entries, existing entries never downgraded so manual setups like Koala keep working). Stale two-attribute combos on alpha.22-created variations self-heal on next save via set_attributes replacement.

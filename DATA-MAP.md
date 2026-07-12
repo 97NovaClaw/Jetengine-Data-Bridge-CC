@@ -133,7 +133,7 @@ Each row = one physical variation. Identity: hidden `_jedb_row_id` UUID ↔ vari
 | `on_sale` (UI gate — reveals the sale row; not mapped directly, reconciler clears sale fields when "no") | → | — | push (gate only) |
 | `sale_price` (visible when on_sale=yes) | → | `sale_price` | push |
 | `sale_start` / `sale_end` (visible when on_sale=yes) | → | `date_on_sale_from` / `date_on_sale_to` | push (date transform) |
-| `stock_quantity` | ↔ | `stock_quantity` (+ manage_stock=yes) | **two-way** (pull = Phase 4c-B) |
+| `stock_quantity` | ↔ | `stock_quantity` (+ manage_stock=yes) | **two-way** ✅ (pull live since alpha.24 — admin edits + purchases via `woocommerce_variation_set_stock`) |
 | `length` / `width` / `height` (inches) + `weight` (lbs) — matches WC store units (in / lbs) | → | same | push |
 | `length`/`width`/`height` of FIRST enabled row | → | CCT `approximate_size` (derived display string, §4.14.11) | push (same pass) |
 | `photo` (media — subfield added 2026-07-12) | → | `image_id` (variation image swap on storefront) | push |

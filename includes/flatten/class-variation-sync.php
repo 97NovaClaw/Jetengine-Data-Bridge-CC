@@ -67,6 +67,14 @@ class JEDB_Variation_Sync {
 		// (§4.14.5 — the field must exist as a real form input to survive
 		// JE saves, but editors should never see or touch it).
 		add_action( 'admin_head', array( $this, 'maybe_hide_row_id_field' ) );
+
+		// Phase 4c-B (§4.14.8): reverse stock sync. WC fires this ONLY
+		// when a variation's stock_quantity actually changed, for BOTH
+		// paths that matter: an admin editing stock on the product page
+		// AND a customer purchase decrementing it (wc_update_product_stock
+		// → data store updated-props). Priority 20 = after WC's own
+		// internal listeners.
+		add_action( 'woocommerce_variation_set_stock', array( $this, 'on_variation_stock_change' ), 20, 1 );
 	}
 
 	/* -----------------------------------------------------------------------
@@ -270,6 +278,182 @@ class JEDB_Variation_Sync {
 		}
 
 		return $summary;
+	}
+
+	/* -----------------------------------------------------------------------
+	 * Phase 4c-B — reverse stock sync (WC variation → CCT repeater row)
+	 * -------------------------------------------------------------------- */
+
+	/**
+	 * A managed variation's stock changed (admin edit OR purchase
+	 * decrement). Write the new quantity back into the owning repeater
+	 * row's stock subfield.
+	 *
+	 * Managed-only by construction: unmanaged variations carry no
+	 * `META_VARIATION_SLUG` meta and return immediately. Scope is limited
+	 * to `subfield_map` entries with `pull: true` whose target is
+	 * `stock_quantity` (4c-B scope — broader pull fields are a 4c-C
+	 * question).
+	 *
+	 * Cascade safety: when OUR OWN reconcile sets stock during a forward
+	 * push, this hook fires inside the push lock — the `is_locked('push')`
+	 * check suppresses the echo. The CCT write itself is direct SQL, so no
+	 * JE hooks fire (L-022) and no forward push can retrigger.
+	 *
+	 * @param WC_Product $variation The variation object (stock already updated).
+	 */
+	public function on_variation_stock_change( $variation ) {
+
+		if ( ! is_object( $variation ) || ! method_exists( $variation, 'get_id' ) ) {
+			return;
+		}
+
+		$variation_id = (int) $variation->get_id();
+		$row_id       = (string) get_post_meta( $variation_id, JEDB_Target_Woo_Variation::META_VARIATION_SLUG, true );
+		$bridge_id    = (int) get_post_meta( $variation_id, JEDB_Target_Woo_Variation::META_VARIATION_BRIDGE, true );
+
+		if ( '' === $row_id || ! $bridge_id ) {
+			return; // unmanaged — never touched (D-32)
+		}
+
+		$bridge = JEDB_Flatten_Config_Manager::instance()->get_by_id( $bridge_id );
+		if ( ! $bridge || empty( $bridge['enabled'] ) ) {
+			return;
+		}
+
+		// Respect the bridge's direction contract: stock pull is a PULL.
+		$direction = isset( $bridge['direction'] ) ? (string) $bridge['direction'] : 'push';
+		if ( ! in_array( $direction, array( 'pull', 'bidirectional' ), true ) ) {
+			return;
+		}
+
+		$config        = isset( $bridge['config'] ) && is_array( $bridge['config'] ) ? $bridge['config'] : array();
+		$source_target = isset( $bridge['source_target'] ) ? (string) $bridge['source_target'] : '';
+		$target_target = isset( $bridge['target_target'] ) ? (string) $bridge['target_target'] : '';
+		$cct_slug      = 0 === strpos( $source_target, 'cct::' ) ? substr( $source_target, 5 ) : '';
+		if ( '' === $cct_slug ) {
+			return;
+		}
+
+		$parent_id = (int) $variation->get_parent_id();
+		$new_stock = $variation->get_stock_quantity();
+		$new_stock = null === $new_stock ? '' : (string) (int) $new_stock; // JE string convention
+
+		// Locate the owning CCT row + repeater column by the row UUID
+		// (globally unique — a LIKE probe per mapped repeater is exact).
+		global $wpdb;
+		$table    = $wpdb->prefix . 'jet_cct_' . sanitize_key( $cct_slug );
+		$mappings = isset( $config['variation_mappings'] ) && is_array( $config['variation_mappings'] ) ? $config['variation_mappings'] : array();
+
+		foreach ( $mappings as $mapping ) {
+
+			if ( ! is_array( $mapping ) || empty( $mapping['enabled'] ) || empty( $mapping['source_repeater'] ) ) {
+				continue;
+			}
+
+			// Which repeater subfield feeds stock_quantity, and is it pull-enabled?
+			$stock_subfield = '';
+			foreach ( (array) $mapping['subfield_map'] as $sm ) {
+				if ( is_array( $sm ) && 'stock_quantity' === ( $sm['target'] ?? '' ) && ! empty( $sm['pull'] ) ) {
+					$stock_subfield = (string) $sm['subfield'];
+					break;
+				}
+			}
+			if ( '' === $stock_subfield ) {
+				continue;
+			}
+
+			$column = preg_replace( '/[^a-z0-9_]/i', '', (string) $mapping['source_repeater'] );
+
+			// phpcs:disable WordPress.DB.PreparedSQL,WordPress.DB.DirectDatabaseQuery
+			$source_row = $wpdb->get_row( $wpdb->prepare(
+				"SELECT _ID, `{$column}` AS repeater FROM `{$table}` WHERE `{$column}` LIKE %s LIMIT 1",
+				'%' . $wpdb->esc_like( $row_id ) . '%'
+			), ARRAY_A );
+			// phpcs:enable
+
+			if ( ! $source_row ) {
+				continue;
+			}
+
+			$source_id = (int) $source_row['_ID'];
+
+			// Cascade check: our own reconcile (forward push) sets stock
+			// while holding the push lock — suppress the echo.
+			$guard = JEDB_Sync_Guard::instance();
+			if ( $guard->is_locked( 'push', $source_target, $source_id, $target_target, $parent_id ) ) {
+				if ( function_exists( 'jedb_log' ) ) {
+					jedb_log( '[Variation_Sync] stock pull suppressed — own push in flight', 'debug', array(
+						'variation_id' => $variation_id, 'row_id' => $row_id,
+					) );
+				}
+				return;
+			}
+
+			$rows = maybe_unserialize( (string) $source_row['repeater'] );
+			if ( ! is_array( $rows ) ) {
+				return;
+			}
+
+			$dirty = false;
+			$old   = null;
+			foreach ( $rows as $key => $row ) {
+				if ( is_array( $row ) && (string) ( $row['_jedb_row_id'] ?? '' ) === $row_id ) {
+					$old = (string) ( $row[ $stock_subfield ] ?? '' );
+					if ( $old !== $new_stock ) {
+						$rows[ $key ][ $stock_subfield ] = $new_stock;
+						$dirty = true;
+					}
+					break;
+				}
+			}
+
+			$status = JEDB_Sync_Log::STATUS_NOOP;
+			if ( $dirty ) {
+				$acquired = $guard->acquire( 'pull', $source_target, $source_id, $target_target, $parent_id, 'wc_variation_stock' );
+				try {
+					$written = (bool) $wpdb->update( $table, array( $column => serialize( $rows ) ), array( '_ID' => $source_id ), array( '%s' ), array( '%d' ) ); // phpcs:ignore WordPress.DB.DirectDatabaseQuery
+					$status  = $written ? JEDB_Sync_Log::STATUS_SUCCESS : JEDB_Sync_Log::STATUS_ERRORED;
+				} finally {
+					if ( $acquired ) {
+						$guard->release( 'pull', $source_target, $source_id, $target_target, $parent_id );
+					}
+				}
+			}
+
+			JEDB_Sync_Log::instance()->record( array(
+				'direction'     => 'pull',
+				'source_target' => $source_target,
+				'source_id'     => $source_id,
+				'target_target' => $target_target,
+				'target_id'     => $parent_id,
+				'origin'        => 'wc_variation_stock',
+				'status'        => $status,
+				'message'       => $dirty
+					? sprintf( 'variation #%d stock %s → %s written to %s row', $variation_id, $old, $new_stock, $column )
+					: sprintf( 'variation #%d stock unchanged in repeater (%s)', $variation_id, $new_stock ),
+				'context'       => array(
+					'bridge_id'      => $bridge_id,
+					'variation_id'   => $variation_id,
+					'row_id'         => $row_id,
+					'repeater'       => $column,
+					'stock_subfield' => $stock_subfield,
+					'old'            => $old,
+					'new'            => $new_stock,
+				),
+			) );
+
+			if ( function_exists( 'jedb_log' ) ) {
+				jedb_log( '[Variation_Sync] stock pull ' . $status, 'info', array(
+					'variation_id' => $variation_id,
+					'row_id'       => $row_id,
+					'old'          => $old,
+					'new'          => $new_stock,
+				) );
+			}
+
+			return; // row found + handled — done
+		}
 	}
 
 	/* -----------------------------------------------------------------------

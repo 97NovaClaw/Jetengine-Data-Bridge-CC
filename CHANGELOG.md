@@ -4,7 +4,29 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
-Phase 4c-B (stock pull) and 4c-C (polish + legacy field retirement per §4.14.14) are next. Then Phase 5.
+Phase 4c-C (polish + legacy field retirement per §4.14.14) next. Then Phase 5.
+
+## [0.6.0-alpha.24] — 2026-07-12
+
+**Phase 4c-B shipped — reverse stock sync. Variation stock changes in WooCommerce (admin edits AND customer purchases) now flow back into the owning CCT repeater row. Stock is fully two-way.**
+
+### Added
+
+- **`JEDB_Variation_Sync::on_variation_stock_change()`** hooked on `woocommerce_variation_set_stock` (priority 20). WC fires this hook only when a variation's `stock_quantity` actually changed, and for BOTH paths that matter: an admin editing stock on the product page, and a customer purchase decrementing it (`wc_maybe_reduce_stock_levels` → `wc_update_product_stock` → data-store updated-props). One hook covers both reported scenarios.
+- **Flow:** variation → `META_VARIATION_SLUG` (row UUID) + `META_VARIATION_BRIDGE` meta → unmanaged variations return immediately (D-32) → bridge loaded + direction contract respected (pull requires `pull`/`bidirectional`) → owning CCT row located by UUID probe against the mapped repeater columns (UUIDs are globally unique, so a LIKE probe is exact) → the `subfield_map` entry with `target=stock_quantity` AND `pull:true` names the subfield → surgical in-place update of that row's subfield → re-serialize → direct SQL write (L-030; no JE hooks fire per L-022, so no forward-push echo).
+- **Cascade safety:** when the forward reconcile itself sets stock, `woocommerce_variation_set_stock` fires inside the push lock — the handler's `is_locked('push')` check suppresses the echo. The pull write itself is wrapped in a `pull` guard acquire/release.
+- **Observability:** every stock pull records a sync_log row (`direction=pull`, `origin=wc_variation_stock`, success/noop/errored, old→new in context) + `jedb_log` info line.
+
+### Scope note
+
+4c-B is deliberately stock-only (per §4.14.8): the `pull` flag exists on every `subfield_map` entry, but only `stock_quantity` has a WC-side change hook wired. Broader pull fields (sale price / dims edited WC-side) are a 4c-C question — if editors author exclusively CCT-side, they may never be needed.
+
+### Verification
+
+1. **Admin edit:** change a managed variation's stock on the WC product page → save → the mosaic's repeater row shows the new Stock Quantity (reload the CCT edit page).
+2. **Purchase path:** place a test order for a managed variation (stock 1 → 0) → complete/processing → repeater row shows 0.
+3. **Echo test:** save the mosaic CCT (push sets stock) → sync_log shows the forward push but NO `wc_variation_stock` pull rows (suppressed by the push-lock check) or at most a `noop`.
+4. **Unmanaged safety:** change stock on one of Koala's manual variations → no CCT write, no sync_log rows.
 
 ## [0.6.0-alpha.23] — 2026-07-12
 
