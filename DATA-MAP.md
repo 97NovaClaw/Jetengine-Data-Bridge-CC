@@ -119,7 +119,7 @@ All legacy attribute identities (`physical-vs-instructions-pdf`, `physical-or-in
 
 ## PLANNED — Phase 4c repeater → variation mappings (spec: BUILD-PLAN §4.14)
 
-> Not yet implemented. Documented here so the target shape is visible next to the current state.
+> **Sync not yet implemented.** The CCT repeater fields themselves WERE created on staging 2026-07-12 via MCP (JE schema on `mosaics_data`: `physical_variations` with 12 subfields, `pdf_variations` with 7 subfields — both verified readable by JE's factory and JEDB's CCT adapter). The `pa_variant` WC attribute and everything below the tables (reconciler, `variation_mappings[]` block) ship with Phase 4c-A.
 
 ### `physical_variations` repeater (mosaics_data) → WC variations
 
