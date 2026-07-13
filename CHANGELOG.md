@@ -6,6 +6,8 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 Phase 4c is COMPLETE. Next per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
 
+**[Site config, 2026-07-12 — Snippet 9 rev 3, no plugin change]** Decision-D refinement per staging review: the parent product's price-RANGE line (under the product title, Elementor Pro price widget → `get_price_html()`) now follows `display_price_publicly`, same rule as the archive card — `no` → "Quote on request". The parent gate also outranks per-variation displays (`display_price_publicly=no` hides ALL price output for that product; `hide_price`/stock rules apply within `yes` products). New cached helper `bbhq_mosaic_price_public()`. Verified live across all 11 linked mosaics: toggle=no products render "Quote on request", toggle=yes render their real range. Note: several test mosaics show an EMPTY range line because none of their repeater rows carry a Regular Price (pre-retirement parent price was 0, so backfill skipped them) — filling row prices fixes those, it's data not code.
+
 ## [0.6.0-alpha.27] — 2026-07-12
 
 **"Physical or PDF" dropdown resurfacing fixed — engine gains a safe-downgrade for classification attributes + full staging conversion of all legacy mosaic products.**
