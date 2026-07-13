@@ -1400,21 +1400,53 @@ Retained as the **overarching storefront price-visibility toggle**, per user dec
 - **Photo flow:** parent featured image = CCT `main_photo` (already bridge-mapped to `image_id` on the product); gallery = CCT `gallery` (already mapped to `gallery_image_ids`); per-variation = NEW `photo` media subfield on `physical_variations` → variation `image_id`. PDF variations intentionally get NO photo subfield — they inherit the parent image (a PDF has no distinct physical appearance).
 - The `photo` subfield is **pending** — it gets added to the repeater schema together with the migration run (batching schema changes so editors see one change, not dribbles).
 
-#### 4.14.14 Legacy field retirement + migration plan (Phase 4c-C)
+#### 4.14.14 Legacy field retirement — FULL GAME PLAN (Phase 4c-C, planned 2026-07-12 evening session)
 
-Frontend audit (2026-07-12) — full consumer table lives in DATA-MAP.md. Verdicts:
+> **Status: PLAN — awaiting user sign-off on decisions A–D below. No changes executed.**
+> Supersedes the earlier draft of this section. The deep frontend re-audit (including snippet PHP, which the first audit missed) corrected one verdict: `has_instructions_pdf` is NOT zero-consumer — Snippet 9 renders it in the product page's Additional Information tab.
 
-| Field | Verdict | Why |
+##### Complete consumer map (re-audited, snippet-inclusive)
+
+| Field | Consumers found | Retirement plan |
 |---|---|---|
-| `has_instructions_pdf` | **DROP** after migration | zero frontend refs; superseded by `pdf_variations` row presence |
-| `instructions_pdf` | **DROP** after migration | zero frontend refs; 1 row carries a file → migrate into `pdf_variations.file` |
-| `is_there_only_1_product_size` | **DROP** after migration | admin-only conditional gate; multi-size is what the repeater models |
-| `approximate_size` | **KEEP — becomes derived** (§4.14.11) | load-bearing in queries 23/28 + listing 600 |
-| `price` | **KEEP** | 39 Elementor bindings + queries + repeater fallback price |
-| `display_price_publicly` | **KEEP** | storefront toggle consumed by Snippet 6 (§4.14.12) |
-| `stud_count` | **KEEP** | design characteristic, not a variant property; used in queries 23/28 |
+| `is_there_only_1_product_size` | none (intra-CCT conditional gates only) | **DROP.** Pre-step: strip `conditional_logic` from the dependent field definitions. |
+| `has_instructions_pdf` | **Snippet 9** Additional-Info map (`yesno → "PDF Instructions: Available"`) | **DROP** after Snippet 9 derives the same line from `pdf_variations` (any enabled row with a file). |
+| `instructions_pdf` | none (file already migrated to `pdf_variations.file`) | **DROP.** |
+| `approximate_size` | Queries 23/28 (SELECT), Listing 600, **Snippet 9** Additional-Info | **KEEP as hidden derived cache** (Decision A). Column stays machine-derived per §4.14.11; field hidden from editors via the `_jedb_row_id` hide mechanism. Rationale: three consumers read the COLUMN and none can parse a serialized repeater — a hard drop means rewriting queries + rebinding the listing + re-deriving in the snippet, all to produce identical output. |
+| `stud_count` | Queries 23/28 (SELECT), **Snippet 9** Additional-Info | **MOVE editing into the repeater + KEEP column as hidden derived cache** (Decision B). New `stud_count` subfield on `physical_variations` (NO `subfield_map` entry — per user: no WC sync). Engine derives the parent column from the first enabled row (generalizing §4.14.11 — see "engine work" below). Consumers keep reading the column unchanged. |
+| `price` | Queries 23/28 (SELECT — **output unused by any renderer**), repeater `price_fallback_field` | **DROP for real.** Card + product page price flow entirely from the WC product (Snippet 6 reads product `_price` / `get_price_html()`). Pre-steps: backfill per-row `regular_price` (Decision C), remove `price_fallback_field` from bridge config + JS preset, slim queries 23/28 SELECT lists. |
+| `display_price_publicly` | **Snippet 6** (card gate) | **KEEP + EXTEND** (Decision D). Currently gates only the archive card. Variations-era gap: the single product page shows the variable-price range + per-variation prices with NO gate (only the zero-price "Request a Commission" convention from Snippet 9). Plan: a new authoritative price-visibility gate snippet filtering `woocommerce_get_price_html` (parent + variations) AND `woocommerce_available_variation[price_html]` → "Quote on request" whenever the linked mosaic row says `no`. Card keeps working via Snippet 6 (later simplifiable to delegate to the same filter). |
 
-**Migration (user-triggered after doc review, before any drops):** for each of the 10 mosaic rows — seed a `physical_variations` row from `price` + `approximate_size` (parse `L x W` out of the legacy text where possible, else leave dims empty and keep the legacy string until the editor fills dims) + `stock_quantity=1`; where `has_instructions_pdf=yes`, seed a `pdf_variations` row (the 1 row with a real file gets it as `photo`→no, as `file`); recompute derived `approximate_size` from the new rows. Drops happen only in 4c-C after staging verification, and REQUIRE updating queries 23/28 in the same pass if any SELECTed column is dropped (none currently on the drop list are SELECTed — verified).
+##### Engine work required (plugin, ships as an alpha before any data changes)
+
+- **Generalize `derived_size_field` → `derived_caches[]`** on the variation-mapping schema:
+  ```json
+  "derived_caches": [
+    { "column": "approximate_size", "type": "dims_string" },
+    { "column": "stud_count",       "type": "subfield_copy", "subfield": "stud_count" }
+  ]
+  ```
+  `dims_string` = the §4.14.11 L″ × W″ × H″ format; `subfield_copy` = verbatim copy from the first enabled row. Back-compat: `derived_size_field: X` reads as `derived_caches: [{column: X, type: dims_string}]` via `merge_with_defaults()`.
+- **Generalize the CCT-admin field hider**: the `_jedb_row_id` MutationObserver mechanism gains a configurable list — every `derived_caches[].column` with `hide_in_admin: true` (default true) is hidden on that CCT's edit screen, with the field description noting it's auto-computed.
+
+##### Execution sequence (each step verifiable before the next)
+
+0. **Snapshot** — export the three doomed columns' data for all rows to a JSON file in uploads (rollback insurance).
+1. **Plugin release**: `derived_caches[]` + generalized hider (+ JS preset updates removing `price_fallback_field`, adding `stud_count` subfield awareness).
+2. **Schema (MCP)**: add `stud_count` subfield to `physical_variations` (number, 25% width on the dims row → dims shrink to fit, or its own row — cosmetic call at execution).
+3. **Data (MCP)**: per mosaic — copy parent `stud_count` into every physical row; backfill `regular_price` per Decision C; recompute both derived caches.
+4. **Site snippets (MCP)**: update Snippet 9 (`has_instructions_pdf` line derived from `pdf_variations`; other reads unchanged — they hit cache columns); add the price-visibility gate snippet per Decision D.
+5. **Queries (MCP)**: remove `cct.price` from queries 23 + 28 SELECT lists (keep `approximate_size` + `stud_count` — they're cache columns now). Queries 22/24 are CCT-type queries (no column enumeration) — unaffected automatically.
+6. **Bridge config (MCP)**: drop `price_fallback_field`, add `derived_caches`.
+7. **Schema drop (MCP, the destructive step)**: delete `is_there_only_1_product_size`, `has_instructions_pdf`, `instructions_pdf` via the JE Data API (columns + data destroyed — snapshot from step 0 is the undo).
+8. **Verify**: home page cards, archive cards (price gate on a display=no mosaic), product page (price gate, Additional Info tab lines, variation selector), CCT admin (hidden cache fields, no conditional-logic orphans), sync round-trip on mosaic 16. Refresh DATA-MAP.
+
+##### Decisions needing sign-off
+
+- **(A)** `approximate_size`: keep as hidden derived cache *(recommended)* vs hard drop (adds query rewrite + listing rebind + snippet re-derivation for identical output).
+- **(B)** `stud_count`: same cache pattern *(recommended)*.
+- **(C)** `price` backfill rule: rows with empty `regular_price` inherit the parent price at migration time *(recommended — only mosaics 11 & 15 have a real price)*, vs leave empty (those rows' variations show "Request a Commission").
+- **(D)** Price-gate wording: card says "Quote on request" (Snippet 6), zero-price variations say "Request a Commission" (Snippet 9). Unify on one phrase for the new gate, or keep both intentionally?
 
 ---
 

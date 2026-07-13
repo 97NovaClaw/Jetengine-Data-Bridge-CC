@@ -187,13 +187,14 @@ flowchart TD
 | CCT field | Consumers | Notes |
 |---|---|---|
 | `mosaic_name` | Queries 23/28 (SELECT), listings 492/497/600 | + bridge-synced to product title |
-| `approximate_size` | Queries 23/28 (**SELECT by column name**), listing 600 (home card) | becomes DERIVED from primary variation L/W/H — BUILD-PLAN §4.14.11. Format: `18″ × 18″ × 2″`, empty dims collapse |
-| `price` | Queries 23/28 (SELECT), **39 Elementor bindings** (archive listing 492, archive page, single product) | KEEP — also the repeater fallback price |
-| `display_price_publicly` | **Code Snippet 6** `[bbhq_linked_product_price]` — bound on listing 492's price heading via shortcode dynamic tag. `"no"` → renders "Quote on request" instead of price | KEEP — overarching storefront price toggle. NOT in any Elementor binding (that's why an `_elementor_data` search misses it) |
-| `stud_count` | Queries 23/28 (SELECT) | KEEP — design characteristic |
+| `approximate_size` | Queries 23/28 (**SELECT by column name**), listing 600 (home card), **Snippet 9** (Additional Info tab: "Approximate Size") | DERIVED cache since alpha.22 (§4.14.11). 4c-C plan: keep column, hide field from editors (§4.14.14 Decision A) |
+| `price` | Queries 23/28 (SELECT — output unused by renderers), repeater `price_fallback_field` | **DROP planned** (§4.14.14) — card/product price flows from the WC product via Snippet 6, not this column. Pre-steps: per-row regular_price backfill + query SELECT slim-down + fallback removal |
+| `display_price_publicly` | **Code Snippet 6** `[bbhq_linked_product_price]` — card gate ("Quote on request") | KEEP + EXTEND (§4.14.14 Decision D): variations-era gap — single product page price range/per-variation prices are ungated; plan adds a `woocommerce_get_price_html` + `woocommerce_available_variation` gate snippet |
+| `stud_count` | Queries 23/28 (SELECT), **Snippet 9** (Additional Info tab: "Stud Count") | 4c-C plan: editing MOVES into a new repeater subfield (no WC sync); column stays as hidden derived cache (§4.14.14 Decision B) |
 | `main_photo` | Listings 492/497/527/600, bridge → product `image_id` | parent/primary product photo |
 | `gallery` | Query 23/28 (SELECT), bridge → product `gallery_image_ids` | product gallery |
-| `has_instructions_pdf`, `instructions_pdf`, `is_there_only_1_product_size` | **zero frontend consumers** | DROP list (Phase 4c-C, after migration) |
+| `has_instructions_pdf` | **Snippet 9** (Additional Info tab: "PDF Instructions: Available" when yes) — ⚠️ the first audit missed this (it's PHP, not Elementor data) | DROP after Snippet 9 derives the line from `pdf_variations` instead (§4.14.14) |
+| `instructions_pdf`, `is_there_only_1_product_size` | zero frontend consumers | DROP list (§4.14.14 sequence step 7) |
 
 ### Single product page (variation UX)
 
