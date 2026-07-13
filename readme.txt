@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.25
+Stable tag: 0.6.0-alpha.26
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.25) ==
+== Current Capability (v0.6.0-alpha.26) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -95,7 +95,10 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 == Changelog ==
 
 = Unreleased =
-* Phase 4c-C remainder (legacy field retirement, delete-policy edge cases) next; then Phase 5.
+* Phase 4c COMPLETE. Next per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+= 0.6.0-alpha.26 =
+* Phase 4c-C executed — legacy field retirement (user-locked decisions A-D). Six columns dropped from mosaics_data (price, approximate_size, stud_count, has_instructions_pdf, instructions_pdf, is_there_only_1_product_size); repeaters gained stud_count (not WC-synced) + hide_price selects; per-row regular_price backfilled from parent price pre-drop. Frontend reworked via site snippets: NEW Snippet 18 helpers ([bbhq_mosaic_size], [bbhq_mosaic_studs], bbhq_variation_cct_row), Snippet 9 Decision-D price display (hide_price=yes -> "Quote on request"; stock<=0 -> "Request a Commission"; price value no longer drives display) + Additional-Info tab derives from repeaters, listing 600 rebound, queries 23/28 slimmed, bridge 3 config cleared of price_fallback/derived_size. display_price_publicly kept as card-only gate. Plugin change: preset alignment only. Full record in BUILD-PLAN 4.14.14 + CHANGELOG.
 
 = 0.6.0-alpha.25 =
 * Phase 4c UI alignment. (1) D-32 coexistence notice on the CCT-screen variations panel when the bridge also runs variation_mappings — editors are told repeater-managed variations get overwritten on save (stock excepted) and the iframe is for images/shipping/manual extras. (2) Product meta box Advanced Details gains a managed-variations count line ("N variations on this product are synced from the linked CCT's variation fields...") scoped to the bridge. (3) Flatten tab's Enable WooCommerce Variations description de-staled (it predated variation_mappings) with the coexistence policy spelled out.

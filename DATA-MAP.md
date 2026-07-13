@@ -182,6 +182,8 @@ flowchart TD
     WC --> S6
 ```
 
+> **⚠️ 2026-07-12 evening — Phase 4c-C field retirement EXECUTED.** Six columns DROPPED from `mosaics_data`: `is_there_only_1_product_size`, `has_instructions_pdf`, `instructions_pdf`, `approximate_size`, `stud_count`, `price` (snapshot: `uploads/jedb-4cc-retirement-snapshot-20260713-002101.json`). The repeaters gained `stud_count` + `hide_price` (physical) and `hide_price` (pdf). Frontend now derives size/studs/PDF-availability from the repeaters via **Snippet 18** (`[bbhq_mosaic_size]`, `[bbhq_mosaic_studs]`) + reworked **Snippet 9**; queries 23/28 SELECT lists were slimmed; listing 600 rebound. **Price display (Decision D):** per-variation `hide_price=yes` → "Quote on request" · else stock ≤ 0 → "Request a Commission" · else price. `display_price_publicly` gates the CARD only. Rows below that reference dropped columns are historical.
+
 ### Field → consumer table
 
 | CCT field | Consumers | Notes |

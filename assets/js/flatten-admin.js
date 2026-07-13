@@ -610,13 +610,18 @@
 			{ subfield: 'photo',          target: 'image_id' },
 			{ subfield: 'sku',            target: 'sku' }
 		],
-		price_fallback_field: 'price',
+		// price_fallback_field + derived_size_field retired on BBHQ in the
+		// 4c-C field retirement (the parent price / approximate_size CCT
+		// columns were dropped — per-row regular_price is authoritative and
+		// display strings derive from the repeater via site snippets). Both
+		// remain supported engine features for other configurations.
+		price_fallback_field: '',
 		downloads_subfield: '',
 		variation_defaults: { manage_stock: 'yes', virtual: 'no', downloadable: 'no' },
 		enabled_subfield: 'enabled',
 		on_sale_subfield: 'on_sale',
 		delete_policy: 'trash',
-		derived_size_field: 'approximate_size',
+		derived_size_field: '',
 		enabled: true
 	};
 

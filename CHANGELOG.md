@@ -4,7 +4,37 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 ## [Unreleased]
 
-Phase 4c-C remainder (legacy field retirement per §4.14.14, delete-policy edge cases) next. Then Phase 5.
+Phase 4c is COMPLETE. Next per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+## [0.6.0-alpha.26] — 2026-07-12
+
+**Phase 4c-C executed — legacy field retirement (decisions A–D locked by user). Six columns dropped from `mosaics_data`; the repeaters are now the single source of truth for variant data. Plugin change is preset-alignment only; the heavy lifting was site config/data via MCP (documented in BUILD-PLAN §4.14.14 + DATA-MAP).**
+
+### Plugin changes (this repo)
+
+- `flatten-admin.js` Physical preset: `price_fallback_field` + `derived_size_field` now empty (their backing CCT columns were dropped on BBHQ). Both remain supported engine features for other configurations.
+
+### Site execution record (staging, via MCP — not plugin code)
+
+1. **Snapshot** of the six doomed columns → `uploads/jedb-4cc-retirement-snapshot-20260713-002101.json`.
+2. **Repeater schema**: `physical_variations` + `stud_count` (number, NOT WC-synced per user decision) + `hide_price` (yes/no select); `pdf_variations` + `hide_price`.
+3. **Data migration**: parent `stud_count` copied into every physical row (all 9 legacy mosaics); per-row `regular_price` backfilled from parent `price` where empty and parent price > 0 (mosaics 11 & 15 → $1500); `hide_price` defaulted `no` everywhere.
+4. **NEW Snippet 18** "Mosaic variant helpers": `[bbhq_mosaic_size]` + `[bbhq_mosaic_studs]` (first-enabled-row derivation, listing-loop aware, per-request cached) + `bbhq_variation_cct_row()` (variation → repeater row via `_jedb_variation_slug` UUID). Priority 5 so helpers precede Snippet 9.
+5. **Snippet 9 reworked**: (a) Decision-D price display — `hide_price=yes` → "Quote on request", else stock ≤ 0/outofstock → "Request a Commission", else price; applied via `woocommerce_get_price_html` (variations) AND `woocommerce_available_variation.price_html` (the JS-driven display after selecting a variation). The old zero-price convention is retired — price value no longer drives display. (b) Additional-Info tab now derives Approximate Size / Stud Count / "PDF Instructions: Available" from the repeaters. Sets behavior unchanged.
+6. **Listing 600** (home card): size element rebound from the dead `jet-object-property: approximate_size` dynamic tag to the `[bbhq_mosaic_size]` shortcode tag; Elementor CSS cache cleared.
+7. **Queries 23 + 28**: `cct.approximate_size`, `cct.stud_count`, `cct.price` removed from SELECT lists (verified error-free post-drop).
+8. **Bridge 3 config**: `price_fallback_field` + `derived_size_field` cleared.
+9. **THE DROP** (JE Data API, `before_item_update` → `update_item_in_db` → `after_item_update` so column removal ran through JE's schema differ): `is_there_only_1_product_size`, `has_instructions_pdf`, `instructions_pdf`, `approximate_size`, `stud_count`, `price`. Verified: columns gone, repeater data intact (17-key physical rows), queries run clean.
+
+`display_price_publicly` KEPT — card-only gate via Snippet 6, per user decision D.
+
+### Verification (user)
+
+1. Home page + archive cards render size strings (now via `[bbhq_mosaic_size]`).
+2. Product page Additional Information tab: Theme / Approximate Size / Stud Count / PDF Instructions rows present.
+3. Variation price display: set `hide_price=yes` on a row + save → storefront shows "Quote on request" for that variation; set a variation's stock to 0 → "Request a Commission".
+4. Card gate: `display_price_publicly=no` mosaic still shows "Quote on request" on the archive card.
+5. CCT edit screen: the six legacy fields are gone; repeater rows show Stud Count + Hide Price.
 
 ## [0.6.0-alpha.25] — 2026-07-12
 

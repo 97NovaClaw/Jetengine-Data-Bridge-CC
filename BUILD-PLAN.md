@@ -1400,9 +1400,13 @@ Retained as the **overarching storefront price-visibility toggle**, per user dec
 - **Photo flow:** parent featured image = CCT `main_photo` (already bridge-mapped to `image_id` on the product); gallery = CCT `gallery` (already mapped to `gallery_image_ids`); per-variation = NEW `photo` media subfield on `physical_variations` → variation `image_id`. PDF variations intentionally get NO photo subfield — they inherit the parent image (a PDF has no distinct physical appearance).
 - The `photo` subfield is **pending** — it gets added to the repeater schema together with the migration run (batching schema changes so editors see one change, not dribbles).
 
-#### 4.14.14 Legacy field retirement — FULL GAME PLAN (Phase 4c-C, planned 2026-07-12 evening session)
+#### 4.14.14 Legacy field retirement — EXECUTED 2026-07-12 (decisions locked same evening)
 
-> **Status: PLAN — awaiting user sign-off on decisions A–D below. No changes executed.**
+> **Status: ✅ EXECUTED.** Locked decisions: **(A)** HARD DROP `approximate_size` — repeater is the single source; frontend re-derives (user overrode the cache recommendation). **(B)** `stud_count` moved into the repeater (new subfield, NO WC sync) + hard drop. Both surface in Additional Information via the reworked Snippet 9. **(C)** per-row `regular_price` backfilled from parent price before the drop (mosaics 11 & 15, $1500 each). **(D)** three-tier price display: per-variation `hide_price=yes` (new repeater select on both repeaters) → "Quote on request"; else stock ≤ 0 / out-of-stock → "Request a Commission" (price value NO LONGER matters — the old zero-price convention is retired); else normal price. Parent `display_price_publicly` gates the CARD ONLY (Snippet 6, unchanged).
+>
+> **What was executed** (snapshot first: `uploads/jedb-4cc-retirement-snapshot-20260713-002101.json`): repeater schema +`stud_count`/`hide_price` (physical) + `hide_price` (pdf) · data migration (stud counts + price backfill into rows) · NEW Snippet 18 "Mosaic variant helpers" (`[bbhq_mosaic_size]`, `[bbhq_mosaic_studs]`, `bbhq_variation_cct_row()`, priority 5) · Snippet 9 reworked (Decision-D price filters incl. `woocommerce_available_variation`, Additional-Info derives from repeaters) · Listing 600 size element rebound from the dead `jet-object-property` tag to `[bbhq_mosaic_size]` · Queries 23/28 SELECT lists slimmed · Bridge 3 config cleared of `price_fallback_field`/`derived_size_field` · **6 fields dropped via JE Data API**: `is_there_only_1_product_size`, `has_instructions_pdf`, `instructions_pdf`, `approximate_size`, `stud_count`, `price`. Verified: columns gone, queries error-free, repeater data intact.
+>
+> The original plan (for reference — consumer map remains accurate):
 > Supersedes the earlier draft of this section. The deep frontend re-audit (including snippet PHP, which the first audit missed) corrected one verdict: `has_instructions_pdf` is NOT zero-consumer — Snippet 9 renders it in the product page's Additional Information tab.
 
 ##### Complete consumer map (re-audited, snippet-inclusive)
