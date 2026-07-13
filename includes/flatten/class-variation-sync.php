@@ -755,9 +755,20 @@ class JEDB_Variation_Sync {
 				$meta_dirty = true;
 			} elseif ( $want_variation && empty( $attr_meta[ $tax ]['is_variation'] ) ) {
 				// Variant selector must be variation-enabled — upgrade.
-				// (Never DOWNGRADE an existing entry — see docblock.)
 				$attr_meta[ $tax ]['is_variation'] = 1;
 				$meta_dirty = true;
+			} elseif ( ! $want_variation && ! empty( $attr_meta[ $tax ]['is_variation'] ) ) {
+				// alpha.27 SAFE-DOWNGRADE: an attribute_terms (classification)
+				// taxonomy is flagged is_variation=1 on the parent — legacy
+				// state from before the single-selector model (alpha.23) or
+				// a WC-admin save that re-promoted it. Downgrading is only
+				// safe when NO unmanaged variation still keys on it (D-32:
+				// manual setups like pre-repeater Koala must keep working).
+				if ( ! $this->unmanaged_variations_use_attribute( $product_id, $tax ) ) {
+					$attr_meta[ $tax ]['is_variation'] = 0;
+					$meta_dirty = true;
+					$summary['per_row'][] = "parent attribute {$tax} demoted to is_variation=0 (classification-only, no unmanaged users)";
+				}
 			}
 		}
 
@@ -765,6 +776,33 @@ class JEDB_Variation_Sync {
 			update_post_meta( $product_id, '_product_attributes', $attr_meta );
 			$summary['per_row'][] = 'parent _product_attributes updated';
 		}
+	}
+
+	/**
+	 * Does any UNMANAGED (non-bridge) variation of this product carry a
+	 * value for the given attribute taxonomy? Used by the alpha.27
+	 * safe-downgrade check in maintain_parent_attributes().
+	 *
+	 * @return bool
+	 */
+	private function unmanaged_variations_use_attribute( $product_id, $tax ) {
+
+		global $wpdb;
+
+		// phpcs:disable WordPress.DB.PreparedSQL,WordPress.DB.DirectDatabaseQuery
+		$count = (int) $wpdb->get_var( $wpdb->prepare(
+			"SELECT COUNT(*) FROM {$wpdb->posts} p
+			 INNER JOIN {$wpdb->postmeta} attr ON attr.post_id = p.ID AND attr.meta_key = %s AND attr.meta_value != ''
+			 LEFT JOIN {$wpdb->postmeta} jedb ON jedb.post_id = p.ID AND jedb.meta_key = %s
+			 WHERE p.post_parent = %d AND p.post_type = %s AND p.post_status != 'trash' AND jedb.meta_id IS NULL",
+			'attribute_' . sanitize_title( $tax ),
+			JEDB_Target_Woo_Variation::META_VARIATION_SLUG,
+			absint( $product_id ),
+			JEDB_Target_Woo_Variation::POST_TYPE
+		) );
+		// phpcs:enable
+
+		return $count > 0;
 	}
 
 	/* -----------------------------------------------------------------------

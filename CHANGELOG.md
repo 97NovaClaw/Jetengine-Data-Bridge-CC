@@ -6,6 +6,30 @@ All notable changes to this plugin are documented here. Format follows [Keep a C
 
 Phase 4c is COMPLETE. Next per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
 
+## [0.6.0-alpha.27] — 2026-07-12
+
+**"Physical or PDF" dropdown resurfacing fixed — engine gains a safe-downgrade for classification attributes + full staging conversion of all legacy mosaic products.**
+
+Staging report: the retired "Physical or PDF" storefront dropdown reappeared. Diagnosis: the alpha.23 demotion only ran on the two products that had managed variations at that moment (Brain, Variation test 2). Every OTHER mosaic product still carried `is_variation=1` on `pa_physical-or-pdf` from the July attribute cleanup — plus their May-era unmanaged variations still keyed on it. As mosaics got saved post-4c-A, managed variations appeared ALONGSIDE the legacy ones → two dropdowns / resurrected selector.
+
+### Fixed (engine — this release)
+
+- **`maintain_parent_attributes()` safe-downgrade branch**: when an `attribute_terms` (classification) taxonomy is found `is_variation=1` on the parent, the engine now demotes it to 0 — but ONLY when no unmanaged variation of that product still carries a value for it (new `unmanaged_variations_use_attribute()` check preserves the D-32 contract for genuinely manual setups). Self-heals both legacy state and any future WC-admin save that re-promotes the flag.
+
+### Fixed (staging data, via MCP)
+
+1. **All 11 published mosaic CCT rows force-pushed through bridge 3** (`origin=legacy_conversion_4cc`) — every linked product now has its managed variations from the repeaters (previously only Brain/736/748 did).
+2. **Cleanup across all mosaic products with managed variations**: legacy unmanaged variations keyed on the old attribute trashed (657: 666/667 · 403: 511/512 · 401: 509/510 · 397: 507/508), stale attribute meta stripped from managed variations, `pa_physical-or-pdf` demoted (Koala, 657, 403, 401, 397), `WC_Product_Variable::sync` + transients + post caches refreshed.
+3. Products without managed variations (unlinked test artifacts 395/404) deliberately untouched.
+
+Note: Koala's manual variations were superseded by its repeater-managed ones in the force-push and its old attribute demoted — the D-32 coexistence test case is now converted like everything else (the contract itself remains enforced by the engine for any future manual setups).
+
+### Verification
+
+1. Any mosaic product page: ONE "Variant" dropdown only. Hard-refresh (transients were cleared, but browsers cache).
+2. Variations selectable + add-to-cart works on converted products (e.g. Toronto Skyline, Cascade test).
+3. Trash contains the 8 newly-trashed legacy variations (recoverable).
+
 ## [0.6.0-alpha.26] — 2026-07-12
 
 **Phase 4c-C executed — legacy field retirement (decisions A–D locked by user). Six columns dropped from `mosaics_data`; the repeaters are now the single source of truth for variant data. Plugin change is preset-alignment only; the heavy lifting was site config/data via MCP (documented in BUILD-PLAN §4.14.14 + DATA-MAP).**

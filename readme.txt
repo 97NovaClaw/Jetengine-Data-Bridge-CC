@@ -4,7 +4,7 @@ Tags: jetengine, woocommerce, cct, relations, sync, bridge, data
 Requires at least: 6.0
 Tested up to: 6.5
 Requires PHP: 7.4
-Stable tag: 0.6.0-alpha.26
+Stable tag: 0.6.0-alpha.27
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -25,7 +25,7 @@ End-state highlights (full plan in BUILD-PLAN.md):
 
 This is an in-progress port consolidating three earlier private plugins. Functional capability today is documented in the readme; the BUILD-PLAN.md document in the plugin folder has the full architectural spec and decisions log.
 
-== Current Capability (v0.6.0-alpha.26) ==
+== Current Capability (v0.6.0-alpha.27) ==
 
 * Plugin tables created on activation.
 * Discovery layer covering CCTs, public CPTs, JE Relations, JE Glossaries, Woo products and variations.
@@ -96,6 +96,9 @@ Yes — once Phase 5b ships, admins with `manage_options` (and the global "Enabl
 
 = Unreleased =
 * Phase 4c COMPLETE. Next per roadmap: Phase 5 (Settings, debug log viewer, utilities, export/import) and Phase 5b (Custom Code Snippets).
+
+= 0.6.0-alpha.27 =
+* Fix: retired "Physical or PDF" storefront dropdown resurfacing. Root cause: the alpha.23 demotion only covered products that had managed variations at that moment; every other mosaic product kept is_variation=1 from the July attribute cleanup plus legacy unmanaged variations keyed on the old attribute. Engine: maintain_parent_attributes() gains a SAFE-DOWNGRADE branch — classification (attribute_terms) taxonomies found is_variation=1 are demoted to 0 unless an unmanaged variation still uses them (new unmanaged_variations_use_attribute() check keeps the D-32 contract). Staging data: all 11 mosaic CCT rows force-pushed so every linked product has repeater-managed variations; 8 legacy unmanaged variations trashed; pa_physical-or-pdf demoted on 5 more products; caches/rollups refreshed.
 
 = 0.6.0-alpha.26 =
 * Phase 4c-C executed — legacy field retirement (user-locked decisions A-D). Six columns dropped from mosaics_data (price, approximate_size, stud_count, has_instructions_pdf, instructions_pdf, is_there_only_1_product_size); repeaters gained stud_count (not WC-synced) + hide_price selects; per-row regular_price backfilled from parent price pre-drop. Frontend reworked via site snippets: NEW Snippet 18 helpers ([bbhq_mosaic_size], [bbhq_mosaic_studs], bbhq_variation_cct_row), Snippet 9 Decision-D price display (hide_price=yes -> "Quote on request"; stock<=0 -> "Request a Commission"; price value no longer drives display) + Additional-Info tab derives from repeaters, listing 600 rebound, queries 23/28 slimmed, bridge 3 config cleared of price_fallback/derived_size. display_price_publicly kept as card-only gate. Plugin change: preset alignment only. Full record in BUILD-PLAN 4.14.14 + CHANGELOG.
